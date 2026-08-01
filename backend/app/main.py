@@ -17,8 +17,11 @@ from app.database import init_db
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting Rubl AI Director...")
-    await init_db()
-    logger.info("Database initialized")
+    try:
+        await init_db()
+        logger.info("Database initialized")
+    except Exception as e:
+        logger.warning(f"Database not available, running without DB: {e}")
     yield
     logger.info("Shutting down...")
 

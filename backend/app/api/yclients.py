@@ -31,6 +31,12 @@ class YClientsClient:
     async def close(self) -> None:
         await self._client.aclose()
 
+    async def __aenter__(self) -> "YClientsClient":
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        await self.close()
+
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=2, min=2, max=30),
