@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
+from app.api.routes.ai import router as ai_router
 from app.api.routes.dashboard import router as dashboard_router
 from app.api.routes.employees import router as employees_router
 from app.api.routes.sync import router as sync_router
@@ -37,6 +38,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(ai_router)
 app.include_router(dashboard_router)
 app.include_router(employees_router)
 app.include_router(sync_router)
