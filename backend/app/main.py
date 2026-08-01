@@ -6,6 +6,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
+from app.api.routes.dashboard import router as dashboard_router
+from app.api.routes.employees import router as employees_router
+from app.api.routes.sync import router as sync_router
 from app.config import settings
 from app.database import init_db
 
@@ -33,6 +36,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(dashboard_router)
+app.include_router(employees_router)
+app.include_router(sync_router)
 
 
 @app.get("/health")
