@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     # Sync
     sync_interval_minutes: int = 60
 
+    # Admin
+    admin_login: str = "admin"
+    admin_password: str = "<REDACTED>"
+
     @property
     def database_url(self) -> str:
         return (

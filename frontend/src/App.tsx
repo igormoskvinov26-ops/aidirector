@@ -69,8 +69,6 @@ const fmt = (n: string | number): string => {
 };
 
 const GOLD = "#d4a853";
-const GOLD_DIM = "#a68a3e";
-const COLORS = ["#d4a853", "#8b7355", "#c4a35a", "#e8d5a3", "#6b5b3e"];
 
 // ── Navigation ──
 const NAV = [
@@ -488,7 +486,7 @@ function PLLine({
   );
 }
 
-function AIPage({ data }: { data: DashboardData | null }) {
+function AIPage() {
   const [report, setReport] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
@@ -685,7 +683,7 @@ export default function App() {
           {page === "masters" && <MastersPage data={data} />}
           {page === "clients" && <ClientsPage />}
           {page === "finance" && <FinancePage />}
-          {page === "ai" && <AIPage data={data} />}
+          {page === "ai" && <AIPage />}
         </div>
       </main>
     </div>
