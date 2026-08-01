@@ -1,0 +1,29 @@
+@import "tailwindcss";
+
+@theme {
+  --color-rubl-black: #0a0a0a;
+  --color-rubl-card: #141414;
+  --color-rubl-border: #262626;
+  --color-rubl-muted: #737373;
+  --color-rubl-accent: #d4a853;
+  --color-rubl-positive: #22c55e;
+  --color-rubl-negative: #ef4444;
+  --color-rubl-warning: #eab308;
+}
+
+body {
+  background-color: var(--color-rubl-black);
+  color: #fafafa;
+  font-family: "Inter", sans-serif;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: 3px;
+}
