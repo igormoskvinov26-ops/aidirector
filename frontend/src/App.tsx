@@ -148,7 +148,7 @@ function DashboardPage({ data }: { data: DashboardData | null }) {
   if (!data) return null;
 
   return (
-    <div className="animate-in fade-in duration-500">
+    <div className="animate-in">
       <div className="mb-8">
         <h1 className="text-2xl font-bold tracking-tight mb-1">Дашборд</h1>
         <p className="text-zinc-500 text-sm">{data.period}</p>
@@ -301,7 +301,7 @@ function DashboardPage({ data }: { data: DashboardData | null }) {
 function MastersPage({ data }: { data: DashboardData | null }) {
   if (!data) return null;
   return (
-    <div className="animate-in fade-in duration-500">
+    <div className="animate-in">
       <div className="mb-8">
         <h1 className="text-2xl font-bold tracking-tight mb-1">Мастера</h1>
         <p className="text-zinc-500 text-sm">Эффективность и загрузка</p>
@@ -348,7 +348,7 @@ function Metric({ label, value }: { label: string; value: string }) {
 
 function ClientsPage() {
   return (
-    <div className="animate-in fade-in duration-500">
+    <div className="animate-in">
       <div className="mb-8">
         <h1 className="text-2xl font-bold tracking-tight mb-1">Клиенты</h1>
         <p className="text-zinc-500 text-sm">RFM-анализ и сегментация</p>
@@ -427,7 +427,7 @@ function SegmentCard({
 
 function FinancePage() {
   return (
-    <div className="animate-in fade-in duration-500">
+    <div className="animate-in">
       <div className="mb-8">
         <h1 className="text-2xl font-bold tracking-tight mb-1">Финансы</h1>
         <p className="text-zinc-500 text-sm">P&L и ключевые показатели</p>
@@ -505,7 +505,7 @@ function AIPage({ data }: { data: DashboardData | null }) {
   };
 
   return (
-    <div className="animate-in fade-in duration-500">
+    <div className="animate-in">
       <div className="mb-8 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight mb-1">AI Директор</h1>
@@ -616,6 +616,16 @@ export default function App() {
     fetch("/api/dashboard/")
       .then((r) => r.json())
       .then(setData)
+      .catch((err) => {
+        console.error("API не доступен:", err);
+        setData({
+          period: "API не доступен",
+          kpis: {},
+          revenue_trend: [],
+          top_masters: [],
+          cancellation_rate: 0,
+        });
+      })
       .finally(() => setLoading(false));
   }, []);
 
