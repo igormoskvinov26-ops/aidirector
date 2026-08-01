@@ -108,10 +108,14 @@ async def get_dashboard_from_api(date_from: str, date_to: str) -> dict:
 
 @router.get("/")
 async def dashboard(
-    days: int = Query(30, description="Days to cover"),
+    days: int = Query(0, description="Days to cover (0 = current month)"),
 ) -> dict:
-    date_to = date.today()
-    date_from = date_to - timedelta(days=days)
+    today = date.today()
+    if days > 0:
+        date_from = today - timedelta(days=days)
+    else:
+        date_from = today.replace(day=1)
+    date_to = today
     return await get_dashboard_from_api(date_from.isoformat(), date_to.isoformat())
 
 

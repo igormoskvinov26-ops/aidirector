@@ -11,7 +11,7 @@ SSH="ssh -i $SSH_KEY -o StrictHostKeyChecking=no"
 SCP="scp -i $SSH_KEY -o StrictHostKeyChecking=no"
 
 echo "=== Деплой РублЪ AI Director ==="
-echo "VPS: $VPS:$VPS_PORT"
+echo "VPS: 95.81.99.227:$VPS_PORT"
 echo ""
 
 # 1. Build frontend
@@ -99,7 +99,7 @@ $SSH "$VPS" "curl -sk https://localhost:$VPS_PORT/health" 2>&1
 echo ""
 echo "==============================================="
 echo "  ГОТОВО!"
-echo "  URL: https://$VPS:$VPS_PORT"
+echo "  URL: https://95.81.99.227:$VPS_PORT"
 echo "  Логин: admin"
 echo "  Пароль: <REDACTED>"
 echo "==============================================="

@@ -143,32 +143,88 @@ function KpiCard({
 // ── Pages ──
 
 function DashboardPage({ data }: { data: DashboardData | null }) {
-  if (!data) return null;
+  const [year, setYear] = useState(new Date().getFullYear());
+  const [month, setMonth] = useState(new Date().getMonth() + 1);
+  const [localData, setLocalData] = useState(data);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (data) setLocalData(data);
+  }, [data]);
+
+  const changeMonth = async (y: number, m: number) => {
+    setYear(y);
+    setMonth(m);
+    setLoading(true);
+    const mp = String(m).padStart(2, "0");
+    try {
+      const r = await fetch(`/api/dashboard/range?date_from=${y}-${mp}-01&date_to=${y}-${mp}-31`);
+      const json = await r.json();
+      setLocalData(json);
+    } catch {}
+    setLoading(false);
+  };
+
+  const monthNames = [
+    "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
+    "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
+  ];
+
+  const prevMonth = () => {
+    if (month === 1) changeMonth(year - 1, 12);
+    else changeMonth(year, month - 1);
+  };
+  const nextMonth = () => {
+    if (month === 12) changeMonth(year + 1, 1);
+    else changeMonth(year, month + 1);
+  };
+
+  if (!localData) return null;
 
   return (
-    <div className="animate-in">
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold tracking-tight mb-1">Дашборд</h1>
-        <p className="text-zinc-500 text-sm">{data.period}</p>
+    <div className="animate-in">      
+      {/* Month selector */}
+      <div className="flex items-center justify-between mb-8">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight mb-1">Дашборд</h1>
+          <p className="text-zinc-500 text-sm">{localData.period}</p>
+        </div>
+        <div className="flex items-center gap-3 bg-zinc-900/80 border border-zinc-800 rounded-xl p-1">
+          <button onClick={prevMonth} className="p-2 hover:bg-zinc-800 rounded-lg text-zinc-400 hover:text-white transition-colors">
+            ←
+          </button>
+          <span className="text-sm font-medium min-w-[120px] text-center">
+            {monthNames[month - 1]} {year}
+          </span>
+          <button onClick={nextMonth} className="p-2 hover:bg-zinc-800 rounded-lg text-zinc-400 hover:text-white transition-colors">
+            →
+          </button>
+        </div>
       </div>
+
+      {loading && (
+        <div className="absolute inset-0 bg-black/50 flex items-center justify-center z-20 rounded-2xl">
+          <div className="w-6 h-6 border-2 border-rubl-accent/20 border-t-rubl-accent rounded-full animate-spin" />
+        </div>
+      )}
 
       {/* KPI Grid */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <KpiCard label="Выручка" value={String(data.kpis.total_revenue)} icon={DollarSign} prefix="₽" trend="up" />
-        <KpiCard label="Средний чек" value={String(data.kpis.avg_check)} icon={Zap} prefix="₽" />
-        <KpiCard label="Записей" value={String(data.kpis.total_visits)} icon={Activity} />
-        <KpiCard label="Новые клиенты" value={String(data.kpis.new_clients)} icon={UserCheck} />
-        <KpiCard label="Повторные" value={String(data.kpis.repeat_clients)} icon={Users} />
-        <KpiCard label="Возвращаемость" value={String(data.kpis.retention_pct)} icon={Percent} suffix="%" trend="up" />
+        <KpiCard label="Выручка" value={String(localData.kpis.total_revenue)} icon={DollarSign} prefix="₽" trend="up" />
+        <KpiCard label="Средний чек" value={String(localData.kpis.avg_check)} icon={Zap} prefix="₽" />
+        <KpiCard label="Записей" value={String(localData.kpis.total_visits)} icon={Activity} />
+        <KpiCard label="Новые клиенты" value={String(localData.kpis.new_clients)} icon={UserCheck} />
+        <KpiCard label="Повторные" value={String(localData.kpis.repeat_clients)} icon={Users} />
+        <KpiCard label="Возвращаемость" value={String(localData.kpis.retention_pct)} icon={Percent} suffix="%" trend="up" />
         <KpiCard
           label="Отмены"
-          value={String(data.kpis.cancellation_pct)}
+          value={String(localData.kpis.cancellation_pct)}
           icon={TrendingDown}
           suffix="%"
-          negative={Number(data.kpis.cancellation_pct) > 15}
-          trend={Number(data.kpis.cancellation_pct) > 15 ? "down" : "up"}
+          negative={Number(localData.kpis.cancellation_pct) > 15}
+          trend={Number(localData.kpis.cancellation_pct) > 15 ? "down" : "up"}
         />
-        <KpiCard label="Косметика" value={String(data.kpis.product_sales)} icon={ShoppingBag} prefix="₽" />
+        <KpiCard label="Косметика" value={String(localData.kpis.product_sales)} icon={ShoppingBag} prefix="₽" />
       </div>
 
       {/* Revenue Chart */}
@@ -178,12 +234,9 @@ function DashboardPage({ data }: { data: DashboardData | null }) {
             <h2 className="text-sm font-semibold uppercase tracking-widest text-zinc-500">Выручка</h2>
             <p className="text-xs text-zinc-600 mt-1">Динамика по дням</p>
           </div>
-          <div className="flex gap-2">
-            <span className="text-xs text-zinc-600 bg-zinc-800 px-3 py-1 rounded-lg">30 дней</span>
-          </div>
         </div>
         <ResponsiveContainer width="100%" height={280}>
-          <AreaChart data={data.revenue_trend || []}>
+          <AreaChart data={localData.revenue_trend || []}>
             <defs>
               <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor={GOLD} stopOpacity={0.25} />
@@ -223,13 +276,12 @@ function DashboardPage({ data }: { data: DashboardData | null }) {
 
       {/* Masters + Visits */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Top Masters */}
         <div className="bg-zinc-900/80 border border-zinc-800 rounded-2xl p-6">
           <h2 className="text-sm font-semibold uppercase tracking-widest text-zinc-500 mb-5">
             Топ мастера
           </h2>
           <div className="space-y-1">
-            {data.top_masters?.map((m, i) => (
+            {localData.top_masters?.map((m, i) => (
               <div
                 key={m.name}
                 className="flex items-center gap-4 p-3 rounded-xl hover:bg-white/5 transition-colors group"
@@ -255,13 +307,12 @@ function DashboardPage({ data }: { data: DashboardData | null }) {
           </div>
         </div>
 
-        {/* Visits Chart */}
         <div className="bg-zinc-900/80 border border-zinc-800 rounded-2xl p-6">
           <h2 className="text-sm font-semibold uppercase tracking-widest text-zinc-500 mb-5">
             Визиты по дням
           </h2>
           <ResponsiveContainer width="100%" height={320}>
-            <BarChart data={data.revenue_trend || []}>
+            <BarChart data={localData.revenue_trend || []}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1f1f1f" vertical={false} />
               <XAxis
                 dataKey="date"
@@ -611,7 +662,10 @@ export default function App() {
   const [page, setPage] = useState("dashboard");
 
   useEffect(() => {
-    fetch("/api/dashboard/")
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, "0");
+    fetch(`/api/dashboard/range?date_from=${y}-${m}-01&date_to=${y}-${m}-31`)
       .then((r) => r.json())
       .then(setData)
       .catch((err) => {
