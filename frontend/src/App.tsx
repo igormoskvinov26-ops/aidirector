@@ -81,7 +81,7 @@ const NAV = [
   { id: "clients", label: "Клиенты", icon: Users },
   { id: "clientbase", label: "Клиентская база", icon: Users },
   { id: "finance", label: "Финансы", icon: CreditCard },
-  { id: "ai", label: "AI Отчёт", icon: Sparkles },
+  { id: "ai", label: "Отчёт директора", icon: Sparkles },
 ];
 
 // ── Components ──
@@ -553,7 +553,7 @@ function AIPage() {
       const json = await r.json();
       setReport(json);
     } catch (e) {
-      setReport({ report: "Ошибка генерации. Проверьте DEEPSEEK_API_KEY в .env" });
+      setReport({ report: "Ошибка генерации отчёта. Попробуйте ещё раз." });
     }
     setLoading(false);
   };
@@ -562,7 +562,7 @@ function AIPage() {
     <div className="animate-in">
       <div className="mb-8 flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight mb-1">AI Директор</h1>
+          <h1 className="text-2xl font-bold tracking-tight mb-1">Отчёт директора</h1>
           <p className="text-gray-500 dark:text-zinc-500 text-sm">Управленческий отчёт на основе метрик</p>
         </div>
         <button
@@ -710,7 +710,7 @@ export default function App() {
               <div className="text-sm font-bold tracking-tight leading-none">
                 Рубл<span className="text-rubl-accent">Ъ</span>
               </div>
-              <div className="text-[10px] text-gray-500 dark:text-zinc-500 mt-0.5">AI Director</div>
+              <div className="text-[10px] text-gray-500 dark:text-zinc-500 mt-0.5">Rubl Director</div>
             </div>
           </div>
 

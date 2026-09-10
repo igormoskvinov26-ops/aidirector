@@ -1,4 +1,4 @@
-"""AI Report routes — DeepSeek-powered management insights."""
+"""AI Report routes — rule-based internal analytics (no external API)."""
 
 from datetime import date, timedelta
 
@@ -30,7 +30,7 @@ async def ai_report(
         )
 
     dashboard = await get_dashboard_data(db, date_from, date_to)
-    result = await generate_report(dashboard)
+    result = generate_report(dashboard)
 
     return AIReportResponse(
         report=result.get("report", ""),
@@ -49,5 +49,5 @@ async def ai_quick_report(
     date_to = date.today()
     date_from = date_to - timedelta(days=days)
     dashboard = await get_dashboard_data(db, date_from, date_to)
-    result = await generate_report(dashboard)
+    result = generate_report(dashboard)
     return result

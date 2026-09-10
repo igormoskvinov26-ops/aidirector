@@ -33,10 +33,6 @@ class Settings(BaseSettings):
     app_port: int = 8000
     debug: bool = False
 
-    # DeepSeek AI
-    deepseek_api_key: str = ""
-    deepseek_base_url: str = "https://api.deepseek.com/v1"
-
     # Sync
     sync_interval_minutes: int = 60
 

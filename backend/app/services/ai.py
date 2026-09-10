@@ -1,109 +1,217 @@
-"""AI-powered management report generation using DeepSeek."""
+"""Rule-based management report generation (no external API)."""
 
-import json
+from datetime import datetime
 
-import httpx
 from loguru import logger
 
-from app.config import settings
-
-SYSTEM_PROMPT = """Ты — AI-директор барбершопа «РублЪ». Ты анализируешь бизнес-метрики и даёшь управленческие рекомендации.
-
-Твой стиль: прямой, конкретный, на основе цифр. Никакой воды.
-
-Ты получаешь JSON с KPI за период и должен вернуть СТРОГО JSON такого формата:
-{
-  "insights": ["главный вывод 1", "главный вывод 2", "главный вывод 3"],
-  "risks": ["риск 1 с конкретной цифрой", "риск 2"],
-  "opportunities": ["возможность 1", "возможность 2"],
-  "actions_tomorrow": ["конкретное действие на завтра 1", "конкретное действие 2", "конкретное действие 3"],
-  "report": "развёрнутый управленческий отчёт на 3-5 абзацев. Включи анализ: главные выводы, какие мастера просели, какие показатели растут, почему изменился средний чек, какие клиенты скоро потеряются, что сделать."
-}
-
-Правила:
-1. Только JSON в ответе, без markdown-блоков.
-2. Каждый пункт — 1-2 предложения, с цифрами.
-3. Если данных мало — честно скажи об этом.
-4. Действия на завтра должны быть конкретными: кому позвонить, что проверить, что изменить.
-"""
+# Нормативы для триггеров
+CANCELLATION_LIMIT = 15.0
+RETENTION_LIMIT = 40.0
+AVG_CHECK_TARGET = 2500.0
+TREND_DECLINE_LIMIT = 10.0
+MASTER_SHARE_LIMIT = 30.0
 
 
-MAX_REVENUE_TREND_DAYS = 90
-MAX_PROMPT_CHARS = 55_000
+def _num(value, default=0.0) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return default
+    return result
 
 
-def _prepare_kpi_data(kpi_data: dict) -> tuple[dict, bool]:
-    data = {**kpi_data}
-    truncated = False
-    trend = data.get("revenue_trend", [])
-    if isinstance(trend, list) and len(trend) > MAX_REVENUE_TREND_DAYS:
-        data["revenue_trend"] = trend[-MAX_REVENUE_TREND_DAYS:]
-        data["_trend_truncated"] = True
-        data["_original_days"] = len(trend)
-        truncated = True
-    return data, truncated
+def _money(value: float) -> str:
+    return f"{round(value):,}".replace(",", " ")
 
 
-def _serialize_kpi_data(data: dict) -> str:
-    json_str = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
-    if len(json_str) > MAX_PROMPT_CHARS:
-        json_str = json_str[:MAX_PROMPT_CHARS] + "..."
-    return json_str
+def _parse_day(point: dict) -> datetime | None:
+    raw = str(point.get("date", "")).strip()
+    for layout in ("%Y-%m-%d", "%d.%m.%Y"):
+        try:
+            return datetime.strptime(raw[:10], layout)
+        except ValueError:
+            continue
+    return None
 
 
-async def generate_report(kpi_data: dict) -> dict:
-    if not settings.deepseek_api_key:
+def generate_report(kpi_data: dict) -> dict:
+    kpis = kpi_data.get("kpis") or {}
+    trend = kpi_data.get("revenue_trend") or []
+    masters = kpi_data.get("top_masters") or []
+    period = kpi_data.get("period", "")
+
+    total_revenue = _num(kpis.get("total_revenue"))
+    visits = int(kpis.get("total_visits") or 0)
+    avg_check = _num(kpis.get("avg_check"))
+    new_clients = int(kpis.get("new_clients") or 0)
+    repeat_clients = int(kpis.get("repeat_clients") or 0)
+    retention = _num(kpis.get("retention_pct"))
+    cancellation = _num(kpis.get("cancellation_pct"))
+    ltv = _num(kpis.get("ltv"))
+
+    if total_revenue <= 0 and visits <= 0:
         return {
-            "report": "AI-сервис не настроен. Укажите DEEPSEEK_API_KEY в .env",
+            "report": "Недостаточно данных за выбранный период. "
+                      "Дождитесь синхронизации YCLIENTS и повторите запрос.",
             "insights": [],
             "risks": [],
             "opportunities": [],
             "actions_tomorrow": [],
         }
 
-    prepared_data, truncated = _prepare_kpi_data(kpi_data)
-    user_content = f"Проанализируй метрики барбершопа:\n\n{_serialize_kpi_data(prepared_data)}"
-    if truncated:
-        user_content += "\n\n(Данные по дням обрезаны до последних 90 дней во избежание превышения лимита контекста.)"
+    insights: list[str] = []
+    risks: list[str] = []
+    opportunities: list[str] = []
+    actions: list[str] = []
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        try:
-            response = await client.post(
-                f"{settings.deepseek_base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.deepseek_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": "deepseek-chat",
-                    "messages": [
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": user_content},
-                    ],
-                    "temperature": 0.4,
-                    "max_tokens": 2000,
-                },
+    # ── Выручка и посещаемость ──────────────────────────────────────────
+    insights.append(
+        f"Выручка за период: {_money(total_revenue)} ₽ при {visits} визитах, "
+        f"средний чек {_money(avg_check)} ₽."
+    )
+
+    # ── Динамика выручки по тренду ──────────────────────────────────────
+    days = []
+    for point in trend:
+        revenue = _num(point.get("revenue"))
+        day = _parse_day(point)
+        if day is not None:
+            days.append((day, revenue))
+    days.sort(key=lambda item: item[0])
+
+    if len(days) >= 6:
+        half = len(days) // 2
+        first = sum(rev for _, rev in days[:half])
+        second = sum(rev for _, rev in days[half:])
+        if first > 0:
+            change = (second - first) / first * 100
+            direction = "выросла" if change >= 0 else "снизилась"
+            insights.append(
+                f"Динамика: во второй половине периода выручка {direction} "
+                f"на {abs(change):.0f}% относительно первой."
             )
-            response.raise_for_status()
-            data = response.json()
-            content = data["choices"][0]["message"]["content"]
+            if change < -TREND_DECLINE_LIMIT:
+                risks.append(
+                    f"Выручка снижается: падение {abs(change):.0f}% во второй "
+                    "половине периода. Причину стоит искать в загрузке "
+                    "мастеров или оттоке клиентов."
+                )
+        if days:
+            best = max(days, key=lambda item: item[1])
+            insights.append(
+                f"Лучший день — {best[0].strftime('%d.%m')}: "
+                f"{_money(best[1])} ₽."
+            )
 
-            content = content.strip()
-            if content.startswith("```"):
-                content = content.split("\n", 1)[1]
-                if content.endswith("```"):
-                    content = content[:-3]
+    # ── Клиентская база ─────────────────────────────────────────────────
+    if new_clients or repeat_clients:
+        insights.append(
+            f"Клиенты: {new_clients} новых, {repeat_clients} повторных, "
+            f"возвращаемость {retention:.1f}%."
+        )
+        if retention > 0 and retention < RETENTION_LIMIT and visits >= 10:
+            risks.append(
+                f"Возвращаемость {retention:.1f}% — ниже нормы "
+                f"{RETENTION_LIMIT:.0f}%: база не удерживается, выручка держится "
+                "на новых клиентах."
+            )
+        elif retention >= 50:
+            opportunities.append(
+                f"Возвращаемость {retention:.1f}% — сильная база. Выгодно "
+                "предложить постоянникам комплексы и абонементы."
+            )
 
-            result = json.loads(content)
-            logger.info("AI report generated successfully")
-            return result
+    # ── Отмены и неявки ─────────────────────────────────────────────────
+    if cancellation > CANCELLATION_LIMIT:
+        lost_visits = round(visits * cancellation / 100)
+        lost = lost_visits * avg_check
+        risks.append(
+            f"Отмены и неявки — {cancellation:.1f}% (норма до "
+            f"{CANCELLATION_LIMIT:.0f}%). При среднем чеке {_money(avg_check)} ₽ "
+            f"это около {_money(lost)} ₽ упущенной выручки."
+        )
+        actions.append(
+            "Завтра с 11:00 обзвонить всех записанных на день и подтвердить "
+            "явку — это снижает неявки в 1,5–2 раза."
+        )
 
-        except Exception as e:
-            logger.error(f"AI report generation failed: {e}")
-            return {
-                "report": f"Не удалось сгенерировать отчёт: {e}",
-                "insights": [],
-                "risks": [],
-                "opportunities": [],
-                "actions_tomorrow": [],
-            }
+    # ── Мастера ─────────────────────────────────────────────────────────
+    if masters:
+        total_masters_revenue = sum(_num(m.get("revenue")) for m in masters)
+        best = masters[0]
+        best_share = (
+            _num(best.get("revenue")) / total_masters_revenue * 100
+            if total_masters_revenue > 0 else 0.0
+        )
+        if best_share >= MASTER_SHARE_LIMIT:
+            opportunities.append(
+                f"{best.get('name')} даёт {best_share:.0f}% выручки "
+                f"({_money(_num(best.get('revenue')))} ₽). Стоит расширить "
+                "его смены или повысить цену."
+            )
+        weakest = min(masters, key=lambda m: _num(m.get("revenue")))
+        if len(masters) >= 2 and _num(weakest.get("revenue")) < _num(best.get("revenue")) * 0.3:
+            risks.append(
+                f"У {weakest.get('name')} наименьшая выручка "
+                f"({_money(_num(weakest.get('revenue')))} ₽) — загрузка низкая, "
+                "пересмотрите его расписание или прокачайте запись к нему."
+            )
+
+    # ── Средний чек ─────────────────────────────────────────────────────
+    if avg_check > 0 and avg_check < AVG_CHECK_TARGET and visits > 0:
+        opportunities.append(
+            f"Средний чек {_money(avg_check)} ₽ — ниже целевых "
+            f"{_money(AVG_CHECK_TARGET)} ₽. Потенциал в допродаже комплексов "
+            "и уходов к стрижке."
+        )
+        actions.append(
+            "Дать мастерам скрипт допродажи: после стрижки предлагать "
+            "бороду, камуфляж или SPA-уход."
+        )
+
+    if ltv > 0:
+        opportunities.append(
+            f"LTV клиента — {_money(ltv)} ₽. Каждый новый клиент окупает "
+            "вложения в рекламу; стоит масштабировать привлечение."
+        )
+
+    # ── Действия на завтра ──────────────────────────────────────────────
+    actions.append("Проверить свободные окна в записи на ближайшие 3 дня и "
+                   "заполнить их повторными клиентами.")
+    if retention > 0 and retention < RETENTION_LIMIT:
+        actions.append(
+            "Сделать выборку клиентов без визита 30+ дней и запустить по ним "
+            "персональную рассылку в MAX."
+        )
+    actions.append("Сверить выручку дня с планом и отметить отклонения в журнале.")
+    actions = actions[:4]
+
+    # ── Развёрнутый отчёт ───────────────────────────────────────────────
+    paragraphs = [
+        f"Отчётный период: {period}." if period else "Отчёт за выбранный период.",
+    ]
+    if insights:
+        paragraphs.append(insights[0])
+    trend_line = next((line for line in insights if line.startswith("Динамика")), "")
+    if trend_line:
+        paragraphs.append(trend_line)
+    remaining = [line for line in insights if not line.startswith("Динамика")]
+    if len(remaining) > 1:
+        paragraphs.append("Главные выводы: " + " ".join(remaining[1:]))
+    if risks:
+        paragraphs.append("Риски: " + " ".join(risks))
+    if opportunities:
+        paragraphs.append("Возможности: " + " ".join(opportunities))
+    if actions:
+        paragraphs.append("Действия на завтра: " + " ".join(actions))
+
+    report = "\n\n".join(paragraphs).strip()
+
+    logger.info("Report generated from internal analytics (no external API)")
+    return {
+        "report": report,
+        "insights": insights[:3],
+        "risks": risks[:3],
+        "opportunities": opportunities[:3],
+        "actions_tomorrow": actions[:4],
+    }
