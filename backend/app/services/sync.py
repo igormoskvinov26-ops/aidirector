@@ -1,5 +1,6 @@
 """Data synchronization service — pulls YCLIENTS → PostgreSQL."""
 
+import asyncio
 from datetime import datetime
 from typing import Any
 
@@ -11,6 +12,8 @@ from app.database import async_session
 from app.repositories.repositories import (
     ClientRepository,
     EmployeeRepository,
+    ProductRepository,
+    SaleRepository,
     ServiceRepository,
     VisitRepository,
 )
@@ -62,10 +65,36 @@ async def sync_all(date_from: str | None = None, date_to: str | None = None) -> 
                 clients = await ClientRepository.get_all(session)
                 client_map = {c.yclients_id: c.id for c in clients}
 
+                services = await ServiceRepository.get_all(session)
+                service_map = {s.yclients_id: s.id for s in services}
+
                 visit_count = await VisitRepository.upsert_many(
-                    session, records_data, employee_map, client_map
+                    session, records_data, employee_map, client_map, service_map
                 )
                 stats["visits"] = visit_count
+
+                # 5. Products & Sales
+                logger.info("Syncing products & sales...")
+                transactions_data = await api_client.get_transactions(
+                    date_from=date_from, date_to=date_to
+                )
+
+                products_set: dict[int, dict] = {}
+                for t in transactions_data:
+                    g = t.get("good") or {}
+                    if g.get("id"):
+                        products_set[g["id"]] = g
+
+                await ProductRepository.upsert_many(session, list(products_set.values()))
+
+                product_map = {}
+                for p in await ProductRepository.get_all(session):
+                    product_map[p.yclients_id] = p.id
+
+                sale_count = await SaleRepository.upsert_many(
+                    session, transactions_data, employee_map, client_map, product_map
+                )
+                stats["sales"] = sale_count
 
         _last_sync = datetime.now()
         logger.info(f"Sync complete: {stats}")
@@ -78,6 +107,44 @@ async def sync_all(date_from: str | None = None, date_to: str | None = None) -> 
         _sync_in_progress = False
 
     return stats
+
+
+async def run_sync_loop(interval_minutes: int | None = None) -> None:
+    """Periodically run sync_all in the background.
+
+    interval_minutes overrides settings.sync_interval_minutes; <= 0 disables the loop.
+    """
+    from app.config import settings
+
+    interval = settings.sync_interval_minutes if interval_minutes is None else interval_minutes
+    if interval <= 0:
+        logger.info("Auto-sync disabled (sync_interval_minutes <= 0)")
+        return
+
+    logger.info(f"Auto-sync scheduler started (every {interval} min)")
+    await asyncio.sleep(10)  # let the app finish startup before the first run
+
+    while True:
+        try:
+            stats = await sync_all()
+            logger.info(f"Auto-sync finished: {stats}")
+            await refresh_client_base()
+        except Exception as e:
+            logger.error(f"Auto-sync failed: {e}")
+        await asyncio.sleep(interval * 60)
+
+
+async def refresh_client_base() -> None:
+    """Recompute client segments, write today's snapshot and refresh the contact queue."""
+    try:
+        from app.services import client_base
+
+        async with async_session() as session:
+            await client_base.write_snapshot(session)
+            await client_base.refresh_tasks(session)
+        logger.info("Client-base snapshot + queue refreshed")
+    except Exception as e:
+        logger.error(f"Client-base refresh failed: {e}")
 
 
 def get_sync_status() -> dict[str, Any]:

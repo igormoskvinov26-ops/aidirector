@@ -5,6 +5,7 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     Date,
     DateTime,
@@ -153,7 +154,7 @@ class Sale(Base):
     __tablename__ = "sales"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    yclients_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    yclients_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False, index=True)
     visit_id: Mapped[int | None] = mapped_column(ForeignKey("visits.id"), index=True)
     client_id: Mapped[int | None] = mapped_column(ForeignKey("clients.id"), index=True)
     employee_id: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), index=True)
@@ -231,3 +232,62 @@ class MonthlyMetrics(Base):
     __table_args__ = (
         UniqueConstraint("period", "employee_id", name="uq_monthly_metrics_period_employee"),
     )
+
+
+class PlanTarget(Base):
+    __tablename__ = "plan_targets"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    period: Mapped[str] = mapped_column(String(7), unique=True, index=True)
+    revenue_target: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
+    margin_target_pct: Mapped[Decimal] = mapped_column(Numeric(5, 1), default=30.0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ContactTask(Base):
+    __tablename__ = "contact_tasks"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    client_id: Mapped[int] = mapped_column(ForeignKey("clients.id"), index=True)
+    group_code: Mapped[str] = mapped_column(String(40))
+    priority: Mapped[int] = mapped_column(Integer, default=0)
+    due_date: Mapped[date] = mapped_column(Date, index=True)
+    status: Mapped[str] = mapped_column(String(20), default="open")
+    script_version: Mapped[str] = mapped_column(String(40), default="v1")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("client_id", "group_code", "due_date", name="uq_contact_task_client_group_date"),
+    )
+
+
+class ContactAttempt(Base):
+    __tablename__ = "contact_attempts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("contact_tasks.id"), index=True)
+    outcome: Mapped[str] = mapped_column(String(20))  # booked | no_booking | no_answer
+    channel: Mapped[str] = mapped_column(String(20))  # phone | message
+    comment: Mapped[str | None] = mapped_column(Text)
+    actor_id: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class DailySegmentSnapshot(Base):
+    __tablename__ = "daily_segment_snapshots"
+
+    snapshot_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    segment_code: Mapped[str] = mapped_column(String(40), primary_key=True)
+    clients_count: Mapped[int] = mapped_column(Integer, default=0)

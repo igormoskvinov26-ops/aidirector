@@ -154,3 +154,42 @@ class SyncStatusResponse(BaseModel):
     last_sync: datetime | None = None
     records_synced: int = 0
     clients_synced: int = 0
+
+
+# ── Finance ──
+class DailyFinancePoint(BaseModel):
+    date: str
+    revenue: Decimal
+    total_visits: int
+    completed: int
+    cancelled: int
+    masters_count: int
+    margin_rub: Decimal
+    margin_pct: float
+    break_even: Decimal
+    costs: dict
+
+
+class MonthlyFinancePoint(BaseModel):
+    month: str
+    days_in_month: int
+    revenue: Decimal
+    total_visits: int
+    completed: int
+    cancelled: int
+    margin_rub: Decimal
+    margin_pct: float
+    break_even: Decimal
+    costs: dict
+
+
+class PlanTargetRequest(BaseModel):
+    period: str = Field(..., pattern=r"^\d{4}-\d{2}$")
+    revenue_target: Decimal = Field(..., gt=0)
+    margin_target_pct: float = Field(default=30.0, ge=0, le=100)
+
+
+class PlanTargetResponse(BaseModel):
+    period: str
+    revenue_target: float
+    margin_target_pct: float

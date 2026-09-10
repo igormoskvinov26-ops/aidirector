@@ -2,7 +2,7 @@
 
 from datetime import date, timedelta
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -12,6 +12,8 @@ from app.services.kpi import get_dashboard_data
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
+MAX_DAYS_RANGE = 365
+
 
 @router.post("/report", response_model=AIReportResponse)
 async def ai_report(
@@ -20,6 +22,12 @@ async def ai_report(
 ) -> dict:
     date_from = date.fromisoformat(request.period_from)
     date_to = date.fromisoformat(request.period_to)
+
+    if (date_to - date_from).days > MAX_DAYS_RANGE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Диапазон дат не может превышать {MAX_DAYS_RANGE} дней",
+        )
 
     dashboard = await get_dashboard_data(db, date_from, date_to)
     result = await generate_report(dashboard)
@@ -36,7 +44,7 @@ async def ai_report(
 @router.get("/quick")
 async def ai_quick_report(
     db: AsyncSession = Depends(get_db),
-    days: int = Query(30, description="Days to analyze"),
+    days: int = Query(30, ge=1, le=MAX_DAYS_RANGE, description="Days to analyze"),
 ) -> dict:
     date_to = date.today()
     date_from = date_to - timedelta(days=days)

@@ -31,7 +31,11 @@ import {
   Activity,
   ArrowUpRight,
   ArrowDownRight,
+  Sun,
+  Moon,
 } from "lucide-react";
+import ClientBasePage from "./ClientBasePage";
+import logo from "./assets/logo.png";
 
 // ── Types ──
 interface DashboardData {
@@ -75,6 +79,7 @@ const NAV = [
   { id: "dashboard", label: "Дашборд", icon: LayoutDashboard },
   { id: "masters", label: "Мастера", icon: Scissors },
   { id: "clients", label: "Клиенты", icon: Users },
+  { id: "clientbase", label: "Клиентская база", icon: Users },
   { id: "finance", label: "Финансы", icon: CreditCard },
   { id: "ai", label: "AI Отчёт", icon: Sparkles },
 ];
@@ -82,7 +87,7 @@ const NAV = [
 // ── Components ──
 function Spinner() {
   return (
-    <div className="min-h-screen bg-black flex items-center justify-center">
+    <div className="min-h-screen bg-gray-50 dark:bg-black flex items-center justify-center">
       <div className="relative">
         <div className="w-8 h-8 border-2 border-rubl-accent/20 rounded-full" />
         <div className="w-8 h-8 border-2 border-transparent border-t-rubl-accent rounded-full animate-spin absolute inset-0" />
@@ -109,9 +114,9 @@ function KpiCard({
   negative?: boolean;
 }) {
   return (
-    <div className="group bg-zinc-900/80 border border-zinc-800 rounded-2xl p-5 hover:border-rubl-accent/30 transition-all duration-300 hover:shadow-lg hover:shadow-rubl-accent/5 cursor-default">
+    <div className="group bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-5 hover:border-rubl-accent/30 transition-all duration-300 hover:shadow-lg hover:shadow-rubl-accent/5 cursor-default">
       <div className="flex items-center justify-between mb-4">
-        <span className="text-zinc-500 text-xs font-medium uppercase tracking-widest">
+        <span className="text-gray-500 dark:text-zinc-500 text-xs font-medium uppercase tracking-widest">
           {label}
         </span>
         <div
@@ -125,7 +130,7 @@ function KpiCard({
           />
         </div>
       </div>
-      <div className={`text-3xl font-bold tracking-tight ${negative ? "text-red-400" : "text-white"}`}>
+      <div className={`text-3xl font-bold tracking-tight ${negative ? "text-red-400" : "text-gray-900 dark:text-white"}`}>
         {prefix}
         {fmt(value)}
         {suffix}
@@ -187,16 +192,16 @@ function DashboardPage({ data }: { data: DashboardData | null }) {
       <div className="flex items-center justify-between mb-8">
         <div>
           <h1 className="text-2xl font-bold tracking-tight mb-1">Дашборд</h1>
-          <p className="text-zinc-500 text-sm">{localData.period}</p>
+          <p className="text-gray-500 dark:text-zinc-500 text-sm">{localData.period}</p>
         </div>
-        <div className="flex items-center gap-3 bg-zinc-900/80 border border-zinc-800 rounded-xl p-1">
-          <button onClick={prevMonth} className="p-2 hover:bg-zinc-800 rounded-lg text-zinc-400 hover:text-white transition-colors">
+        <div className="flex items-center gap-3 bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-xl p-1">
+          <button onClick={prevMonth} className="p-2 hover:bg-gray-200 dark:hover:bg-zinc-800 rounded-lg text-gray-600 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-white transition-colors">
             ←
           </button>
           <span className="text-sm font-medium min-w-[120px] text-center">
             {monthNames[month - 1]} {year}
           </span>
-          <button onClick={nextMonth} className="p-2 hover:bg-zinc-800 rounded-lg text-zinc-400 hover:text-white transition-colors">
+          <button onClick={nextMonth} className="p-2 hover:bg-gray-200 dark:hover:bg-zinc-800 rounded-lg text-gray-600 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-white transition-colors">
             →
           </button>
         </div>
@@ -228,11 +233,11 @@ function DashboardPage({ data }: { data: DashboardData | null }) {
       </div>
 
       {/* Revenue Chart */}
-      <div className="bg-zinc-900/80 border border-zinc-800 rounded-2xl p-6 mb-6">
+      <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-6 mb-6">
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h2 className="text-sm font-semibold uppercase tracking-widest text-zinc-500">Выручка</h2>
-            <p className="text-xs text-zinc-600 mt-1">Динамика по дням</p>
+            <h2 className="text-sm font-semibold uppercase tracking-widest text-gray-500 dark:text-zinc-500">Выручка</h2>
+            <p className="text-xs text-gray-400 dark:text-zinc-600 mt-1">Динамика по дням</p>
           </div>
         </div>
         <ResponsiveContainer width="100%" height={280}>
@@ -276,8 +281,8 @@ function DashboardPage({ data }: { data: DashboardData | null }) {
 
       {/* Masters + Visits */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-zinc-900/80 border border-zinc-800 rounded-2xl p-6">
-          <h2 className="text-sm font-semibold uppercase tracking-widest text-zinc-500 mb-5">
+        <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-6">
+          <h2 className="text-sm font-semibold uppercase tracking-widest text-gray-500 dark:text-zinc-500 mb-5">
             Топ мастера
           </h2>
           <div className="space-y-1">
@@ -286,7 +291,7 @@ function DashboardPage({ data }: { data: DashboardData | null }) {
                 key={m.name}
                 className="flex items-center gap-4 p-3 rounded-xl hover:bg-white/5 transition-colors group"
               >
-                <span className="text-xs text-zinc-600 w-5 font-mono">{i + 1}</span>
+                <span className="text-xs text-gray-400 dark:text-zinc-600 w-5 font-mono">{i + 1}</span>
                 {m.avatar_url ? (
                   <img src={m.avatar_url} className="w-10 h-10 rounded-xl object-cover ring-1 ring-zinc-700" />
                 ) : (
@@ -296,19 +301,19 @@ function DashboardPage({ data }: { data: DashboardData | null }) {
                 )}
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-medium truncate">{m.name}</div>
-                  <div className="text-xs text-zinc-500">{m.visits} визитов</div>
+                  <div className="text-xs text-gray-500 dark:text-zinc-500">{m.visits} визитов</div>
                 </div>
                 <div className="text-right">
                   <div className="text-sm font-semibold">{fmt(m.revenue)} ₽</div>
-                  <div className="text-xs text-zinc-500">чек {fmt(m.avg_check)} ₽</div>
+                  <div className="text-xs text-gray-500 dark:text-zinc-500">чек {fmt(m.avg_check)} ₽</div>
                 </div>
               </div>
             ))}
           </div>
         </div>
 
-        <div className="bg-zinc-900/80 border border-zinc-800 rounded-2xl p-6">
-          <h2 className="text-sm font-semibold uppercase tracking-widest text-zinc-500 mb-5">
+        <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-6">
+          <h2 className="text-sm font-semibold uppercase tracking-widest text-gray-500 dark:text-zinc-500 mb-5">
             Визиты по дням
           </h2>
           <ResponsiveContainer width="100%" height={320}>
@@ -353,12 +358,12 @@ function MastersPage({ data }: { data: DashboardData | null }) {
     <div className="animate-in">
       <div className="mb-8">
         <h1 className="text-2xl font-bold tracking-tight mb-1">Мастера</h1>
-        <p className="text-zinc-500 text-sm">Эффективность и загрузка</p>
+        <p className="text-gray-500 dark:text-zinc-500 text-sm">Эффективность и загрузка</p>
       </div>
 
       <div className="space-y-3">
         {data.top_masters?.map((m) => (
-          <div key={m.name} className="bg-zinc-900/80 border border-zinc-800 rounded-2xl p-5 hover:border-rubl-accent/20 transition-all">
+          <div key={m.name} className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-5 hover:border-rubl-accent/20 transition-all">
             <div className="flex items-center gap-5">
               {m.avatar_url ? (
                 <img src={m.avatar_url} className="w-14 h-14 rounded-2xl object-cover ring-1 ring-zinc-700" />
@@ -377,7 +382,7 @@ function MastersPage({ data }: { data: DashboardData | null }) {
                   <Metric label="Косметика" value={`${fmt(m.product_sales)} ₽`} />
                 </div>
               </div>
-              <ChevronRight size={18} className="text-zinc-600" />
+              <ChevronRight size={18} className="text-gray-400 dark:text-zinc-600" />
             </div>
           </div>
         ))}
@@ -389,7 +394,7 @@ function MastersPage({ data }: { data: DashboardData | null }) {
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <div className="text-xs text-zinc-500">{label}</div>
+      <div className="text-xs text-gray-500 dark:text-zinc-500">{label}</div>
       <div className="text-sm font-medium">{value}</div>
     </div>
   );
@@ -400,7 +405,7 @@ function ClientsPage() {
     <div className="animate-in">
       <div className="mb-8">
         <h1 className="text-2xl font-bold tracking-tight mb-1">Клиенты</h1>
-        <p className="text-zinc-500 text-sm">RFM-анализ и сегментация</p>
+        <p className="text-gray-500 dark:text-zinc-500 text-sm">RFM-анализ и сегментация</p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
@@ -412,8 +417,8 @@ function ClientsPage() {
         <SegmentCard title="Одноразовые" description="1 визит, >90 дн" count={0} color="#737373" />
       </div>
 
-      <div className="bg-zinc-900/80 border border-zinc-800 rounded-2xl p-6">
-        <h2 className="text-sm font-semibold uppercase tracking-widest text-zinc-500 mb-4">
+      <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-6">
+        <h2 className="text-sm font-semibold uppercase tracking-widest text-gray-500 dark:text-zinc-500 mb-4">
           Распределение клиентов
         </h2>
         <ResponsiveContainer width="100%" height={300}>
@@ -463,13 +468,13 @@ function SegmentCard({
   color: string;
 }) {
   return (
-    <div className="bg-zinc-900/80 border border-zinc-800 rounded-2xl p-5 hover:border-zinc-700 transition-all">
+    <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-5 hover:border-zinc-700 transition-all">
       <div className="flex items-center gap-3 mb-3">
         <div className="w-3 h-3 rounded-full" style={{ backgroundColor: color }} />
         <span className="font-semibold text-sm">{title}</span>
       </div>
       <div className="text-3xl font-bold mb-1">{count}</div>
-      <div className="text-xs text-zinc-500">{description}</div>
+      <div className="text-xs text-gray-500 dark:text-zinc-500">{description}</div>
     </div>
   );
 }
@@ -479,7 +484,7 @@ function FinancePage() {
     <div className="animate-in">
       <div className="mb-8">
         <h1 className="text-2xl font-bold tracking-tight mb-1">Финансы</h1>
-        <p className="text-zinc-500 text-sm">P&L и ключевые показатели</p>
+        <p className="text-gray-500 dark:text-zinc-500 text-sm">P&L и ключевые показатели</p>
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
@@ -493,20 +498,20 @@ function FinancePage() {
         <KpiCard label="Маржа" value="0" icon={Percent} suffix="%" />
       </div>
 
-      <div className="bg-zinc-900/80 border border-zinc-800 rounded-2xl p-6">
-        <h2 className="text-sm font-semibold uppercase tracking-widest text-zinc-500 mb-4">
+      <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-6">
+        <h2 className="text-sm font-semibold uppercase tracking-widest text-gray-500 dark:text-zinc-500 mb-4">
           P&L — Прибыли и убытки
         </h2>
         <div className="space-y-3">
           <PLLine label="Выручка" value="0 ₽" />
           <PLLine label="— Себестоимость" value="0 ₽" negative />
           <PLLine label="Валовая прибыль" value="0 ₽" bold />
-          <div className="border-t border-zinc-800 my-2" />
+          <div className="border-t border-gray-200 dark:border-zinc-800 my-2" />
           <PLLine label="— ФОТ" value="0 ₽" negative />
           <PLLine label="— Аренда" value="0 ₽" negative />
           <PLLine label="— Маркетинг" value="0 ₽" negative />
           <PLLine label="— Прочие расходы" value="0 ₽" negative />
-          <div className="border-t border-zinc-800 my-2" />
+          <div className="border-t border-gray-200 dark:border-zinc-800 my-2" />
           <PLLine label="Чистая прибыль" value="0 ₽" bold accent />
         </div>
       </div>
@@ -529,8 +534,8 @@ function PLLine({
 }) {
   return (
     <div className={`flex justify-between py-2 ${bold ? "font-semibold" : ""}`}>
-      <span className={accent ? "text-rubl-accent" : "text-zinc-400"}>{label}</span>
-      <span className={negative ? "text-red-400" : accent ? "text-rubl-accent font-bold" : "text-white"}>
+      <span className={accent ? "text-rubl-accent" : "text-gray-600 dark:text-zinc-400"}>{label}</span>
+      <span className={negative ? "text-red-400" : accent ? "text-rubl-accent font-bold" : "text-gray-900 dark:text-white"}>
         {value}
       </span>
     </div>
@@ -558,7 +563,7 @@ function AIPage() {
       <div className="mb-8 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight mb-1">AI Директор</h1>
-          <p className="text-zinc-500 text-sm">Управленческий отчёт на основе метрик</p>
+          <p className="text-gray-500 dark:text-zinc-500 text-sm">Управленческий отчёт на основе метрик</p>
         </div>
         <button
           onClick={generate}
@@ -574,13 +579,13 @@ function AIPage() {
         <div className="space-y-4">
           {/* Insights */}
           {report.insights?.length > 0 && (
-            <div className="bg-zinc-900/80 border border-zinc-800 rounded-2xl p-6">
+            <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-6">
               <h3 className="text-sm font-semibold uppercase tracking-widest text-rubl-accent mb-4">
                 Главные выводы
               </h3>
               <ul className="space-y-2">
                 {report.insights.map((s: string, i: number) => (
-                  <li key={i} className="flex items-start gap-3 text-sm text-zinc-300">
+                  <li key={i} className="flex items-start gap-3 text-sm text-gray-700 dark:text-zinc-300">
                     <span className="text-rubl-accent mt-1">•</span>
                     {s}
                   </li>
@@ -592,13 +597,13 @@ function AIPage() {
           {/* Risks + Opportunities */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {report.risks?.length > 0 && (
-              <div className="bg-zinc-900/80 border border-zinc-800 rounded-2xl p-6">
+              <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-6">
                 <h3 className="text-sm font-semibold uppercase tracking-widest text-red-400 mb-4">
                   Риски
                 </h3>
                 <ul className="space-y-2">
                   {report.risks.map((s: string, i: number) => (
-                    <li key={i} className="flex items-start gap-3 text-sm text-zinc-300">
+                    <li key={i} className="flex items-start gap-3 text-sm text-gray-700 dark:text-zinc-300">
                       <span className="text-red-400 mt-1">⚠</span>
                       {s}
                     </li>
@@ -607,13 +612,13 @@ function AIPage() {
               </div>
             )}
             {report.opportunities?.length > 0 && (
-              <div className="bg-zinc-900/80 border border-zinc-800 rounded-2xl p-6">
+              <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-6">
                 <h3 className="text-sm font-semibold uppercase tracking-widest text-emerald-400 mb-4">
                   Возможности
                 </h3>
                 <ul className="space-y-2">
                   {report.opportunities.map((s: string, i: number) => (
-                    <li key={i} className="flex items-start gap-3 text-sm text-zinc-300">
+                    <li key={i} className="flex items-start gap-3 text-sm text-gray-700 dark:text-zinc-300">
                       <span className="text-emerald-400 mt-1">+</span>
                       {s}
                     </li>
@@ -642,11 +647,11 @@ function AIPage() {
 
           {/* Full Report */}
           {report.report && (
-            <div className="bg-zinc-900/80 border border-zinc-800 rounded-2xl p-6">
-              <h3 className="text-sm font-semibold uppercase tracking-widest text-zinc-500 mb-4">
+            <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-6">
+              <h3 className="text-sm font-semibold uppercase tracking-widest text-gray-500 dark:text-zinc-500 mb-4">
                 Полный отчёт
               </h3>
-              <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-line">{report.report}</p>
+              <p className="text-sm text-gray-700 dark:text-zinc-300 leading-relaxed whitespace-pre-line">{report.report}</p>
             </div>
           )}
         </div>
@@ -660,6 +665,17 @@ export default function App() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState("dashboard");
+  const [theme, setTheme] = useState<"dark" | "light">(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("rubl-theme") === "light" ? "light" : "dark";
+    }
+    return "dark";
+  });
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", theme === "dark");
+    localStorage.setItem("rubl-theme", theme);
+  }, [theme]);
 
   useEffect(() => {
     const now = new Date();
@@ -684,19 +700,17 @@ export default function App() {
   if (loading) return <Spinner />;
 
   return (
-    <div className="min-h-screen bg-black text-white flex">
+    <div className="min-h-screen bg-gray-50 dark:bg-black text-gray-900 dark:text-white flex">
       {/* Sidebar */}
-      <aside className="w-60 border-r border-zinc-800/50 flex flex-col fixed h-full bg-black/80 backdrop-blur-xl z-10">
+      <aside className="w-60 border-r border-gray-200 dark:border-zinc-800/50 flex flex-col fixed h-full bg-white/90 dark:bg-black/80 backdrop-blur-xl z-10">
         <div className="p-6">
           <div className="flex items-center gap-2.5 mb-8">
-            <div className="w-8 h-8 rounded-lg bg-rubl-accent flex items-center justify-center text-black font-bold text-sm">
-              Р
-            </div>
+            <img src={logo} alt="РублЪ" className="h-12 w-auto object-contain" />
             <div>
               <div className="text-sm font-bold tracking-tight leading-none">
                 Рубл<span className="text-rubl-accent">Ъ</span>
               </div>
-              <div className="text-[10px] text-zinc-500 mt-0.5">AI Director</div>
+              <div className="text-[10px] text-gray-500 dark:text-zinc-500 mt-0.5">AI Director</div>
             </div>
           </div>
 
@@ -710,8 +724,8 @@ export default function App() {
                   onClick={() => setPage(item.id)}
                   className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition-all duration-200 ${
                     active
-                      ? "bg-zinc-800/80 text-white font-medium"
-                      : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900"
+                      ? "bg-gray-100 dark:bg-zinc-800/80 text-gray-900 dark:text-white font-medium"
+                      : "text-gray-500 dark:text-zinc-500 hover:text-gray-700 dark:hover:text-zinc-300 hover:bg-gray-100 dark:hover:bg-zinc-900"
                   }`}
                 >
                   <Icon size={18} className={active ? "text-rubl-accent" : ""} />
@@ -725,8 +739,15 @@ export default function App() {
           </nav>
         </div>
 
-        <div className="mt-auto p-6 border-t border-zinc-800/50">
-          <div className="text-xs text-zinc-600">v1.0.0</div>
+        <div className="mt-auto p-6 border-t border-gray-200 dark:border-zinc-800/50">
+          <button
+            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-gray-600 dark:text-zinc-400 hover:bg-gray-100 dark:hover:bg-zinc-900 transition-colors"
+          >
+            {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+            {theme === "dark" ? "Светлая тема" : "Тёмная тема"}
+          </button>
+          <div className="text-xs text-gray-400 dark:text-zinc-600 mt-3">v1.0.0</div>
         </div>
       </aside>
 
@@ -736,6 +757,7 @@ export default function App() {
           {page === "dashboard" && <DashboardPage data={data} />}
           {page === "masters" && <MastersPage data={data} />}
           {page === "clients" && <ClientsPage />}
+          {page === "clientbase" && <ClientBasePage />}
           {page === "finance" && <FinancePage />}
           {page === "ai" && <AIPage />}
         </div>

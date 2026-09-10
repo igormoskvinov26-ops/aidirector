@@ -28,6 +28,29 @@ SYSTEM_PROMPT = """Ты — AI-директор барбершопа «Рубл�
 """
 
 
+MAX_REVENUE_TREND_DAYS = 90
+MAX_PROMPT_CHARS = 55_000
+
+
+def _prepare_kpi_data(kpi_data: dict) -> tuple[dict, bool]:
+    data = {**kpi_data}
+    truncated = False
+    trend = data.get("revenue_trend", [])
+    if isinstance(trend, list) and len(trend) > MAX_REVENUE_TREND_DAYS:
+        data["revenue_trend"] = trend[-MAX_REVENUE_TREND_DAYS:]
+        data["_trend_truncated"] = True
+        data["_original_days"] = len(trend)
+        truncated = True
+    return data, truncated
+
+
+def _serialize_kpi_data(data: dict) -> str:
+    json_str = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    if len(json_str) > MAX_PROMPT_CHARS:
+        json_str = json_str[:MAX_PROMPT_CHARS] + "..."
+    return json_str
+
+
 async def generate_report(kpi_data: dict) -> dict:
     if not settings.deepseek_api_key:
         return {
@@ -37,6 +60,11 @@ async def generate_report(kpi_data: dict) -> dict:
             "opportunities": [],
             "actions_tomorrow": [],
         }
+
+    prepared_data, truncated = _prepare_kpi_data(kpi_data)
+    user_content = f"Проанализируй метрики барбершопа:\n\n{_serialize_kpi_data(prepared_data)}"
+    if truncated:
+        user_content += "\n\n(Данные по дням обрезаны до последних 90 дней во избежание превышения лимита контекста.)"
 
     async with httpx.AsyncClient(timeout=60.0) as client:
         try:
@@ -50,10 +78,7 @@ async def generate_report(kpi_data: dict) -> dict:
                     "model": "deepseek-chat",
                     "messages": [
                         {"role": "system", "content": SYSTEM_PROMPT},
-                        {
-                            "role": "user",
-                            "content": f"Проанализируй метрики барбершопа:\n\n{json.dumps(kpi_data, ensure_ascii=False, indent=2)}",
-                        },
+                        {"role": "user", "content": user_content},
                     ],
                     "temperature": 0.4,
                     "max_tokens": 2000,

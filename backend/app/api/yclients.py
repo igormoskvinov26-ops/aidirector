@@ -1,5 +1,6 @@
 """YCLIENTS REST API client with automatic retry and rate limiting."""
 
+import asyncio
 from typing import Any
 
 import httpx
@@ -9,12 +10,18 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from app.config import settings
 
 BASE_URL = "https://api.yclients.com/api/v1"
+RATE_LIMIT_DELAY = 0.6
 
 
 class YClientsClient:
     def __init__(self, company_id: int | None = None, user_token: str | None = None):
         self.company_id = company_id or settings.yclients_company_id
-        self.user_token = user_token or settings.yclients_user_token
+        if user_token:
+            self.user_token = user_token
+        elif company_id and company_id != settings.yclients_company_id:
+            self.user_token = settings.yclients_old_user_token
+        else:
+            self.user_token = settings.yclients_user_token
         self._client = httpx.AsyncClient(
             base_url=BASE_URL,
             headers={
@@ -57,7 +64,23 @@ class YClientsClient:
 
         while page <= max_pages:
             query["page"] = page
-            result = await self._get(path, params=query)
+
+            for attempt in range(3):
+                resp = await self._client.get(path, params=query)
+                if resp.status_code == 429:
+                    wait = min(2 ** attempt, 30)
+                    logger.warning(f"  Rate limited on {path}, waiting {wait}s...")
+                    await asyncio.sleep(wait)
+                    continue
+                resp.raise_for_status()
+                result = resp.json()
+                break
+            else:
+                raise httpx.HTTPStatusError(
+                    f"Rate limit exceeded on {path} after 3 attempts",
+                    request=resp.request,
+                    response=resp,
+                )
 
             if isinstance(result, list):
                 all_data.extend(result)
@@ -77,6 +100,7 @@ class YClientsClient:
             if total == 0 and len(data) < page_size:
                 break
 
+            await asyncio.sleep(RATE_LIMIT_DELAY)
             page += 1
             if page % 10 == 0:
                 logger.info(f"  Paginated {path}: {len(all_data)} / {total}")

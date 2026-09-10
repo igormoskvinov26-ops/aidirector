@@ -2,6 +2,7 @@
 
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import and_, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +13,7 @@ from app.models.models import (
     DailyMetrics,
     Employee,
     MonthlyMetrics,
+    PlanTarget,
     Product,
     Sale,
     SaleItem,
@@ -19,6 +21,25 @@ from app.models.models import (
     Visit,
     VisitService,
 )
+
+
+def _parse_date(val: Any) -> date | None:
+    if val is None:
+        return None
+    if isinstance(val, date):
+        return val
+    if isinstance(val, datetime):
+        return val.date()
+    if isinstance(val, str):
+        val = val.strip()
+        if not val or val.startswith("0001") or val.startswith("1900") or val.startswith("1899"):
+            return None
+        for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                return datetime.strptime(val, fmt).date()
+            except ValueError:
+                continue
+    return None
 
 
 class EmployeeRepository:
@@ -61,20 +82,24 @@ class ClientRepository:
     async def upsert_many(session: AsyncSession, data: list[dict]) -> int:
         count = 0
         for item in data:
+            birthday = _parse_date(item.get("birthday")) or _parse_date(item.get("birth_date"))
+            last_visit = _parse_date(item.get("last_visit_date")) or _parse_date(item.get("last_visit"))
+            first_visit = _parse_date(item.get("first_visit_date")) or _parse_date(item.get("created_at"))
+
             stmt = pg_insert(Client).values(
                 yclients_id=item["id"],
                 name=item.get("name", ""),
                 phone=item.get("phone", ""),
                 email=item.get("email"),
-                birthday=item.get("birthday") or item.get("birth_date"),
+                birthday=birthday,
                 sex=item.get("sex"),
                 discount=item.get("discount", 0),
                 card=item.get("card"),
                 comment=item.get("comment"),
                 total_visits=item.get("visits_count", item.get("visits", 0)),
                 total_spent=item.get("spent_sum", item.get("spent", 0)),
-                last_visit_date=item.get("last_visit_date"),
-                first_visit_date=item.get("first_visit_date") or item.get("created_at"),
+                last_visit_date=last_visit,
+                first_visit_date=first_visit,
                 updated_at=func.now(),
             ).on_conflict_do_update(
                 index_elements=["yclients_id"],
@@ -84,7 +109,7 @@ class ClientRepository:
                     "email": item.get("email"),
                     "total_visits": item.get("visits_count", item.get("visits", 0)),
                     "total_spent": item.get("spent_sum", item.get("spent", 0)),
-                    "last_visit_date": item.get("last_visit_date"),
+                    "last_visit_date": last_visit,
                     "updated_at": func.now(),
                 },
             )
@@ -106,9 +131,47 @@ class ClientRepository:
         return result.scalars().first()
 
 
+def _parse_datetime(val: Any) -> datetime | None:
+    if val is None:
+        return None
+    if isinstance(val, datetime):
+        return val
+    if isinstance(val, str):
+        val = val.strip()
+        if not val:
+            return None
+        for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+            try:
+                return datetime.strptime(val, fmt)
+            except ValueError:
+                continue
+        try:
+            return datetime.fromisoformat(val)
+        except ValueError:
+            pass
+    return None
+
+
+def _normalize_visit_status(raw: Any) -> str:
+    status_str = str(raw).lower() if raw is not None else "unknown"
+    if status_str in ("1", "completed", "finished", "attended", "visit"):
+        return "completed"
+    if status_str in ("2", "canceled", "cancelled", "noshow", "no_show", "no show"):
+        return "scheduled"
+    if status_str in ("0", "-1", "unattended", "unknown", ""):
+        return "scheduled"
+    return "scheduled"
+
+
 class VisitRepository:
     @staticmethod
-    async def upsert_many(session: AsyncSession, data: list[dict], employee_map: dict[int, int], client_map: dict[int, int]) -> int:
+    async def upsert_many(
+        session: AsyncSession,
+        data: list[dict],
+        employee_map: dict[int, int],
+        client_map: dict[int, int],
+        service_map: dict[int, int],
+    ) -> int:
         count = 0
         for item in data:
             client_db_id = client_map.get(item.get("client", {}).get("id", 0))
@@ -120,13 +183,20 @@ class VisitRepository:
             for svc in item.get("services", []):
                 total_amount += Decimal(str(svc.get("cost", 0)))
 
+            raw_status = item.get("visit_attendance") if item.get("visit_attendance") is not None else item.get("status")
+            normalized_status = _normalize_visit_status(raw_status)
+            visit_datetime = _parse_datetime(item.get("datetime"))
+
+            if visit_datetime is None:
+                continue
+
             stmt = pg_insert(Visit).values(
                 yclients_id=item["id"],
                 client_id=client_db_id,
                 employee_id=employee_db_id,
-                datetime=item.get("datetime"),
+                datetime=visit_datetime,
                 length_minutes=int((item.get("seance_length") or item.get("length", 0)) / 60),
-                status=item.get("status", item.get("visit_attendance", "unknown")),
+                status=normalized_status,
                 comment=item.get("comment"),
                 total_amount=total_amount,
                 paid_amount=Decimal(str(item.get("paid_full", 0))),
@@ -135,7 +205,8 @@ class VisitRepository:
             ).on_conflict_do_update(
                 index_elements=["yclients_id"],
                 set_={
-                    "status": item.get("status", item.get("visit_attendance", "unknown")),
+                    "datetime": visit_datetime,
+                    "status": normalized_status,
                     "total_amount": total_amount,
                     "paid_amount": Decimal(str(item.get("paid_full", 0))),
                     "is_paid": bool(item.get("paid_full", 0)),
@@ -149,9 +220,11 @@ class VisitRepository:
             visit_db_id = visit_row[0]
 
             for svc in item.get("services", []):
+                svc_yclients_id = svc.get("id", 0)
+                svc_db_id = service_map.get(svc_yclients_id, svc_yclients_id)
                 svc_stmt = pg_insert(VisitService).values(
                     visit_id=visit_db_id,
-                    service_id=svc.get("id", 0),
+                    service_id=svc_db_id,
                     title=svc.get("title", ""),
                     quantity=svc.get("amount", 1),
                     price=Decimal(str(svc.get("cost", 0))),
@@ -166,6 +239,11 @@ class VisitRepository:
 
 
 class ServiceRepository:
+    @staticmethod
+    async def get_all(session: AsyncSession) -> list[Service]:
+        result = await session.execute(select(Service))
+        return list(result.scalars().all())
+
     @staticmethod
     async def upsert_many(session: AsyncSession, data: list[dict]) -> int:
         count = 0
@@ -263,3 +341,97 @@ class MetricsRepository:
             .order_by(MonthlyMetrics.period)
         )
         return list(result.scalars().all())
+
+
+class ProductRepository:
+    @staticmethod
+    async def upsert_many(session: AsyncSession, data: list[dict]) -> int:
+        count = 0
+        for item in data:
+            stmt = pg_insert(Product).values(
+                yclients_id=item["id"],
+                title=item.get("title", ""),
+                price=Decimal(str(item.get("cost_per_unit", item.get("price", 0)))),
+            ).on_conflict_do_update(
+                index_elements=["yclients_id"],
+                set_={"title": item.get("title", ""), "price": Decimal(str(item.get("cost_per_unit", item.get("price", 0))))},
+            )
+            await session.execute(stmt)
+            count += 1
+        await session.commit()
+        return count
+
+    @staticmethod
+    async def get_all(session: AsyncSession) -> list[Product]:
+        result = await session.execute(select(Product))
+        return list(result.scalars().all())
+
+
+class SaleRepository:
+    @staticmethod
+    async def upsert_many(
+        session: AsyncSession,
+        data: list[dict],
+        employee_map: dict[int, int],
+        client_map: dict[int, int],
+        product_map: dict[int, int],
+    ) -> int:
+        count = 0
+        for item in data:
+            tid = item.get("type_id")
+            if tid not in (2, 4):
+                continue
+
+            amount = abs(int(item.get("amount", 0)))
+            if amount <= 0:
+                continue
+
+            client_db_id = None
+            client_data = item.get("client") or []
+            if isinstance(client_data, list) and client_data:
+                client_db_id = client_map.get(client_data[0].get("id", 0))
+
+            master_db_id = None
+            master_data = item.get("master") or []
+            if isinstance(master_data, list) and master_data:
+                master_db_id = employee_map.get(master_data[0].get("id", 0))
+
+            sale_datetime = _parse_datetime(item.get("create_date"))
+
+            product_yid = item.get("good", {}).get("id", 0)
+            product_db_id = product_map.get(product_yid, product_yid)
+
+            sale_id = item["id"]
+            sale_cost = abs(Decimal(str(item.get("cost", 0))))
+
+            stmt = pg_insert(Sale).values(
+                yclients_id=sale_id,
+                visit_id=None,
+                client_id=client_db_id,
+                employee_id=master_db_id,
+                datetime=sale_datetime,
+                total_amount=sale_cost,
+            ).on_conflict_do_update(
+                index_elements=["yclients_id"],
+                set_={"total_amount": sale_cost},
+            ).returning(Sale.id)
+
+            result = await session.execute(stmt)
+            row = result.fetchone()
+            if not row:
+                continue
+            sale_db_id = row[0]
+
+            item_stmt = pg_insert(SaleItem).values(
+                sale_id=sale_db_id,
+                product_id=product_db_id,
+                title=item.get("good", {}).get("title", ""),
+                quantity=amount,
+                price=Decimal(str(item.get("cost_per_unit", 0))),
+            ).on_conflict_do_nothing()
+            await session.execute(item_stmt)
+
+            count += 1
+
+        await session.commit()
+        return count

@@ -17,7 +17,9 @@ echo ""
 # 1. Build frontend
 echo "[1/5] Сборка React-фронтенда..."
 cd "$PROJECT_DIR/frontend"
-npm run build -- --outDir "$PROJECT_DIR/backend/static" 2>&1 | tail -3
+npm run build 2>&1 | tail -3
+rm -rf "$PROJECT_DIR/backend/static/assets" "$PROJECT_DIR/backend/static/index.html"
+cp -r "$PROJECT_DIR/frontend/dist/"* "$PROJECT_DIR/backend/static/" 2>/dev/null
 
 if [ ! -f "$PROJECT_DIR/backend/static/index.html" ]; then
     echo "ОШИБКА: фронтенд не собрался"

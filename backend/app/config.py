@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     admin_login: str = "admin"
     admin_password: str = "<REDACTED>"
 
+    # Telegram
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+
     @property
     def database_url(self) -> str:
         return (

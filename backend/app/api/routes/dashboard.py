@@ -9,11 +9,12 @@ from app.api.yclients import YClientsClient
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
 
-async def get_dashboard_from_api(date_from: str, date_to: str) -> dict:
-    async with YClientsClient() as client:
+async def get_dashboard_from_api(date_from: str, date_to: str, company_id: int | None = None) -> dict:
+    async with YClientsClient(company_id=company_id) as client:
         records = await client.get_all_records(date_from=date_from, date_to=date_to)
         staff = await client.get_staff()
         services = await client.get_services()
+        transactions = await client.get_transactions(date_from=date_from, date_to=date_to)
 
     if not records:
         records = []
@@ -25,6 +26,8 @@ async def get_dashboard_from_api(date_from: str, date_to: str) -> dict:
     total_visits = 0
     new_clients = 0
     repeat_clients = 0
+    total_cancelled = 0
+    total_product_sales = 0
     by_day: dict[str, dict] = {}
     by_master: dict[int, dict] = {}
     by_service: dict[str, dict] = {}
@@ -32,6 +35,15 @@ async def get_dashboard_from_api(date_from: str, date_to: str) -> dict:
     for r in records:
         rdate = (r.get("datetime") or "")[:10]
         if not rdate or rdate < date_from or rdate > date_to:
+            continue
+
+        va = r.get("visit_attendance")
+        va_int = int(va) if va is not None else 0
+
+        if va_int == 2:
+            total_cancelled += 1
+
+        if va_int != 1:
             continue
 
         if rdate not in by_day:
@@ -86,6 +98,14 @@ async def get_dashboard_from_api(date_from: str, date_to: str) -> dict:
         s["pctRevenue"] = round(s["revenue"] / max(total_revenue, 1) * 100, 1)
         s["revenue"] = str(s["revenue"])
 
+    cancellation_pct = round(total_cancelled / max(total_visits + total_cancelled, 1) * 100, 1)
+
+    for t in transactions:
+        if t.get("type_id") in (2, 4):
+            td = (t.get("create_date") or "")[:10]
+            if td >= date_from and td <= date_to:
+                total_product_sales += abs(int(t.get("cost", 0)))
+
     return {
         "period": f"{date_from} — {date_to}",
         "kpis": {
@@ -96,9 +116,9 @@ async def get_dashboard_from_api(date_from: str, date_to: str) -> dict:
             "repeat_clients": repeat_clients,
             "retention_pct": retention_pct,
             "ltv": "0",
-            "cancellation_pct": 0,
-            "product_sales": "0",
-            "profit": str(total_revenue),
+            "cancellation_pct": cancellation_pct,
+            "product_sales": str(total_product_sales),
+            "profit": str(total_revenue + total_product_sales),
         },
         "revenue_trend": sorted(by_day.values(), key=lambda d: d["date"]),
         "top_masters": masters,
@@ -109,6 +129,7 @@ async def get_dashboard_from_api(date_from: str, date_to: str) -> dict:
 @router.get("/")
 async def dashboard(
     days: int = Query(0, description="Days to cover (0 = current month)"),
+    company_id: int | None = Query(None, description="Override company ID"),
 ) -> dict:
     today = date.today()
     if days > 0:
@@ -116,12 +137,13 @@ async def dashboard(
     else:
         date_from = today.replace(day=1)
     date_to = today
-    return await get_dashboard_from_api(date_from.isoformat(), date_to.isoformat())
+    return await get_dashboard_from_api(date_from.isoformat(), date_to.isoformat(), company_id)
 
 
 @router.get("/range")
 async def dashboard_range(
     date_from: str = Query(..., description="Start date YYYY-MM-DD"),
     date_to: str = Query(..., description="End date YYYY-MM-DD"),
+    company_id: int | None = Query(None, description="Override company ID"),
 ) -> dict:
-    return await get_dashboard_from_api(date_from, date_to)
+    return await get_dashboard_from_api(date_from, date_to, company_id)

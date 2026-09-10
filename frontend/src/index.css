@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   --color-rubl-black: #0a0a0a;
   --color-rubl-card: #141414;
@@ -21,9 +23,14 @@
 }
 
 body {
+  background-color: #f7f6f3;
+  color: #171717;
+  font-family: "Inter", sans-serif;
+}
+
+.dark body {
   background-color: var(--color-rubl-black);
   color: #fafafa;
-  font-family: "Inter", sans-serif;
 }
 
 ::-webkit-scrollbar {
@@ -33,6 +40,9 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #333;
+  background: #999;
   border-radius: 3px;
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: #333;
 }
