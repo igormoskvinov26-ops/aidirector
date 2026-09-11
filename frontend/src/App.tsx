@@ -37,6 +37,18 @@ import {
 import ClientBasePage from "./ClientBasePage";
 import logo from "./assets/logo.png";
 
+/**
+ * First and last day of a month, as YYYY-MM-DD.
+ * Day 0 of the next month is the last day of this one, so February gets 28/29
+ * and April gets 30. The previous code hardcoded "-31" for every month, which
+ * produced 31 February, 31 April, 31 June, 31 September and 31 November.
+ */
+function monthRange(year: number, month: number): { from: string; to: string } {
+  const mm = String(month).padStart(2, "0");
+  const lastDay = new Date(year, month, 0).getDate();
+  return { from: `${year}-${mm}-01`, to: `${year}-${mm}-${String(lastDay).padStart(2, "0")}` };
+}
+
 // ── Types ──
 interface DashboardData {
   period: string;
@@ -81,7 +93,7 @@ const NAV = [
   { id: "clients", label: "Клиенты", icon: Users },
   { id: "clientbase", label: "Клиентская база", icon: Users },
   { id: "finance", label: "Финансы", icon: CreditCard },
-  { id: "ai", label: "Отчёт директора", icon: Sparkles },
+  { id: "ai", label: "AI Отчёт", icon: Sparkles },
 ];
 
 // ── Components ──
@@ -161,9 +173,9 @@ function DashboardPage({ data }: { data: DashboardData | null }) {
     setYear(y);
     setMonth(m);
     setLoading(true);
-    const mp = String(m).padStart(2, "0");
+    const { from, to } = monthRange(y, m);
     try {
-      const r = await fetch(`/api/dashboard/range?date_from=${y}-${mp}-01&date_to=${y}-${mp}-31`);
+      const r = await fetch(`/api/dashboard/range?date_from=${from}&date_to=${to}`);
       const json = await r.json();
       setLocalData(json);
     } catch {}
@@ -553,7 +565,7 @@ function AIPage() {
       const json = await r.json();
       setReport(json);
     } catch (e) {
-      setReport({ report: "Ошибка генерации отчёта. Попробуйте ещё раз." });
+      setReport({ report: "Ошибка генерации. Проверьте DEEPSEEK_API_KEY в .env" });
     }
     setLoading(false);
   };
@@ -562,7 +574,7 @@ function AIPage() {
     <div className="animate-in">
       <div className="mb-8 flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight mb-1">Отчёт директора</h1>
+          <h1 className="text-2xl font-bold tracking-tight mb-1">AI Директор</h1>
           <p className="text-gray-500 dark:text-zinc-500 text-sm">Управленческий отчёт на основе метрик</p>
         </div>
         <button
@@ -679,9 +691,8 @@ export default function App() {
 
   useEffect(() => {
     const now = new Date();
-    const y = now.getFullYear();
-    const m = String(now.getMonth() + 1).padStart(2, "0");
-    fetch(`/api/dashboard/range?date_from=${y}-${m}-01&date_to=${y}-${m}-31`)
+    const { from, to } = monthRange(now.getFullYear(), now.getMonth() + 1);
+    fetch(`/api/dashboard/range?date_from=${from}&date_to=${to}`)
       .then((r) => r.json())
       .then(setData)
       .catch((err) => {
@@ -710,7 +721,7 @@ export default function App() {
               <div className="text-sm font-bold tracking-tight leading-none">
                 Рубл<span className="text-rubl-accent">Ъ</span>
               </div>
-              <div className="text-[10px] text-gray-500 dark:text-zinc-500 mt-0.5">Rubl Director</div>
+              <div className="text-[10px] text-gray-500 dark:text-zinc-500 mt-0.5">AI Director</div>
             </div>
           </div>
 

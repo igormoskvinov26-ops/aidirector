@@ -1,21 +1,18 @@
 """KPI calculation service — computes all business metrics."""
 
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from decimal import Decimal
 
 from loguru import logger
-from sqlalchemy import and_, func, select, text
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import async_session
 from app.models.models import (
     Client,
-    DailyMetrics,
     Employee,
-    MonthlyMetrics,
     Visit,
-    VisitService,
 )
 from app.repositories.repositories import MetricsRepository
 

@@ -1,4 +1,4 @@
-"""AI Report routes — rule-based internal analytics (no external API)."""
+"""AI Report routes — DeepSeek-powered management insights."""
 
 from datetime import date, timedelta
 

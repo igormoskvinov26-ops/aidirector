@@ -1,6 +1,6 @@
 """Story preview — HTML template renderer for browser-based composition."""
 
-from datetime import date, datetime
+from datetime import date
 
 
 def render_story_html(master_name: str, free_slots: list[str], photo_url: str, target_date: date) -> str:

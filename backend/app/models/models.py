@@ -1,6 +1,5 @@
 """SQLAlchemy ORM models for Rubl AI Director."""
 
-import uuid
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -17,7 +16,6 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base

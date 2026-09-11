@@ -1,3 +1,1 @@
-from app.api.yclients import YClientsClient
-
-__all__ = ["YClientsClient"]
+"""API layer. Import app.api.yclients directly to avoid import cycles."""

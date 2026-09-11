@@ -1,106 +1,210 @@
 #!/bin/bash
-set -e
+# ==========================================================================
+#  Деплой РублЪ AI Director
+#
+#  Что изменилось против прошлой версии:
+#   • ставится и настраивается PostgreSQL (раньше его просто не было,
+#     и половина разделов молча отдавала 500);
+#   • приложение слушает 127.0.0.1, наружу смотрит nginx;
+#   • сертификат от Let's Encrypt вместо самоподписанного;
+#   • сервис работает от пользователя rubl, а не от root;
+#   • пароль больше не печатается в консоль.
+# ==========================================================================
+set -euo pipefail
 
-VPS="root@95.81.99.227"
-SSH_KEY="$HOME/.ssh/id_ed25519_proxy"
+VPS="${VPS:-root@95.81.99.227}"
+SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519_proxy}"
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 VPS_DIR="/opt/rubl-director"
-VPS_PORT=8443
+DOMAIN="${DOMAIN:-}"          # например: director.rublbarber.ru
+SERVICE_USER="rubl"
 
-SSH="ssh -i $SSH_KEY -o StrictHostKeyChecking=no"
-SCP="scp -i $SSH_KEY -o StrictHostKeyChecking=no"
+SSH="ssh -i $SSH_KEY"
+SCP="scp -i $SSH_KEY"
 
-echo "=== Деплой РублЪ AI Director ==="
-echo "VPS: 95.81.99.227:$VPS_PORT"
-echo ""
+if [ -z "$DOMAIN" ]; then
+    cat <<'MSG'
+ОШИБКА: не задан домен.
 
-# 1. Build frontend
-echo "[1/5] Сборка React-фронтенда..."
-cd "$PROJECT_DIR/frontend"
-npm run build 2>&1 | tail -3
-rm -rf "$PROJECT_DIR/backend/static/assets" "$PROJECT_DIR/backend/static/index.html"
-cp -r "$PROJECT_DIR/frontend/dist/"* "$PROJECT_DIR/backend/static/" 2>/dev/null
+Сервису нужен настоящий домен, чтобы получить сертификат Let's Encrypt.
+По голому IP сертификат не выдаётся, а самоподписанный заставляет браузер
+ругаться — и пользователь привыкает жать «всё равно перейти».
 
-if [ ! -f "$PROJECT_DIR/backend/static/index.html" ]; then
-    echo "ОШИБКА: фронтенд не собрался"
+  1. Заведи A-запись, например director.rublbarber.ru → 95.81.99.227
+  2. Запусти: DOMAIN=director.rublbarber.ru ./deploy.sh
+MSG
     exit 1
 fi
+
+if [ ! -f "$PROJECT_DIR/.env" ]; then
+    echo "ОШИБКА: нет .env. Скопируй .env.example в .env и заполни."
+    exit 1
+fi
+
+echo "=== Деплой РублЪ AI Director ==="
+echo "Домен: $DOMAIN"
+echo ""
+
+# ── 1. Сборка фронтенда ───────────────────────────────────────────────────
+echo "[1/6] Сборка фронтенда..."
+cd "$PROJECT_DIR/frontend"
+npm ci --no-audit --no-fund >/dev/null
+npm run build 2>&1 | tail -3
+rm -rf "$PROJECT_DIR/backend/static"
+mkdir -p "$PROJECT_DIR/backend/static"
+cp -r "$PROJECT_DIR/frontend/dist/"* "$PROJECT_DIR/backend/static/"
+[ -f "$PROJECT_DIR/backend/static/index.html" ] || { echo "ОШИБКА: фронт не собрался"; exit 1; }
 echo "       OK ($(du -sh "$PROJECT_DIR/backend/static" | cut -f1))"
 
-# 2. Copy backend to VPS
-echo "[2/5] Копируем бэкенд на VPS..."
-$SSH "$VPS" "mkdir -p $VPS_DIR/backend/app"
-$SCP -r "$PROJECT_DIR/backend/app" "$PROJECT_DIR/backend/pyproject.toml" "$PROJECT_DIR/backend/uv.lock" "$PROJECT_DIR/backend/static" "$VPS:$VPS_DIR/backend/" 2>&1 | tail -3
+# ── 2. Подготовка сервера ─────────────────────────────────────────────────
+echo "[2/6] Подготовка сервера..."
+$SSH "$VPS" bash -s << PREP
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
 
-# 3. Copy .env
-echo "[3/5] Копируем .env..."
-$SSH "$VPS" "mkdir -p $VPS_DIR"
-$SCP "$PROJECT_DIR/.env" "$VPS:$VPS_DIR/.env" 2>&1
+apt-get update -qq
+apt-get install -y -qq postgresql nginx certbot python3-certbot-nginx curl ufw \
+    fonts-dejavu-core >/dev/null
 
-# 4. Setup on VPS
-echo "[4/5] Настройка VPS..."
-$SSH "$VPS" bash -s << DEPLOY_SCRIPT
-set -e
+id -u $SERVICE_USER >/dev/null 2>&1 || useradd --system --create-home --shell /usr/sbin/nologin $SERVICE_USER
+mkdir -p $VPS_DIR/backend $VPS_DIR/output $VPS_DIR/assets/fonts
+PREP
 
-VPS_DIR="$VPS_DIR"
-VPS_PORT="$VPS_PORT"
+# ── 3. База данных ────────────────────────────────────────────────────────
+echo "[3/6] PostgreSQL..."
+DB_NAME=$(grep -E '^POSTGRES_DB=' "$PROJECT_DIR/.env" | cut -d= -f2-)
+DB_USER=$(grep -E '^POSTGRES_USER=' "$PROJECT_DIR/.env" | cut -d= -f2-)
+DB_PASS=$(grep -E '^POSTGRES_PASSWORD=' "$PROJECT_DIR/.env" | cut -d= -f2-)
 
-# Install uv if missing
-if ! command -v uv &>/dev/null; then
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-    source \$HOME/.local/bin/env
-fi
+$SSH "$VPS" DB_NAME="$DB_NAME" DB_USER="$DB_USER" DB_PASS="$DB_PASS" bash -s << 'DBSETUP'
+set -euo pipefail
+systemctl enable --now postgresql
 
-# Install Python deps
-cd "\$VPS_DIR/backend"
-uv sync 2>&1 | tail -3
+sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='$DB_USER'" | grep -q 1 || \
+    sudo -u postgres psql -qc "CREATE ROLE \"$DB_USER\" LOGIN PASSWORD '$DB_PASS'"
+sudo -u postgres psql -qc "ALTER ROLE \"$DB_USER\" PASSWORD '$DB_PASS'"
 
-# Generate self-signed SSL cert
-if [ ! -f "\$VPS_DIR/cert.pem" ]; then
-    openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
-        -keyout "\$VPS_DIR/key.pem" \
-        -out "\$VPS_DIR/cert.pem" \
-        -subj "/CN=rubl-director/O=Rubl/ST=Moscow/C=RU" 2>&1
-    echo "SSL cert generated"
-fi
+sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='$DB_NAME'" | grep -q 1 || \
+    sudo -u postgres createdb -O "$DB_USER" "$DB_NAME"
 
-# Allow port 8443 in UFW (only if not already allowed)
-ufw status | grep -q "\$VPS_PORT" || ufw allow "\$VPS_PORT/tcp"
+echo "       база готова"
+DBSETUP
 
-# Create systemd service
+# ── 4. Код и зависимости ──────────────────────────────────────────────────
+echo "[4/6] Копируем код..."
+$SCP -r "$PROJECT_DIR/backend/app" \
+        "$PROJECT_DIR/backend/alembic" \
+        "$PROJECT_DIR/backend/alembic.ini" \
+        "$PROJECT_DIR/backend/pyproject.toml" \
+        "$PROJECT_DIR/backend/uv.lock" \
+        "$PROJECT_DIR/backend/static" "$VPS:$VPS_DIR/backend/" >/dev/null
+$SCP "$PROJECT_DIR/.env" "$VPS:$VPS_DIR/.env" >/dev/null
+
+$SSH "$VPS" bash -s << SETUP
+set -euo pipefail
+
+chmod 600 $VPS_DIR/.env
+chown -R $SERVICE_USER:$SERVICE_USER $VPS_DIR
+
+command -v uv >/dev/null 2>&1 || { curl -LsSf https://astral.sh/uv/install.sh | sh; }
+export PATH="\$HOME/.local/bin:\$PATH"
+
+cd $VPS_DIR/backend
+uv sync --frozen 2>&1 | tail -2
+chown -R $SERVICE_USER:$SERVICE_USER $VPS_DIR/backend/.venv
+
+# Схема через миграции, а не через create_all
+sudo -u $SERVICE_USER $VPS_DIR/backend/.venv/bin/alembic upgrade head 2>&1 | tail -3
+
 cat > /etc/systemd/system/rubl-director.service << SERVICE
 [Unit]
 Description=Rubl AI Director
-After=network.target
+After=network.target postgresql.service
+Requires=postgresql.service
 
 [Service]
 Type=simple
-User=root
-WorkingDirectory=\$VPS_DIR/backend
+User=$SERVICE_USER
+Group=$SERVICE_USER
+WorkingDirectory=$VPS_DIR/backend
 Environment="PYTHONUNBUFFERED=1"
-ExecStart=\$VPS_DIR/backend/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port \$VPS_PORT --ssl-keyfile \$VPS_DIR/key.pem --ssl-certfile \$VPS_DIR/cert.pem
+ExecStart=$VPS_DIR/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
 Restart=always
 RestartSec=10
+
+# Ограничения: даже при дыре в коде процесс не дотянется до остального сервера
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=$VPS_DIR/output
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
 
 [Install]
 WantedBy=multi-user.target
 SERVICE
 
 systemctl daemon-reload
-systemctl enable rubl-director
+systemctl enable rubl-director >/dev/null
 systemctl restart rubl-director
+SETUP
 
-echo "OK"
-DEPLOY_SCRIPT
+# ── 5. Nginx + сертификат ─────────────────────────────────────────────────
+echo "[5/6] Nginx и сертификат..."
+$SSH "$VPS" DOMAIN="$DOMAIN" bash -s << 'WEB'
+set -euo pipefail
 
-echo ""
-echo "[5/5] Проверка..."
-sleep 3
-$SSH "$VPS" "curl -sk https://localhost:$VPS_PORT/health" 2>&1
+cat > /etc/nginx/sites-available/rubl-director << NGINX
+server {
+    listen 80;
+    server_name $DOMAIN;
+    location / { return 301 https://\$host\$request_uri; }
+}
 
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name $DOMAIN;
+
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header Referrer-Policy "same-origin" always;
+
+    client_max_body_size 12M;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 120s;
+    }
+}
+NGINX
+
+ln -sf /etc/nginx/sites-available/rubl-director /etc/nginx/sites-enabled/rubl-director
+rm -f /etc/nginx/sites-enabled/default
+
+ufw allow 'Nginx Full' >/dev/null 2>&1 || true
+# Порт 8443 больше не нужен: наружу торчит только 443
+ufw delete allow 8443/tcp >/dev/null 2>&1 || true
+
+certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos --register-unsafely-without-email --redirect 2>&1 | tail -3
+
+nginx -t && systemctl reload nginx
+WEB
+
+# ── 6. Проверка ───────────────────────────────────────────────────────────
+echo "[6/6] Проверка..."
+sleep 4
+$SSH "$VPS" "curl -s http://127.0.0.1:8000/health"
 echo ""
 echo "==============================================="
-echo "  ГОТОВО!"
-echo "  URL: https://95.81.99.227:$VPS_PORT"
+echo "  ГОТОВО"
+echo "  URL: https://$DOMAIN"
 echo "  Логин и пароль — из .env (в консоль не печатаются)"
 echo "==============================================="

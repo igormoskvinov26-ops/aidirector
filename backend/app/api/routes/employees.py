@@ -12,10 +12,11 @@ router = APIRouter(prefix="/api/employees", tags=["employees"])
 @router.get("/")
 async def list_employees(db: AsyncSession = Depends(get_db)) -> list[dict]:
     try:
-        from app.models.models import Employee
         from sqlalchemy import select
+
+        from app.models.models import Employee
         result = await db.execute(
-            select(Employee).where(Employee.is_active == True).order_by(Employee.name)
+            select(Employee).where(Employee.is_active.is_(True)).order_by(Employee.name)
         )
         return [{"id": e.id, "yclients_id": e.yclients_id, "name": e.name,
                  "specialization": e.specialization, "position": e.position,

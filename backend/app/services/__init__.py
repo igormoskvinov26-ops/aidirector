@@ -1,20 +1,10 @@
-from app.services.sync import get_sync_status, sync_all
-from app.services.kpi import (
-    calculate_all_daily,
-    calculate_all_monthly,
-    calculate_daily_metrics,
-    calculate_monthly_metrics,
-    get_dashboard_data,
-)
-from app.services.ai import generate_report
+"""Service layer.
 
-__all__ = [
-    "sync_all",
-    "get_sync_status",
-    "calculate_daily_metrics",
-    "calculate_monthly_metrics",
-    "calculate_all_daily",
-    "calculate_all_monthly",
-    "get_dashboard_data",
-    "generate_report",
-]
+Deliberately empty of eager imports. The previous version pulled sync -> yclients
+-> cache -> services/__init__ back into itself, so importing anything from
+app.services dragged in SQLAlchemy, the AI client and a circular reference.
+Import the concrete module you need instead:
+
+    from app.services.slots import compute_free_slots
+    from app.services.sync import sync_all
+"""

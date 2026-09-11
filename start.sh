@@ -1,40 +1,45 @@
 #!/bin/bash
-echo "=== РублЪ AI Director ==="
-echo ""
+# Локальный запуск для разработки.
+set -euo pipefail
+cd "$(dirname "$0")"
 
-# Kill old processes
-pkill -f "uvicorn app.main" 2>/dev/null
-pkill -f "vite" 2>/dev/null
-sleep 1
+echo "=== РублЪ AI Director (dev) ==="
 
-# Start backend
-cd "$(dirname "$0")/backend"
-echo "[1/2] Запуск бэкенда на порту 8000..."
-uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 &
-BACKEND_PID=$!
-sleep 2
-
-# Check backend
-if curl -s http://localhost:8000/health > /dev/null 2>&1; then
-    echo "       Бэкенд: OK (http://localhost:8000)"
-else
-    echo "       Бэкенд: ошибка запуска"
+if [ ! -f .env ]; then
+    echo "Нет .env. Скопируй .env.example в .env и заполни:"
+    echo "  cp .env.example .env"
+    echo "  POSTGRES_PASSWORD:  openssl rand -base64 24"
+    echo "  ADMIN_PASSWORD:     openssl rand -base64 18"
     exit 1
 fi
 
-# Start frontend
-cd "$(dirname "$0")/frontend"
-echo "[2/2] Запуск фронтенда на порту 3000..."
-npx vite --host 0.0.0.0 --port 3000 &
-FRONTEND_PID=$!
-sleep 3
+cleanup() { kill 0 2>/dev/null || true; }
+trap cleanup EXIT INT TERM
+
+echo "[1/4] PostgreSQL..."
+docker compose -f docker/docker-compose.yml up -d postgres
+until docker compose -f docker/docker-compose.yml exec -T postgres pg_isready -q 2>/dev/null; do
+    sleep 1
+done
+echo "       OK"
+
+echo "[2/4] Миграции..."
+(cd backend && uv run alembic upgrade head 2>&1 | tail -2)
+
+echo "[3/4] Бэкенд :8000..."
+(cd backend && uv run uvicorn app.main:app --reload --port 8000) &
+for _ in $(seq 1 30); do
+    curl -sf http://localhost:8000/health >/dev/null && break
+    sleep 1
+done
+curl -sf http://localhost:8000/health >/dev/null || { echo "       бэкенд не поднялся"; exit 1; }
+echo "       OK"
+
+echo "[4/4] Фронтенд :3000..."
+(cd frontend && npm run dev) &
 
 echo ""
-echo "==============================================="
-echo "  ГОТОВО!"
-echo "  Открой в браузере: http://localhost:3000"
-echo ""
-echo "  Остановка: kill $BACKEND_PID $FRONTEND_PID"
-echo "==============================================="
-
+echo "  http://localhost:3000     — дашборд"
+echo "  http://localhost:8000/api/docs — API (при DEBUG=true)"
+echo "  Ctrl+C — остановить всё"
 wait

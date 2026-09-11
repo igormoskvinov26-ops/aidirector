@@ -4,16 +4,15 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import and_, func, select, text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import and_, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import (
     Client,
     DailyMetrics,
     Employee,
     MonthlyMetrics,
-    PlanTarget,
     Product,
     Sale,
     SaleItem,
@@ -73,7 +72,7 @@ class EmployeeRepository:
 
     @staticmethod
     async def get_all(session: AsyncSession) -> list[Employee]:
-        result = await session.execute(select(Employee).where(Employee.is_active == True))
+        result = await session.execute(select(Employee).where(Employee.is_active.is_(True)))
         return list(result.scalars().all())
 
 

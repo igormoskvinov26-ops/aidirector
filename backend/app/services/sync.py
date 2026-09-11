@@ -1,11 +1,10 @@
 """Data synchronization service — pulls YCLIENTS → PostgreSQL."""
 
 import asyncio
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from loguru import logger
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.yclients import YClientsClient
 from app.database import async_session
@@ -17,13 +16,27 @@ from app.repositories.repositories import (
     ServiceRepository,
     VisitRepository,
 )
+from app.services import cache
 
 _sync_in_progress = False
 _last_sync: datetime | None = None
 
 
 async def sync_all(date_from: str | None = None, date_to: str | None = None) -> dict[str, int]:
+    """Pull YCLIENTS -> PostgreSQL for a bounded window.
+
+    When no dates are given the window defaults to the last
+    ``settings.sync_window_days`` days. The previous version passed None straight
+    through, which made every sync re-download the entire history.
+    """
     global _sync_in_progress, _last_sync
+
+    from app.config import settings
+
+    if date_to is None:
+        date_to = date.today().isoformat()
+    if date_from is None:
+        date_from = (date.today() - timedelta(days=settings.sync_window_days)).isoformat()
 
     if _sync_in_progress:
         logger.info("Sync already in progress, skipping")
@@ -97,6 +110,7 @@ async def sync_all(date_from: str | None = None, date_to: str | None = None) -> 
                 stats["sales"] = sale_count
 
         _last_sync = datetime.now()
+        cache.invalidate()
         logger.info(f"Sync complete: {stats}")
 
     except Exception as e:

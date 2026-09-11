@@ -6,8 +6,8 @@ from decimal import Decimal
 
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.models.models import PlanTarget, Sale, Visit
 
+from app.models.models import PlanTarget, Sale, Visit
 
 WORKING_HOURS = range(10, 22)
 DB_HOUR_SHIFT = 1

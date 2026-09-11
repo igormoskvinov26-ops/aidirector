@@ -2,14 +2,11 @@
 
 from datetime import date
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Query
-from loguru import logger
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, BackgroundTasks, Query
 
-from app.database import get_db
 from app.schemas.schemas import SyncStatusResponse
-from app.services.sync import get_sync_status, sync_all
 from app.services.kpi import calculate_all_daily
+from app.services.sync import get_sync_status, sync_all
 
 router = APIRouter(prefix="/api/sync", tags=["sync"])
 

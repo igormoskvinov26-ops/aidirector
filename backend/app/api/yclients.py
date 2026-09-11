@@ -1,16 +1,35 @@
-"""YCLIENTS REST API client with automatic retry and rate limiting."""
+"""YCLIENTS REST API client with retry, rate limiting and caching."""
 
 import asyncio
+from datetime import date
 from typing import Any
 
 import httpx
 from loguru import logger
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import (
+    retry,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from app.config import settings
+from app.services.cache import cached
 
 BASE_URL = "https://api.yclients.com/api/v1"
 RATE_LIMIT_DELAY = 0.6
+# Guard rail: a single call must never try to walk the entire history.
+MAX_RANGE_DAYS = 400
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    """Retry on transport errors and on 429/5xx, but never on 4xx client errors."""
+    if isinstance(exc, (httpx.TransportError, httpx.TimeoutException)):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code
+        return code == 429 or 500 <= code < 600
+    return False
 
 
 class YClientsClient:
@@ -26,8 +45,7 @@ class YClientsClient:
             base_url=BASE_URL,
             headers={
                 "Authorization": (
-                    f"Bearer {settings.yclients_partner_token}, "
-                    f"User {self.user_token}"
+                    f"Bearer {settings.yclients_partner_token}, User {self.user_token}"
                 ),
                 "Accept": "application/vnd.yclients.v2+json",
                 "Content-Type": "application/json",
@@ -44,13 +62,23 @@ class YClientsClient:
     async def __aexit__(self, *args: object) -> None:
         await self.close()
 
+    # ------------------------------------------------------------------ #
+    # Low level
+    # ------------------------------------------------------------------ #
+
     @retry(
-        stop=stop_after_attempt(3),
+        retry=retry_if_exception(_is_retryable),
+        stop=stop_after_attempt(4),
         wait=wait_exponential(multiplier=2, min=2, max=30),
+        reraise=True,
     )
-    async def _get(self, path: str, params: dict | None = None) -> dict[str, Any]:
+    async def _request(self, path: str, params: dict | None = None) -> httpx.Response:
         response = await self._client.get(path, params=params)
         response.raise_for_status()
+        return response
+
+    async def _get(self, path: str, params: dict | None = None) -> dict[str, Any]:
+        response = await self._request(path, params)
         return response.json()
 
     async def _get_paginated(
@@ -65,22 +93,9 @@ class YClientsClient:
         while page <= max_pages:
             query["page"] = page
 
-            for attempt in range(3):
-                resp = await self._client.get(path, params=query)
-                if resp.status_code == 429:
-                    wait = min(2 ** attempt, 30)
-                    logger.warning(f"  Rate limited on {path}, waiting {wait}s...")
-                    await asyncio.sleep(wait)
-                    continue
-                resp.raise_for_status()
-                result = resp.json()
-                break
-            else:
-                raise httpx.HTTPStatusError(
-                    f"Rate limit exceeded on {path} after 3 attempts",
-                    request=resp.request,
-                    response=resp,
-                )
+            # _request already retries 429/5xx with exponential backoff.
+            resp = await self._request(path, params=query)
+            result = resp.json()
 
             if isinstance(result, list):
                 all_data.extend(result)
@@ -103,16 +118,44 @@ class YClientsClient:
             await asyncio.sleep(RATE_LIMIT_DELAY)
             page += 1
             if page % 10 == 0:
-                logger.info(f"  Paginated {path}: {len(all_data)} / {total}")
+                logger.info(f"  paginated {path}: {len(all_data)} / {total}")
+
+        if page > max_pages:
+            logger.warning(f"{path}: hit max_pages={max_pages}, result may be truncated")
 
         return all_data
 
-    # ── Staff ──
-    async def get_staff(self) -> list[dict[str, Any]]:
-        result = await self._get(f"/company/{self.company_id}/staff")
-        return result.get("data", [])
+    def _ck(self, name: str, *parts: object) -> str:
+        """Cache key scoped to the company this client talks to."""
+        return ":".join([str(self.company_id), name, *(str(p) for p in parts)])
 
-    # ── Clients ──
+    # ------------------------------------------------------------------ #
+    # Staff
+    # ------------------------------------------------------------------ #
+
+    async def get_staff(self) -> list[dict[str, Any]]:
+        async def load() -> list[dict[str, Any]]:
+            result = await self._get(f"/company/{self.company_id}/staff")
+            return result.get("data", [])
+
+        return await cached(self._ck("staff"), load)
+
+    async def get_active_staff(self) -> list[dict[str, Any]]:
+        """Staff excluding hidden, fired and the 'waiting list' pseudo-master."""
+        staff = await self.get_staff()
+        return [
+            s
+            for s in staff
+            if not s.get("hidden")
+            and not s.get("fired")
+            and not s.get("is_fired")
+            and s.get("name") != "Лист Ожидания"
+        ]
+
+    # ------------------------------------------------------------------ #
+    # Clients
+    # ------------------------------------------------------------------ #
+
     async def get_clients(self, page: int = 1, page_size: int = 200) -> dict[str, Any]:
         return await self._get(
             f"/clients/{self.company_id}",
@@ -122,15 +165,22 @@ class YClientsClient:
     async def get_all_clients(self) -> list[dict[str, Any]]:
         return await self._get_paginated(f"/clients/{self.company_id}")
 
-    async def search_clients(self, phone: str | None = None, name: str | None = None) -> list[dict[str, Any]]:
+    async def search_clients(
+        self, phone: str | None = None, name: str | None = None
+    ) -> list[dict[str, Any]]:
         params: dict[str, Any] = {}
         if phone:
             params["phone"] = phone
         if name:
             params["name"] = name
-        return await self._get_paginated(f"/company/{self.company_id}/clients/search", params=params)
+        return await self._get_paginated(
+            f"/company/{self.company_id}/clients/search", params=params
+        )
 
-    # ── Records / Visits ──
+    # ------------------------------------------------------------------ #
+    # Records / visits
+    # ------------------------------------------------------------------ #
+
     async def get_records(
         self,
         page: int = 1,
@@ -153,22 +203,54 @@ class YClientsClient:
 
     async def get_all_records(
         self,
-        date_from: str | None = None,
-        date_to: str | None = None,
+        date_from: str,
+        date_to: str,
     ) -> list[dict[str, Any]]:
-        params: dict[str, Any] = {}
-        if date_from:
-            params["date_from"] = date_from
-        if date_to:
-            params["date_to"] = date_to
-        return await self._get_paginated(f"/records/{self.company_id}", params=params)
+        """Fetch records for a bounded date range.
 
-    # ── Services ──
+        Dates are mandatory: the previous open-ended version downloaded the whole
+        history (up to 40k records, ~2 minutes) on every single request.
+        """
+        if not date_from or not date_to:
+            raise ValueError("get_all_records requires both date_from and date_to")
+
+        span = (date.fromisoformat(date_to) - date.fromisoformat(date_from)).days
+        if span < 0:
+            raise ValueError(f"date_from ({date_from}) is after date_to ({date_to})")
+        if span > MAX_RANGE_DAYS:
+            raise ValueError(
+                f"Requested range of {span} days exceeds MAX_RANGE_DAYS={MAX_RANGE_DAYS}. "
+                "Narrow the range or sync into PostgreSQL instead."
+            )
+
+        async def load() -> list[dict[str, Any]]:
+            return await self._get_paginated(
+                f"/records/{self.company_id}",
+                params={"date_from": date_from, "date_to": date_to},
+            )
+
+        return await cached(self._ck("records", date_from, date_to), load)
+
+    async def get_records_for_day(self, day: date) -> list[dict[str, Any]]:
+        """Records for a single day — cheap, cached, used by slots and stories."""
+        iso = day.isoformat()
+        return await self.get_all_records(date_from=iso, date_to=iso)
+
+    # ------------------------------------------------------------------ #
+    # Services
+    # ------------------------------------------------------------------ #
+
     async def get_services(self) -> list[dict[str, Any]]:
-        result = await self._get(f"/services/{self.company_id}")
-        return result.get("data", []) if isinstance(result, dict) else result
+        async def load() -> list[dict[str, Any]]:
+            result = await self._get(f"/services/{self.company_id}")
+            return result.get("data", []) if isinstance(result, dict) else result
 
-    # ── Products / Sales ──
+        return await cached(self._ck("services"), load)
+
+    # ------------------------------------------------------------------ #
+    # Products / sales
+    # ------------------------------------------------------------------ #
+
     async def get_transactions(
         self, date_from: str | None = None, date_to: str | None = None
     ) -> list[dict[str, Any]]:
@@ -181,7 +263,10 @@ class YClientsClient:
             f"/storages/transactions/{self.company_id}", params=params
         )
 
-    # ── Loyalty ──
+    # ------------------------------------------------------------------ #
+    # Loyalty
+    # ------------------------------------------------------------------ #
+
     async def get_loyalty_transactions(
         self, date_from: str | None = None, date_to: str | None = None
     ) -> list[dict[str, Any]]:
@@ -194,15 +279,52 @@ class YClientsClient:
             f"/loyalty/transactions/{self.company_id}", params=params
         )
 
-    # ── Financial Report ──
+    # ------------------------------------------------------------------ #
+    # Financial report
+    # ------------------------------------------------------------------ #
+
     async def get_financial_report(self, date_from: str, date_to: str) -> dict[str, Any]:
         return await self._get(
             f"/reports/finance/{self.company_id}",
             params={"date_from": date_from, "date_to": date_to},
         )
 
-    # ── Schedule ──
-    async def get_schedule(self, staff_id: int, date: str) -> dict[str, Any]:
-        return await self._get(
-            f"/schedule/{self.company_id}/{staff_id}/{date}"
-        )
+    # ------------------------------------------------------------------ #
+    # Schedule
+    # ------------------------------------------------------------------ #
+
+    async def get_schedule(self, staff_id: int, day: date | str) -> dict[str, Any]:
+        iso = day.isoformat() if isinstance(day, date) else day
+        return await self._get(f"/schedule/{self.company_id}/{staff_id}/{iso}")
+
+    async def get_working_staff_ids(self, day: date) -> set[int] | None:
+        """Staff scheduled to work on ``day`` according to YCLIENTS.
+
+        Returns ``None`` when the schedule endpoint is unavailable, so callers can
+        fall back to a heuristic instead of silently reporting "nobody works today".
+        """
+
+        async def load() -> set[int] | None:
+            staff = await self.get_active_staff()
+            working: set[int] = set()
+            ok = False
+            for s in staff:
+                try:
+                    resp = await self.get_schedule(s["id"], day)
+                except httpx.HTTPError as exc:
+                    logger.warning(f"schedule unavailable for staff {s['id']}: {exc}")
+                    continue
+                ok = True
+                data = resp.get("data") if isinstance(resp, dict) else None
+                entries = data if isinstance(data, list) else ([data] if data else [])
+                for entry in entries:
+                    if not isinstance(entry, dict):
+                        continue
+                    slots = entry.get("slots") or entry.get("intervals") or []
+                    if slots or entry.get("is_working"):
+                        working.add(s["id"])
+                        break
+                await asyncio.sleep(0.15)
+            return working if ok else None
+
+        return await cached(self._ck("working", day.isoformat()), load, ttl=900)

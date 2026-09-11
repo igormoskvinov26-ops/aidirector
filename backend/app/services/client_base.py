@@ -17,7 +17,14 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.models import Client, ContactAttempt, ContactTask, DailySegmentSnapshot, Visit, VisitService
+from app.models.models import (
+    Client,
+    ContactAttempt,
+    ContactTask,
+    DailySegmentSnapshot,
+    Visit,
+    VisitService,
+)
 
 MOSCOW = ZoneInfo("Europe/Moscow")
 

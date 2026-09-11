@@ -4,49 +4,86 @@ import hashlib
 import io
 import os
 from datetime import date
-from pathlib import Path
 
+from loguru import logger
 from PIL import Image, ImageDraw, ImageEnhance, ImageFont
+
+from app.config import settings
 
 WIDTH = 1080
 HEIGHT = 1920
-OUTPUT_DIR = Path("/opt/rubl-director/output/stories")
+
+# Configurable, not hardcoded to the VPS path — the old value made stories
+# impossible to generate anywhere but production.
+OUTPUT_DIR = settings.stories_dir
+
+# Brand faces first (drop the .ttf files into assets/fonts/), system faces only
+# as a last resort so a missing font degrades instead of crashing.
+BRAND_REGULAR = ["Manrope-Regular.ttf", "Manrope-Medium.ttf", "JetBrainsMono-Regular.ttf"]
+BRAND_BOLD = ["Manrope-Bold.ttf", "Cormorant-Bold.ttf", "Manrope-ExtraBold.ttf"]
+
+SYSTEM_FALLBACK = [
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    "/System/Library/Fonts/Helvetica.ttc",
+]
+SYSTEM_FALLBACK_BOLD = [
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+]
+
+_warned: set[str] = set()
+
+
+def _load(candidates: list[str], size: int) -> ImageFont.FreeTypeFont | None:
+    for name in candidates:
+        path = name if os.path.isabs(name) else str(settings.fonts_dir / name)
+        if os.path.exists(path):
+            try:
+                return ImageFont.truetype(path, size)
+            except Exception:
+                continue
+    return None
+
+
+def _warn_once(key: str, message: str) -> None:
+    if key not in _warned:
+        _warned.add(key)
+        logger.warning(message)
 
 
 def _get_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
-    paths = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        "/System/Library/Fonts/Helvetica.ttc",
-    ]
-    for p in paths:
-        if os.path.exists(p):
-            try:
-                return ImageFont.truetype(p, size)
-            except Exception:
-                continue
-    return ImageFont.load_default()
+    if bold:
+        return _get_font_bold(size)
+    font = _load(BRAND_REGULAR, size)
+    if font:
+        return font
+    _warn_once(
+        "regular",
+        f"Brand fonts not found in {settings.fonts_dir} — stories will render "
+        "with a system face and will be off-brand.",
+    )
+    return _load(SYSTEM_FALLBACK, size) or ImageFont.load_default()
 
 
 def _get_font_bold(size: int) -> ImageFont.FreeTypeFont:
-    paths = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-        "/System/Library/Fonts/Helvetica.ttc",
-    ]
-    for p in paths:
-        if os.path.exists(p):
-            try:
-                return ImageFont.truetype(p, size)
-            except Exception:
-                continue
-    return _get_font(size, bold=True)
+    font = _load(BRAND_BOLD, size)
+    if font:
+        return font
+    _warn_once(
+        "bold",
+        f"Brand bold font not found in {settings.fonts_dir} — falling back to a system face.",
+    )
+    return (
+        _load(SYSTEM_FALLBACK_BOLD, size)
+        or _load(SYSTEM_FALLBACK, size)
+        or ImageFont.load_default()
+    )
 
 
 def _load_photo(master_name: str) -> Image.Image | None:
     import asyncio
+
     import httpx
 
     async def _fetch():

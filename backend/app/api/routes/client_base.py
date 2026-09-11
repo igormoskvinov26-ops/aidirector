@@ -1,7 +1,5 @@
 """Client base routes — segmentation, dashboard, admin contact queue."""
 
-from datetime import datetime
-from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
