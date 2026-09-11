@@ -26,7 +26,9 @@ class Settings(BaseSettings):
     postgres_port: int = 5432
     postgres_db: str = "rubl_director"
     postgres_user: str = "rubl"
-    postgres_password: str = "<REDACTED>"
+    # Без значения по умолчанию: прежнее было опубликовано в открытом
+    # репозитории. Пустой POSTGRES_PASSWORD теперь останавливает старт.
+    postgres_password: str
 
     # FastAPI
     app_host: str = "0.0.0.0"
@@ -38,7 +40,8 @@ class Settings(BaseSettings):
 
     # Admin
     admin_login: str = "admin"
-    admin_password: str = "<REDACTED>"
+    # Без значения по умолчанию — по той же причине.
+    admin_password: str
 
     # Telegram
     telegram_bot_token: str = ""

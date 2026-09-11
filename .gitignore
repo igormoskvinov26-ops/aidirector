@@ -1,4 +1,11 @@
+# Секреты — никогда в репозиторий
 .env
+.env.local
+.env.*.local
+!.env.example
+*.pem
+*.key
+
 __pycache__/
 *.pyc
 .venv/
@@ -12,4 +19,12 @@ build/
 .ruff_cache/
 *.log
 postgres_data/
+output/
 .DS_Store
+
+# Архивы и крупные бинарники держим вне репозитория:
+# в них легко унести секрет незаметно для code review
+*.zip
+*.tar
+*.tar.gz
+*.7z
