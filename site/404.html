@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Страница не найдена — барбершоп РублЪ</title>
+<meta name="robots" content="noindex">
+
+<link rel="icon" href="/img/favicon-32.png" sizes="32x32">
+<link rel="icon" href="/img/favicon-16.png" sizes="16x16">
+<link rel="apple-touch-icon" href="/img/apple-touch-icon.png">
+
+<!-- Локальные шрифты: страница не обращается к внешним доменам. -->
+<link rel="preload" href="/fonts/Manrope-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/fonts/fonts.css">
+
+<style>
+:root{
+  --ink:#0e0d0c; --line:#2b2621;
+  --gold:#c9a15a; --gold-dim:#8a713f;
+  --cream:#efe6d8; --muted:#968a79;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{
+  background:var(--ink); color:var(--cream);
+  font-family:'Manrope',system-ui,sans-serif; font-size:16px; line-height:1.6;
+  min-height:100vh; display:flex; flex-direction:column;
+  -webkit-font-smoothing:antialiased;
+}
+a{color:inherit;text-decoration:none;}
+img{max-width:100%;display:block;}
+.wrap{max-width:1160px;margin:0 auto;padding:0 24px;width:100%;}
+
+header{border-bottom:1px solid var(--line);}
+.head-in{display:flex;align-items:center;height:68px;}
+.logo{display:flex;align-items:center;gap:12px;}
+.logo-mark{height:42px;width:auto;}
+.logo-text{
+  font-family:'Cormorant',serif;font-size:24px;font-weight:600;
+  letter-spacing:.05em;color:var(--gold);line-height:1;
+}
+
+.milled{
+  height:14px;
+  background-image:repeating-linear-gradient(to right,var(--gold-dim) 0 1px,transparent 1px 6px);
+  opacity:.5;
+}
+
+main{flex:1;display:flex;align-items:center;padding:64px 0;}
+.code{
+  font-family:'JetBrains Mono',monospace;font-size:13px;letter-spacing:.2em;
+  color:var(--gold-dim);margin-bottom:18px;
+}
+h1{
+  font-family:'Cormorant',serif;font-weight:600;
+  font-size:clamp(34px,6vw,54px);line-height:1.06;
+  margin-bottom:18px;text-wrap:balance;max-width:16ch;
+}
+p{color:var(--muted);max-width:46ch;margin-bottom:32px;}
+.actions{display:flex;gap:14px;flex-wrap:wrap;}
+.btn{
+  display:inline-block;padding:14px 30px;font-size:15px;font-weight:600;
+  border:1px solid var(--gold-dim);color:var(--cream);
+}
+.btn:hover{border-color:var(--gold);color:var(--gold);}
+.btn--solid{background:var(--gold);border-color:var(--gold);color:#14110c;}
+.btn--solid:hover{background:var(--cream);border-color:var(--cream);color:#14110c;}
+
+footer{
+  padding:30px 0 40px;font-size:13px;color:var(--muted);
+  border-top:1px solid var(--line);
+}
+.foot-in{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;}
+.foot-in a{border-bottom:1px solid var(--gold-dim);padding-bottom:2px;}
+.foot-in a:hover{color:var(--gold);}
+
+:focus-visible{outline:2px solid var(--gold);outline-offset:3px;}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap head-in">
+    <a href="/" class="logo" aria-label="РублЪ — барбершоп, на главную">
+      <picture>
+        <source srcset="/img/coin-mark.webp" type="image/webp">
+        <img class="logo-mark" src="/img/coin-mark.png" alt="Знак барбершопа РублЪ" width="42" height="42">
+      </picture>
+      <span class="logo-text">РублЪ</span>
+    </a>
+  </div>
+</header>
+
+<div class="milled" aria-hidden="true"></div>
+
+<main>
+  <div class="wrap">
+    <p class="code">ОШИБКА 404</p>
+    <h1>Такой страницы у нас нет</h1>
+    <p>
+      Возможно, адрес набран с опечаткой или страница переехала.
+      Запись работает как обычно — она в YCLIENTS, а не здесь.
+    </p>
+    <div class="actions">
+      <a class="btn btn--solid ms_booking" href="https://n2387007.yclients.com" target="_blank" rel="noopener">Записаться онлайн</a>
+      <a class="btn" href="/">На главную</a>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <div class="wrap foot-in">
+    <span>© 2026 Барбершоп РублЪ · Рублёвское шоссе, 22к2</span>
+    <a href="tel:+74951285777">+7 (495) 128-57-77</a>
+  </div>
+</footer>
+
+</body>
+</html>

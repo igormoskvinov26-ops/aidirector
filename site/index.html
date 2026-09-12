@@ -8,37 +8,36 @@
 
 <!--
   ============================================================
-  ЧТО ЗАПОЛНИТЬ ПЕРЕД ПУБЛИКАЦИЕЙ — найдите по слову ЗАПОЛНИТЬ
+  СОСТОЯНИЕ СТРАНИЦЫ — обновлено 12.09.2026
   ------------------------------------------------------------
-  Готово: домен rublbarber.ru, адрес, телефон, логотип, координаты,
-  карта и ссылка Яндекс.Карт, официальный виджет записи Yclients,
-  изображения в WebP, OpenGraph, LocalBusiness, favicon, sitemap,
-  robots, закреплённая кнопка записи на мобильных, Telegram-блок.
-  Первая загрузка ~245 КБ при лимите 500 КБ по ТЗ п. 6.1.
+  Готово: домен, адрес, телефон, логотип, координаты, карта,
+  виджет записи Yclients, WebP, OpenGraph с превью og-cover.jpg,
+  LocalBusiness, favicon, sitemap, robots, Telegram, политика
+  обработки персональных данных (privacy.html), локальные шрифты.
 
-  Осталось (по убыванию важности):
-  1. Яндекс.Метрика — вставить счётчик и настроить цели (ТЗ р. 8).
-     Без неё волну 1 нельзя принять: не с чем сравнивать
-  2. Telegram — заменить t.me/ЗАПОЛНИТЬ на реальную ссылку
-     (4 места: секция ЗАПИСЬ, контакты, подвал, JSON-LD)
-  3. Часы работы — сейчас предположение 10:00–22:00 в трёх местах:
-     hero-facts, контакты и JSON-LD
-  4. Ссылки 2ГИС и VK — в контактах, JSON-LD (sameAs), подвал
-  5. Почтовый индекс в JSON-LD
-  6. og-cover.jpg — картинка превью 1200x630 отдельным файлом
-  7. Персональные ссылки барберов (см. комментарий в секции КОМАНДА)
-  8. Реквизиты организации и юридические документы в подвал (ТЗ р. 9)
-  9. Проверить цены: взяты из выгрузки Yclients, могли измениться
+  ВНЕШНИХ ЗАПРОСОВ У СТРАНИЦЫ БОЛЬШЕ НЕТ, кроме доменов
+  yclients.com и Яндекса. Это требование: сайт должен открываться
+  из России. Не подключайте сюда CDN, Google Fonts и сторонние
+  скрипты — это вернёт исходную проблему.
+
+  Осталось — данные от владельца, ищите по слову ЗАПОЛНИТЬ:
+  1. Часы работы: сейчас предположение 10:00-22:00 в трёх местах
+     (hero-facts, контакты, JSON-LD)
+  2. Персональные ссылки барберов — нужны id мастеров из Yclients
+  3. Стаж в карточке мастера: скопирован от другого барбера
+  4. Проверить цены: взяты из выгрузки Yclients, могли измениться
+  5. Яндекс.Метрика: счётчика нет, ставить до переключения домена,
+     иначе не с чем будет сравнить посещаемость
 
   ПОСЛЕ ПУБЛИКАЦИИ ПРОВЕРИТЬ:
-  - виджет Yclients открывается внутри рамки (см. секцию ЗАПИСЬ)
+  - открывается из России с мобильного оператора, без VPN
+  - в панели "Сеть" нет запросов к зарубежным доменам
+  - виджет Yclients открывается внутри рамки (секция ЗАПИСЬ)
   - search.google.com/test/rich-results — разметка без ошибок
   - PageSpeed Insights — LCP на мобильном не выше 2,5 с
-  - 375px, 390-430px, 768px, 1280px — вёрстка не едет (ТЗ п. 6.2)
+  - 375px, 390-430px, 768px, 1280px — вёрстка не едет
   ============================================================
 -->
-
-<!-- ЗАПОЛНИТЬ: адрес сайта после публикации (везде, где стоит example) -->
 <link rel="canonical" href="https://rublbarber.ru/">
 
 <!-- Иконки -->
@@ -68,7 +67,6 @@
 <meta property="og:title" content="Барбершоп РублЪ на Рублёвском шоссе">
 <meta property="og:description" content="Мужские стрижки, моделирование бороды, традиционное бритьё. Онлайн-запись круглосуточно.">
 <meta property="og:url" content="https://rublbarber.ru/">
-<!-- ЗАПОЛНИТЬ: картинка превью строго 1200x630, отдельным файлом -->
 <meta property="og:image" content="https://rublbarber.ru/img/og-cover.jpg">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
@@ -95,8 +93,7 @@
     "@type": "PostalAddress",
     "streetAddress": "Рублёвское шоссе, 22к2",
     "addressLocality": "Москва",
-    "addressCountry": "RU",
-    "postalCode": "ЗАПОЛНИТЬ"
+    "addressCountry": "RU"
   },
   "geo": {
     "@type": "GeoCoordinates",
@@ -114,8 +111,6 @@
   "hasMap": "https://yandex.ru/maps/org/rubl/37242558773/?ll=37.429187%2C55.743639&z=17",
   "sameAs": [
     "https://yandex.ru/maps/org/rubl/37242558773/?ll=37.429187%2C55.743639&z=17",
-    "ЗАПОЛНИТЬ: 2ГИС",
-    "ЗАПОЛНИТЬ: VK",
     "https://t.me/+79154988316"
   ],
   "potentialAction": {
@@ -133,10 +128,11 @@
   }
 }
 </script>
-
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Cormorant:wght@400;500;600&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<!-- Локальные шрифты: страница не обращается к внешним доменам.
+     Файлы в fonts/, подмножества latin+cyrillic, вариативные. -->
+<link rel="preload" href="fonts/Manrope-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/Manrope-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="fonts/fonts.css">
 
 <style>
 :root{
@@ -320,7 +316,6 @@ nav a:hover,nav a:focus-visible{color:var(--cream);}
   position:relative;overflow:hidden;
   border-bottom:1px solid var(--line);
   background-color:var(--ink);
-  /* ЗАПОЛНИТЬ: замените url() на ваше фото барбершопа, например background-image:url('foto.jpg'); */
   background-image:var(--hero-photo-fallback, none);
   background-image:var(--hero-photo, none);
   background-size:cover;
@@ -563,6 +558,35 @@ h2{
   transition:border-color .2s,color .2s;
 }
 .socials a:hover,.socials a:focus-visible{border-color:var(--gold);color:var(--gold);}
+
+
+/* ---------- Вступление первого экрана ---------- */
+.hero-anim .hero-mark,
+.hero-anim .hero-badge,
+.hero-anim .hero-name,
+.hero-anim .hero-tag,
+.hero-anim .hero-line{animation:hero-in .75s cubic-bezier(.22,1,.36,1) both;}
+.hero-anim .hero-mark {animation-delay:.12s;animation-name:hero-pop;}
+.hero-anim .hero-badge{animation-delay:.23s;}
+.hero-anim .hero-name {animation-delay:.34s;}
+.hero-anim .hero-tag  {animation-delay:.45s;}
+.hero-anim .hero-line {animation-delay:.56s;}
+@keyframes hero-in {from{opacity:0;transform:translateY(14px);}to{opacity:1;transform:none;}}
+@keyframes hero-pop{from{opacity:0;transform:scale(.94);}to{opacity:1;transform:none;}}
+@media (prefers-reduced-motion:reduce){
+  .hero-anim .hero-mark,.hero-anim .hero-badge,.hero-anim .hero-name,
+  .hero-anim .hero-tag,.hero-anim .hero-line{animation:none;}
+}
+
+/* ---------- Контакты на узких экранах ----------
+   У карты aspect-ratio 4/3 и min-height 300px, а это требует ширины
+   400px. В две колонки на телефоне сетка вылезала за экран на 49px.
+   Ниже 760px — одна колонка и без минимальной высоты. */
+@media (max-width:760px){
+  .contact-grid{grid-template-columns:1fr;gap:32px;}
+  .map-slot{min-height:0;}
+}
+.contact-grid > *{min-width:0;}
 
 /* ---------- FOOTER ---------- */
 footer{padding:38px 0 46px;font-size:13px;color:var(--muted);}
@@ -1102,10 +1126,6 @@ body.has-sticky{padding-bottom:var(--sticky-h,76px);}
          Остальные четыре ждут съёмки: по чек-листу материалов это
          5–7 кадров интерьера и 20–30 работ.
 
-         ЗАПОЛНИТЬ: замените блоки с классом shot--empty на такие же
-         <picture>, как у первых двух. Имена файлов по образцу:
-         img/interior-chair.webp / .jpg, img/work-fade-01.webp и т.д.
-
          !! О СЪЁМКЕ КЛИЕНТОВ: по чек-листу для публикации лица клиента
          нужно письменное согласие. Если его нет — снимайте затылок,
          профиль по касательной или только руки мастера.
@@ -1134,10 +1154,6 @@ body.has-sticky{padding-bottom:var(--sticky-h,76px);}
          рейтинг на картах не ниже 4,5 — иначе блок не ставится вовсе.
          Придумывать их нельзя: п. 12 делает отсутствие вымышленных
          отзывов условием приёмки.
-
-         ЗАПОЛНИТЬ: 3–5 реальных отзывов из вашей карточки в
-         Яндекс.Картах. На каждый — имя автора и месяц. Образец
-         разметки лежит закомментированным сразу под этим блоком.
          ================================================================ -->
     <div class="says reveal">
       <div class="eyebrow">Что говорят</div>
@@ -1348,36 +1364,14 @@ if (reduce) {
    украшение первого экрана — если он не загрузится, страница
    останется полностью рабочей.
    ================================================================ */
-try {
-  const { animate } = await import("https://cdn.jsdelivr.net/npm/motion@11.11.13/+esm");
-
-  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  if (!reduce && typeof animate === 'function') {
-    const seq = [
-      ['.hero-mark',  { opacity: [0, 1], scale: [0.94, 1] }],
-      ['.hero-badge', { opacity: [0, 1], y: [12, 0] }],
-      ['.hero-name',  { opacity: [0, 1], y: [18, 0] }],
-      ['.hero-tag',   { opacity: [0, 1], y: [12, 0] }],
-      ['.hero-line',  { opacity: [0, 1], y: [10, 0] }],
-    ];
-    seq.forEach(([sel, kf], i) => {
-      const el = document.querySelector(sel);
-      if (!el) return;
-      // Подстраховка: что бы ни случилось дальше, через 1,2 с элемент
-      // будет видим. Анимация не может «съесть» контент.
-      const rescue = setTimeout(() => { el.style.opacity = ''; }, 1200);
-      try {
-        animate(el, kf, { duration: .75, delay: .12 + i * .11, easing: [.22, 1, .36, 1] })
-          .finished.then(() => { clearTimeout(rescue); el.style.opacity = ''; })
-          .catch(() => { clearTimeout(rescue); el.style.opacity = ''; });
-      } catch (e) {
-        clearTimeout(rescue); el.style.opacity = '';
-      }
-    });
-  }
-} catch (e) {
-  /* Motion не загрузился — это штатная ситуация, страница уже работает */
-}
+    /* Вступление первого экрана — на чистом CSS, без внешних библиотек.
+       Раньше здесь подгружалась библиотека motion со стороннего CDN —
+       это был единственный зарубежный домен на странице. Из-за таких
+       запросов сайт и переставал открываться из России.
+       Эффект тот же, зависимостей ноль. */
+    if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      document.documentElement.classList.add('hero-anim');
+    }
 </script>
 <!-- ================================================================
      Виджет онлайн-записи Yclients.

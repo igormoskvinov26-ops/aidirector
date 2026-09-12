@@ -11,13 +11,11 @@
 <link rel="icon" href="img/favicon-16.png" sizes="16x16">
 <link rel="apple-touch-icon" href="img/apple-touch-icon.png">
 
-<!-- ВНИМАНИЕ: тот же внешний источник шрифтов, что и в index.html.
-     При переносе шрифтов на свой домен (пункт B-2 задания) эту строку
-     нужно заменить на локальный @font-face ОДНОВРЕМЕННО в обоих файлах,
-     иначе страницы разъедутся по типографике. -->
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Cormorant:wght@400;500;600&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<!-- Локальные шрифты: страница не обращается к внешним доменам.
+     Файлы в fonts/, подмножества latin+cyrillic, вариативные. -->
+<link rel="preload" href="fonts/Manrope-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/Manrope-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="fonts/fonts.css">
 
 <style>
 :root{
@@ -388,7 +386,7 @@ footer{padding:38px 0 46px;font-size:13px;color:var(--muted);border-top:1px soli
       </ul>
 
       <p>9.2. Для реализации своих прав субъект направляет Оператору запрос в письменной форме
-      по адресу: 121609, г. Москва, Рублёвское шоссе, д. 22, корп. 2, барбершоп «РублЪ». Запрос
+      по адресу: г. Москва, Рублёвское шоссе, д. 22, корп. 2, барбершоп «РублЪ». Запрос
       может быть передан лично в салоне. По вопросам, не требующим письменного запроса, можно
       обратиться по телефону <a href="tel:+74951285777">+7 (495) 128-57-77</a>. Запрос должен
       содержать сведения, предусмотренные частью 3 статьи 14 Закона № 152-ФЗ, в том числе номер
@@ -435,7 +433,7 @@ footer{padding:38px 0 46px;font-size:13px;color:var(--muted);border-top:1px soli
         <dt>ИНН</dt>
         <dd>350703733403</dd>
         <dt>Адрес для направления обращений</dt>
-        <dd>121609, г. Москва, Рублёвское шоссе, д. 22, корп. 2</dd>
+        <dd>г. Москва, Рублёвское шоссе, д. 22, корп. 2</dd>
         <dt>Телефон</dt>
         <dd><a href="tel:+74951285777">+7 (495) 128-57-77</a></dd>
       </dl>
