@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+
+# Домен подставлен: rublbarber.ru
+Sitemap: https://rublbarber.ru/sitemap.xml
