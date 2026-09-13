@@ -32,19 +32,33 @@ deploy.sh       выкладка в Object Storage
 
 ```bash
 pip install s3cmd
-s3cmd --configure
+read -s -p "Key ID: " YC_KEY_ID && echo
+read -s -p "Secret: " YC_SECRET && echo
+export YC_KEY_ID YC_SECRET
+./setup-s3cfg.sh
 ```
 
-В настройке указать:
+`setup-s3cfg.sh` пишет `~/.s3cfg` с правами 600 и сразу проверяет доступ.
+Ключи идут через переменные окружения и не попадают в историю команд.
+Ключ берётся в консоли: Сервисные аккаунты → аккаунт → Создать новый ключ →
+Создать статический ключ доступа. Аккаунту достаточно роли `storage.editor`.
+
+Если настраиваете вручную через `s3cmd --configure`, обратите внимание на
+одну строку — на ней всё ломается:
 
 | Параметр | Значение |
 |---|---|
 | Access Key / Secret Key | статический ключ сервисного аккаунта Yandex Cloud |
 | Region | `ru-central1` |
 | S3 Endpoint | `storage.yandexcloud.net` |
-| DNS-style template | `%(bucket)s.storage.yandexcloud.net` |
+| DNS-style template | `storage.yandexcloud.net` — **не** `%(bucket)s.storage.yandexcloud.net` |
 
-Сервисному аккаунту достаточно роли `storage.editor` на нужный бакет.
+Привычный для S3 шаблон `%(bucket)s.storage.yandexcloud.net` даёт адрес
+`rublbarber.ru.storage.yandexcloud.net`. В имени бакета есть точка, поэтому
+такое имя не покрывается сертификатом `*.storage.yandexcloud.net` и
+соединение рвётся на проверке сертификата. Нужна адресация через путь:
+`storage.yandexcloud.net/rublbarber.ru/...`. Проверено — с шаблоном
+`%(bucket)s` соединение не устанавливается вообще.
 
 Дальше:
 
