@@ -4,7 +4,7 @@ import calendar
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
-from decimal import Decimal
+from decimal import ROUND_CEILING, Decimal
 
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -64,7 +64,8 @@ class Costs:
 # смену. Коммуналка 15 000 и уборка 15 000, налоги 6 000.
 # Сменный администратор выходит 15-16 раз в месяц, остальные смены закрывает
 # управляющий, поэтому его оплата берётся за месяц, а не за каждый день.
-# Итого 296 000 плюс 4 000 x 15,5 = 358 000 в месяц.
+# Прочие и бизнес-расходы взяты средним за два месяца отчёта — 45 149.
+# Итого 296 000 плюс 4 000 x 15,5 плюс 45 149 = 403 149 в месяц.
 # Ставка мастера 40% и гарант 4 000 за смену названы владельцем. По кассовому
 # отчёту они не выводятся: выплаты смещены на месяц относительно выручки.
 # Ставка мастера 40% с услуг и 10% с косметики, гарант 4 000 за смену у всех —
@@ -72,7 +73,8 @@ class Costs:
 # они одинаковы, но заданы пофамильно, и расчёт выдержит, если разойдутся.
 DEFAULT_COSTS = Costs(
     fixed_daily=(
-        (Decimal("296000") + Decimal("4000") * Decimal("15.5")) / Decimal("30.4")
+        (Decimal("296000") + Decimal("4000") * Decimal("15.5") + Decimal("45149"))
+        / Decimal("30.4")
     ).quantize(Decimal("0.01")),
     variable_pct=Decimal("0.035"),
     master_commission_pct=Decimal("0.40"),
@@ -564,6 +566,30 @@ async def set_cost_settings(session: AsyncSession, values: dict) -> dict:
     return await get_cost_settings(session)
 
 
+def ceil_thousand(value: Decimal) -> Decimal:
+    """Округление вверх до тысяч.
+
+    Пороги показываются круглыми: сотни рублей ничего не решают, а «21 000»
+    запоминается и проверяется в уме, чего не скажешь про «20 843». Вверх, а
+    не к ближайшему, — чтобы округление не опустило планку ниже настоящей.
+    """
+    return (value / 1000).to_integral_value(rounding=ROUND_CEILING) * 1000
+
+
+def revenue_zone(services: Decimal, low: Decimal, high: Decimal) -> str:
+    """В какую из трёх зон попал день.
+
+    red    — ниже порога при любом распределении выручки, день убыточен;
+    amber  — между порогами, исход зависит от того, как легла выручка;
+    green  — выше верхнего порога, день прибыльный при любом раскладе.
+    """
+    if services < low:
+        return "red"
+    if services < high:
+        return "amber"
+    return "green"
+
+
 async def _today_by_master(session: AsyncSession, day: date) -> list[dict]:
     """Кто сколько сделал за день — поимённо.
 
@@ -714,6 +740,15 @@ async def get_plan_fact(session: AsyncSession) -> dict:
         today_products,
     )
 
+    # Границы зон для сегодняшнего состава смены. Округляются вверх до тысяч
+    # и в таком виде участвуют в раскраске: иначе выручка 20 900 при
+    # показанном пороге 21 000 подсветилась бы как достаточная.
+    on_shift = len(today_masters) or 1
+    zone_low = ceil_thousand(_break_even_revenue(on_shift, costs))
+    zone_high = ceil_thousand(
+        _break_even_for_split([Decimal("1")] + [Decimal("0")] * (on_shift - 1), costs)
+    )
+
     rows = []
     for masters in (1, 2, 3):
         fact = fact_by_masters.get(masters)
@@ -733,8 +768,9 @@ async def get_plan_fact(session: AsyncSession) -> dict:
         )
         rows.append({
             "masters": masters,
-            "break_even_daily": float(break_even),
-            "break_even_worst": float(break_even_worst),
+            "break_even_daily": float(ceil_thousand(break_even)),
+            "break_even_worst": float(ceil_thousand(break_even_worst)),
+            "break_even_exact": float(break_even),
             "plan_daily_required": float(required),
             "plan_per_master": float(
                 (required / masters).quantize(Decimal("0.01"))
@@ -778,10 +814,14 @@ async def get_plan_fact(session: AsyncSession) -> dict:
             "fixed": float(costs.fixed_daily),
             "variable": float(today_margin["costs"]["variable"]),
             "margin": float(today_margin["margin_rub"]),
-            "break_even": float(today_break_even),
+            "break_even": float(ceil_thousand(today_break_even)),
             "to_break_even": float(
-                max(today_break_even - today_services, Decimal("0"))
+                max(ceil_thousand(today_break_even) - today_services, Decimal("0"))
             ),
+            "zone_low": float(zone_low),
+            "zone_high": float(zone_high),
+            "zone": revenue_zone(today_services, zone_low, zone_high),
+            "services": float(today_services),
         },
         "fact": {
             "earned_total": float(earned),

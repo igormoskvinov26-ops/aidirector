@@ -8,7 +8,15 @@
 
 from decimal import Decimal
 
-from app.services.finance import Costs, _break_even_for_split, payout_by_master
+import pytest
+
+from app.services.finance import (
+    Costs,
+    _break_even_for_split,
+    ceil_thousand,
+    payout_by_master,
+    revenue_zone,
+)
 
 COSTS = Costs(
     fixed_daily=Decimal("15000"),
@@ -69,3 +77,64 @@ def test_cosmetics_lower_the_threshold():
 def test_empty_day_does_not_divide_by_zero():
     """День без выручки — не повод падать: планка считается как при равной загрузке."""
     assert _break_even_for_split([Decimal("0"), Decimal("0")], COSTS) > 0
+
+
+# ── Округление порогов и три зоны ───────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("20843", "21000"),
+        ("27923", "28000"),
+        ("21000", "21000"),  # ровная тысяча остаётся собой
+        ("20001", "21000"),
+        ("0", "0"),
+    ],
+)
+def test_ceil_thousand(value, expected):
+    """Только вверх: округление вниз опустило бы планку ниже настоящей."""
+    assert ceil_thousand(Decimal(value)) == Decimal(expected)
+
+
+@pytest.mark.parametrize(
+    "revenue,zone",
+    [
+        ("0", "red"),
+        ("20999", "red"),
+        ("21000", "amber"),
+        ("24000", "amber"),
+        ("27999", "amber"),
+        ("28000", "green"),
+        ("50000", "green"),
+    ],
+)
+def test_revenue_zone(revenue, zone):
+    """Границы включаются в верхнюю зону: ровно 21 000 — уже не красный."""
+    assert revenue_zone(Decimal(revenue), Decimal("21000"), Decimal("28000")) == zone
+
+
+def test_shown_boundary_is_never_softer_than_the_real_one():
+    """Показанная граница не должна быть мягче настоящей.
+
+    Округление вверх означает, что при выручке между настоящим порогом и
+    круглым числом день ещё считается красным. Это осторожно и правильно:
+    лучше лишний раз не обрадовать. Расходы здесь нарочно такие, чтобы порог
+    не попал на ровную тысячу, — иначе проверять нечего.
+    """
+    uneven = Costs(
+        fixed_daily=Decimal("11776.32"),
+        variable_pct=Decimal("0.035"),
+        master_commission_pct=Decimal("0.40"),
+        product_commission_pct=Decimal("0.10"),
+        guarantees=(Decimal("4000"), Decimal("4000")),
+    )
+    exact = _break_even_for_split([Decimal("1"), Decimal("1")], uneven)
+    shown = ceil_thousand(exact)
+    assert shown > exact, "порог должен быть не круглым, иначе тест бессмыслен"
+
+    # Выручка выше настоящего порога, но ниже показанного — всё ещё красная.
+    between = (exact + shown) / 2
+    assert revenue_zone(between, shown, shown * 2) == "red"
+    # А ровно на показанной границе — уже нет.
+    assert revenue_zone(shown, shown, shown * 2) == "amber"
