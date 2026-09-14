@@ -84,11 +84,20 @@ class YClientsClient:
     async def _get_paginated(
         self, path: str, params: dict | None = None, page_size: int = 200
     ) -> list[dict[str, Any]]:
+        """Выгрузить все страницы ответа.
+
+        Страница считается последней, только если она пустая. Прежняя версия
+        останавливалась ещё и когда строк пришло меньше, чем просили, — а
+        /transactions/ отдаёт по 50, сколько ни проси, и total_count не
+        присылает. Из-за этого выгрузка обрывалась на первой странице: за
+        август приходило 40 визитов из примерно 370, и молча — без ошибки.
+        """
         all_data: list[dict[str, Any]] = []
         page = 1
         query = (params or {}).copy()
         query["page_size"] = page_size
         max_pages = 200
+        предыдущая_метка: object = None
 
         while page <= max_pages:
             query["page"] = page
@@ -105,14 +114,20 @@ class YClientsClient:
             if not data:
                 break
 
+            # Если адрес не понимает параметр page, он будет отдавать одну и ту
+            # же страницу до упора в max_pages и раздует ответ повторами.
+            метка = data[0].get("id") if isinstance(data[0], dict) else None
+            if метка is not None and метка == предыдущая_метка:
+                logger.warning(f"{path}: страница {page} повторяет предыдущую, выгрузка прервана")
+                break
+            предыдущая_метка = метка
+
             all_data.extend(data)
 
             meta = result.get("meta") if isinstance(result, dict) else None
             total = meta.get("total_count", 0) if isinstance(meta, dict) else 0
 
             if total > 0 and len(all_data) >= total:
-                break
-            if total == 0 and len(data) < page_size:
                 break
 
             await asyncio.sleep(RATE_LIMIT_DELAY)
