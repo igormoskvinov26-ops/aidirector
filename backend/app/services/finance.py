@@ -393,6 +393,24 @@ async def get_daily_finance(
     """
     costs = await get_costs(session, date_from)
     breakdown = await _daily_master_breakdown(session, date_from, date_to)
+
+    # Границы зон зависят только от числа мастеров, а оно повторяется изо дня
+    # в день. Считаем по одному разу на состав смены, а не на каждый день:
+    # подбор границы стоит полсотни итераций.
+    zone_cache: dict[int, tuple[Decimal, Decimal]] = {}
+
+    def zone_bounds(masters: int) -> tuple[Decimal, Decimal]:
+        masters = max(masters, 1)
+        if masters not in zone_cache:
+            zone_cache[masters] = (
+                ceil_thousand(_break_even_revenue(masters, costs)),
+                ceil_thousand(
+                    _break_even_for_split(
+                        [Decimal("1")] + [Decimal("0")] * (masters - 1), costs
+                    )
+                ),
+            )
+        return zone_cache[masters]
     plan = await get_current_month_plan(session)
     profit_target = Decimal(str(plan["profit_target"]))
     daily_profit = Decimal("0")
@@ -457,6 +475,7 @@ async def get_daily_finance(
         margin = _compute_margin(
             completed, products, num_masters, costs, breakdown.get(day_str)
         )
+        low, high = zone_bounds(num_masters)
 
         result.append({
             "date": day_str,
@@ -475,6 +494,11 @@ async def get_daily_finance(
             "revenue_for_plan": float(
                 _revenue_for_profit(num_masters, daily_profit, costs)
             ) if daily_profit > 0 else 0.0,
+            "zone_low": float(low),
+            "zone_high": float(high),
+            # Зона только для дней, в которые что-то заработано: у будущих
+            # записей раскрашивать нечего, они ещё не состоялись.
+            "zone": revenue_zone(completed, low, high) if completed > 0 else None,
             "costs": {k: float(v) for k, v in margin["costs"].items()},
         })
 
@@ -501,6 +525,9 @@ async def get_daily_finance(
                 "revenue_for_plan": float(
                     _revenue_for_profit(1, daily_profit, costs)
                 ) if daily_profit > 0 else 0.0,
+                "zone_low": float(zone_bounds(1)[0]),
+                "zone_high": float(zone_bounds(1)[1]),
+                "zone": None,
                 "costs": {"fixed": 0, "variable": 0, "master_commission": 0, "total": 0},
             })
         current += timedelta(days=1)

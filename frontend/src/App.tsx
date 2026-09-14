@@ -41,6 +41,12 @@ interface DailyFinancePoint {
   break_even: number;
   /** Выручка, нужная в этот день для выполнения плана по прибыли. */
   revenue_for_plan: number;
+  /** Границы зон для состава смены этого дня, округлены вверх до тысяч. */
+  zone_low: number;
+  zone_high: number;
+  /** red — минус при любом раскладе, amber — решает распределение,
+   *  green — плюс при любом. null у дней без выручки. */
+  zone: "red" | "amber" | "green" | null;
   costs: { fixed: number; variable: number; master_commission: number; total: number };
 }
 
@@ -298,9 +304,6 @@ function PlanFactPage() {
     });
   }, [hourly]);
 
-  // Порог «сделал план» для подписи над столбцом: выручка сегодняшнего дня,
-  // нужная при текущем составе смены.
-  const dailyPlanRequired = summary?.rows.find((r) => r.is_today)?.plan_daily_required ?? 0;
 
   const dailyCumulative = useMemo(() => {
     let cumServices = 0;
@@ -767,6 +770,12 @@ function PlanFactPage() {
             <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-emerald-500" /> Товары</span>
             <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm border border-rubl-accent/30 bg-rubl-accent/25" /> Запланировано</span>
             <span className="flex items-center gap-1.5"><span className="w-0.5 h-4 bg-red-500 rounded-full" /> Мин. марж. (накоп.)</span>
+            <span className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-red-500" />
+              <span className="w-2 h-2 rounded-full bg-yellow-500" />
+              <span className="w-2 h-2 rounded-full bg-emerald-500" />
+              день: убыток · спорно · прибыль
+            </span>
             {plan.profit_target > 0 && <span className="flex items-center gap-1.5"><span className="w-0.5 h-4 bg-emerald-400 rounded-full" /> Выручка под план (накоп.)</span>}
           </div>
         </div>
@@ -790,9 +799,16 @@ function PlanFactPage() {
               const entry = dailyCumulative[index];
               const delta = entry?.delta || 0;
               if (delta <= 0) return null;
-              let color = "#ef4444";
-              if (delta >= dailyPlanRequired) color = "#22c55e";
-              else if (delta >= breakEvenDaily) color = "#0891b2";
+              // Три зоны: красная — день убыточен при любом распределении
+              // выручки между мастерами, жёлтая — исход зависит от него,
+              // зелёная — прибыль при любом. Границы считает сервер: они
+              // зависят от того, сколько человек было на смене.
+              const color =
+                entry.zone === "green"
+                  ? "#22c55e"
+                  : entry.zone === "amber"
+                    ? "#eab308"
+                    : "#ef4444";
               return (
                 <g>
                   <text x={x + width / 2} y={y - 6} fill="#000" fontSize={11} fontWeight={700} textAnchor="middle" stroke="#000" strokeWidth={3} paintOrder="stroke">{FMT_RUB(delta)}</text>
