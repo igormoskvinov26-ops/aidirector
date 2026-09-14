@@ -1274,7 +1274,7 @@ export default function App() {
               {page === "planfact" && <PlanFactPage />}
               {page === "bookings" && <BookingsPage />}
               {page === "payroll" && <BarberMonthPage payroll />}
-              {page === "clients" && <ClientBasePage />}
+              {page === "clients" && <ClientBasePage role={role} />}
             </>
           )}
         </div>

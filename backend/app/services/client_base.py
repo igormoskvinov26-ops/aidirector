@@ -25,6 +25,7 @@ from app.models.models import (
     Visit,
     VisitService,
 )
+from app.services import call_journal
 
 MOSCOW = ZoneInfo("Europe/Moscow")
 
@@ -478,12 +479,18 @@ async def record_outcome(
     if task is None:
         return {"ok": False, "error": "task not found"}
     task.status = "done"
-    session.add(ContactAttempt(
+    attempt = ContactAttempt(
         task_id=task_id,
         outcome=outcome,
         channel=channel,
         comment=comment,
         actor_id=actor_id,
-    ))
+    )
+    session.add(attempt)
+    when = datetime.now(MOSCOW)
     await session.commit()
+
+    # Результат уже сохранён. Журнал пишем после коммита и отдельно: файл на
+    # диске — вещь ненадёжная, а звонок терять нельзя.
+    await call_journal.append_attempt(session, task_id, attempt, when=when)
     return {"ok": True, "task_id": task_id}

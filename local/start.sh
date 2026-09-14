@@ -43,6 +43,11 @@ if grep -qE '^[A-Z_]+=<' "$ROOT/.env"; then
 fi
 echo "  ✓ Настройки заполнены"
 
+# Папка для журнала обзвона. Её нужно создать до запуска: иначе Docker
+# создаст её сам от root, и приложение внутри контейнера писать не сможет.
+mkdir -p "$ROOT/output"
+echo "  ✓ папка для журнала обзвона готова"
+
 echo ""
 echo "── Запуск ────────────────────────────────────────"
 docker compose --env-file "$ROOT/.env" up -d --build
@@ -70,6 +75,12 @@ if [ -z "$READY" ]; then
     docker compose --env-file "$ROOT/.env" logs --tail 20 director | sed 's/^/      /'
     exit 1
 fi
+
+# На Linux смонтированная папка принадлежит хозяину компьютера, а приложение
+# работает под своим пользователем. Без этой строки журнал обзвона не пишется.
+# На Windows и macOS Docker решает это сам, и команда просто ничего не меняет.
+docker compose --env-file "$ROOT/.env" exec -T -u root director \
+    chown -R rubl /app/output >/dev/null 2>&1 || true
 
 if ! docker compose --env-file "$ROOT/.env" exec -T director alembic upgrade head; then
     echo "  ✗ Не удалось обновить структуру базы. Директор запущен не будет."

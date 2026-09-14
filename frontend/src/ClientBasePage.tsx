@@ -24,6 +24,9 @@ import {
   Activity,
   ArrowRight,
   ChevronLeft,
+  FileSpreadsheet,
+  Upload,
+  Download,
 } from "lucide-react";
 
 // ── Types ──
@@ -118,7 +121,7 @@ const GROUP_LABELS: Record<string, string> = {
   lost: "Потерянные",
 };
 
-export default function ClientBasePage() {
+export default function ClientBasePage({ role }: { role: "owner" | "operator" | "master" }) {
   const [mode, setMode] = useState<"manager" | "admin">("manager");
 
   return (
@@ -144,7 +147,7 @@ export default function ClientBasePage() {
         </div>
       </div>
 
-      {mode === "manager" ? <ManagerView /> : <AdminView />}
+      {mode === "manager" ? <ManagerView /> : <AdminView role={role} />}
     </div>
   );
 }
@@ -396,11 +399,12 @@ function FlowRow({ label, value, positive }: { label: string; value: string; pos
   );
 }
 
-function AdminView() {
+function AdminView({ role }: { role: "owner" | "operator" | "master" }) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<string>("all");
   const [busy, setBusy] = useState<number | null>(null);
+  const [journalKey, setJournalKey] = useState(0);
 
   const fetchTasks = async () => {
     setLoading(true);
@@ -426,6 +430,7 @@ function AdminView() {
         body: JSON.stringify({ outcome, channel, actor_id: "admin" }),
       });
       setTasks((prev) => prev.filter((t) => t.id !== id));
+      setJournalKey((k) => k + 1);
     } catch {}
     setBusy(null);
   };
@@ -462,6 +467,8 @@ function AdminView() {
         <ClipboardList size={16} />
         <span>{filtered.length} клиентов требуют действия</span>
       </div>
+
+      <CallJournal role={role} refreshKey={journalKey} />
 
       {filtered.length === 0 ? (
         <div className="bg-gray-50 dark:bg-zinc-900/60 border border-gray-200 dark:border-zinc-800 rounded-2xl p-10 text-center text-gray-500 dark:text-zinc-500">
@@ -575,4 +582,121 @@ function plural(n: number): string {
   if (mod10 === 1 && mod100 !== 11) return "";
   if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return "а";
   return "ов";
+}
+
+
+// ── Журнал обзвона ──
+//
+// Результаты звонков лежат в базе, но база — внутри контейнера, и человеку её
+// не открыть. Журнал — обычный файл: его видно, можно посчитать в Excel и
+// перенести в новую установку.
+
+interface JournalStatus {
+  exists: boolean;
+  rows: number;
+  path: string;
+}
+
+function CallJournal({
+  role,
+  refreshKey,
+}: {
+  role: "owner" | "operator" | "master";
+  refreshKey: number;
+}) {
+  const [status, setStatus] = useState<JournalStatus | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+
+  const load = async () => {
+    try {
+      const r = await fetch("/api/client-base/journal/status");
+      setStatus(await r.json());
+    } catch {
+      setStatus(null);
+    }
+  };
+
+  useEffect(() => {
+    load();
+  }, [refreshKey]);
+
+  const importJournal = async (file: File) => {
+    setUploading(true);
+    setMessage(null);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const r = await fetch("/api/client-base/journal/import", { method: "POST", body: form });
+      const body = await r.json();
+      if (!r.ok) {
+        setMessage(body.detail || "Не удалось загрузить журнал");
+      } else {
+        setMessage(
+          `Добавлено строк: ${body["добавлено"]}, пропущено повторов: ${body["пропущено_дублей"]}`,
+        );
+        await load();
+      }
+    } catch {
+      setMessage("Не удалось загрузить журнал");
+    }
+    setUploading(false);
+  };
+
+  return (
+    <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-5">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <FileSpreadsheet size={18} className="text-emerald-500" />
+          <div>
+            <p className="text-sm font-medium text-gray-800 dark:text-zinc-200">Журнал обзвона</p>
+            <p className="text-xs text-gray-500 dark:text-zinc-500">
+              {status?.exists
+                ? `${status.rows} записей. Файл лежит в папке output рядом с проектом.`
+                : "Пока пуст — появится после первого отмеченного звонка."}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {status?.exists && (
+            <a
+              href="/api/client-base/journal"
+              className="flex items-center gap-2 text-xs text-gray-600 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-white px-3 py-2 rounded-lg border border-gray-200 dark:border-zinc-800 hover:border-rubl-accent transition-all"
+            >
+              <Download size={14} />
+              Скачать Excel
+            </a>
+          )}
+          {role === "owner" && (
+            <label
+              className={`flex items-center gap-2 text-xs px-3 py-2 rounded-lg border border-gray-200 dark:border-zinc-800 transition-all ${
+                uploading
+                  ? "text-gray-400 dark:text-zinc-600"
+                  : "cursor-pointer text-gray-600 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-white hover:border-rubl-accent"
+              }`}
+            >
+              <Upload size={14} />
+              {uploading ? "Загружаю…" : "Загрузить журнал"}
+              <input
+                type="file"
+                accept=".xlsx"
+                className="hidden"
+                disabled={uploading}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = "";
+                  if (file) importJournal(file);
+                }}
+              />
+            </label>
+          )}
+        </div>
+      </div>
+
+      {message && (
+        <p className="mt-3 text-xs text-gray-600 dark:text-zinc-400">{message}</p>
+      )}
+    </div>
+  );
 }
