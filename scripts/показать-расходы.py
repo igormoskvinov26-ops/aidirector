@@ -28,6 +28,8 @@ from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 
+import httpx
+
 # В контейнере приложение лежит в /app и путь уже верный. Снаружи скрипт
 # лежит в scripts/, и backend нужно добавить руками. При запуске через
 # стандартный ввод __file__ отсутствует — поэтому через try.
@@ -185,19 +187,80 @@ def разобрать(заголовок: str, строки: list[dict]) -> Non
             print(f"    ✗ «{ожидаемая}» — не нашлось")
 
 
+# В коде живут два написания адреса транзакций, и какое из них настоящее —
+# выясняется здесь, а не гаданием. Имена параметров дат у разных адресов тоже
+# расходятся, поэтому перебираются оба.
+АДРЕСА = (
+    "/transactions/{id}",
+    "/storages/transactions/{id}",
+    "/company/{id}/transactions",
+)
+ПАРАМЕТРЫ = ("start_date/end_date", "date_from/date_to")
+
+
+def _даты(вид: str, начало: date, конец: date) -> dict:
+    если_первый = вид.startswith("start")
+    return {
+        ("start_date" if если_первый else "date_from"): начало.isoformat(),
+        ("end_date" if если_первый else "date_to"): конец.isoformat(),
+    }
+
+
+async def проверить_доступ(client) -> None:
+    """Видит ли ключ этот филиал вообще.
+
+    Без этого 404 читается двусмысленно: то ли адрес не тот, то ли у ключа нет
+    прав на филиал. Разница решающая — во втором случае не заработает и сам
+    Директор, а не только этот скрипт.
+    """
+    print("\n" + "=" * 70)
+    print("ДОСТУП: какие филиалы видит ключ")
+    print("=" * 70)
+    try:
+        ответ = await client._get("/companies", params={"my": 1})
+    except Exception as e:
+        print(f"  спросить не удалось: {e}")
+        return
+
+    филиалы = ответ.get("data") or []
+    if not филиалы:
+        print("  Ключ не видит НИ ОДНОГО филиала.")
+        print("  Значит дело в пользовательском токене, а не в адресах ниже.")
+        print("  С таким токеном не заработает и сам Директор: он ходит теми же")
+        print("  ключами. Возьмите рабочую тройку из .env установки на сервере.")
+        return
+
+    print(f"  доступно филиалов: {len(филиалы)}")
+    for филиал in филиалы:
+        отметка = "  <-- указан в .env" if филиал.get("id") == client.company_id else ""
+        print(f"    {филиал.get('id')}  {филиал.get('title') or ''}{отметка}")
+
+    if not any(ф.get("id") == client.company_id for ф in филиалы):
+        print(f"\n  Филиала {client.company_id} среди них нет — впишите в .env один")
+        print("  из перечисленных выше, иначе все запросы ниже отвечают 404.")
+
+
 async def выгрузить(client, начало: date, конец: date) -> list[dict]:
-    # Имена параметров у этого адреса отличаются от /records/, поэтому
-    # пробуем оба написания: какое сработает, то и пойдёт в разбор.
-    for параметры in (
-        {"start_date": начало.isoformat(), "end_date": конец.isoformat()},
-        {"date_from": начало.isoformat(), "date_to": конец.isoformat()},
-    ):
-        строки = await client._get_paginated(
-            f"/transactions/{client.company_id}", params=параметры
-        )
-        if строки:
-            print(f"  сработали параметры: {', '.join(параметры)}")
-            return строки
+    """Перебрать адреса и наборы параметров, показав, что ответил каждый."""
+    for шаблон in АДРЕСА:
+        путь = шаблон.format(id=client.company_id)
+        for вид in ПАРАМЕТРЫ:
+            try:
+                строки = await client._get_paginated(путь, params=_даты(вид, начало, конец))
+            except httpx.HTTPStatusError as e:
+                print(f"  {путь}  ({вид}): код {e.response.status_code}")
+                # Код одинаков для обоих наборов параметров, если адреса нет.
+                if e.response.status_code == 404:
+                    break
+                continue
+            except Exception as e:
+                print(f"  {путь}  ({вид}): {type(e).__name__}")
+                continue
+
+            if строки:
+                print(f"  {путь}  ({вид}): записей {len(строки)}  <-- рабочий")
+                return строки
+            print(f"  {путь}  ({вид}): пусто")
     return []
 
 
@@ -206,6 +269,8 @@ async def main() -> None:
         print(f"Компания: {client.company_id}")
         print(f"Прошлый месяц: {ПРОШЛЫЙ_НАЧАЛО} — {ПРОШЛЫЙ_КОНЕЦ}")
         print(f"Текущий месяц: {TODAY.replace(day=1)} — {TODAY}")
+
+        await проверить_доступ(client)
 
         try:
             отчёт = await client.get_financial_report(
