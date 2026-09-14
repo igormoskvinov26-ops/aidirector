@@ -31,7 +31,24 @@ branch_labels = None
 depends_on = None
 
 
+def _has_table(name: str) -> bool:
+    return name in sa.inspect(op.get_bind()).get_table_names()
+
+
+def _has_column(table: str, column: str) -> bool:
+    return column in {c["name"] for c in sa.inspect(op.get_bind()).get_columns(table)}
+
+
 def upgrade() -> None:
+    # Первая миграция создаёт схему прямо из моделей, то есть на чистой базе
+    # эта таблица уже появится вместе с ней. На базе, заведённой раньше, —
+    # нет. Поэтому обе ветки проверяются, а не предполагаются: без этого
+    # установка с нуля падала на «таблица уже существует».
+    if _has_table("cost_model"):
+        _seed_defaults()
+        _rename_plan_column()
+        return
+
     table = op.create_table(
         "cost_model",
         sa.Column("id", sa.Integer(), primary_key=True),
@@ -75,11 +92,42 @@ def upgrade() -> None:
     }])
 
 
-    # План на месяц теперь задаётся по прибыли: выручка при разном составе
-    # смены даёт разную прибыль, поэтому целью служит именно прибыль.
-    op.alter_column("plan_targets", "revenue_target", new_column_name="profit_target")
+    _rename_plan_column()
+
+
+def _seed_defaults() -> None:
+    """Заполнить настройки, если строки ещё нет.
+
+    Таблица могла появиться вместе со схемой, но пустой. Нули в ней опаснее
+    отсутствия: порог безубыточности обнулится, и любой день покажется
+    прибыльным.
+    """
+    bind = op.get_bind()
+    existing = bind.execute(sa.text("SELECT COUNT(*) FROM cost_model")).scalar()
+    if existing:
+        return
+    bind.execute(sa.text(
+        "INSERT INTO cost_model ("
+        "id, rent_monthly, utilities_monthly, manager_monthly, cleaning_monthly,"
+        " taxes_monthly, other_fixed_monthly, admin_per_shift,"
+        " admin_shifts_per_month, materials_pct, acquiring_pct,"
+        " master_commission_pct, product_commission_pct) VALUES ("
+        "1, 170000, 15000, 90000, 15000, 6000, 45149, 4000, 15.5, 3.5, 0, 40, 10)"
+    ))
+
+
+def _rename_plan_column() -> None:
+    """План на месяц задаётся по прибыли, а не по выручке.
+
+    На чистой базе колонка уже называется правильно — она создана из моделей.
+    Переименовывать её второй раз нельзя, поэтому имя проверяется.
+    """
+    if _has_column("plan_targets", "revenue_target"):
+        op.alter_column("plan_targets", "revenue_target", new_column_name="profit_target")
 
 
 def downgrade() -> None:
-    op.alter_column("plan_targets", "profit_target", new_column_name="revenue_target")
-    op.drop_table("cost_model")
+    if _has_column("plan_targets", "profit_target"):
+        op.alter_column("plan_targets", "profit_target", new_column_name="revenue_target")
+    if _has_table("cost_model"):
+        op.drop_table("cost_model")

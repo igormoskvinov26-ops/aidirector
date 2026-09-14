@@ -1,0 +1,51 @@
+# Директор на обычном компьютере. Ни сервера, ни домена: база и приложение
+# живут в двух контейнерах, данные — в томе Docker, чтобы переживать
+# перезапуск компьютера.
+#
+# Запускать через local/start.sh: он передаёт compose путь к ../.env. Без
+# этого подстановка ${...} ниже не найдёт значений — env_file отдаёт
+# переменные внутрь контейнера, но не в сам этот файл.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: rubl_db
+    env_file:
+      - ../.env
+    healthcheck:
+      # Двойной доллар — чтобы подстановку сделал контейнер, а не compose.
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - rubl_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  director:
+    build:
+      context: ..
+      dockerfile: local/Dockerfile
+    container_name: rubl_director
+    env_file:
+      - ../.env
+    environment:
+      POSTGRES_HOST: postgres
+      # Внутри образа приложение лежит в /app. Без этих двух строк оно
+      # отсчитывает пути на три уровня вверх от своего файла настроек и
+      # упирается в корень файловой системы, куда писать не может.
+      OUTPUT_DIR: /app/output
+      FONTS_DIR: /app/assets/fonts
+    ports:
+      # BIND_HOST=127.0.0.1 — Директор открывается только на этом компьютере.
+      # BIND_HOST=0.0.0.0   — открывается всем в локальной сети салона:
+      #                       администратору со стойки, мастерам с телефонов.
+      # Второе — с открытыми глазами: на страницах телефоны клиентов, и в
+      # гостевой сети салона их видеть незачем.
+      - "${BIND_HOST:-127.0.0.1}:${APP_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  rubl_data:
