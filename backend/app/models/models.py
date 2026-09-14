@@ -258,31 +258,23 @@ class CostModel(Base):
     """Структура расходов барбершопа — одна актуальная строка.
 
     Раньше расходы были зашиты в исходник одним числом «11 000 ₽ в день».
-    Владелец не мог поправить аренду, не трогая код, и не видел, из чего
-    число складывается. Здесь оно разложено на составляющие: постоянные
-    задаются суммой в месяц, переменные — долей от выручки.
+    Владелец не мог поправить их, не трогая код.
+
+    Постоянные расходы задаются одной суммой в месяц и делятся на дни. Разбор
+    по статьям — аренда, оклады, уборка, налоги — здесь не ведётся: он живёт в
+    отчётности салона, а Директору нужно итоговое число. Держать статьи в двух
+    местах значит однажды поправить их в одном и забыть про другое.
+
+    Что в эту сумму НЕ входит: оплата мастеров и расходники. Они считаются
+    процентом от выручки ниже, и попади они ещё и сюда — учлись бы дважды.
     """
 
     __tablename__ = "cost_model"
 
     id: Mapped[int] = mapped_column(primary_key=True)
 
-    # -- Постоянные расходы, рублей в месяц --
-    rent_monthly: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
-    utilities_monthly: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
-    # Управляющий совмещён со вторым администратором, оклад фиксированный.
-    manager_monthly: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
-    cleaning_monthly: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
-    taxes_monthly: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
-    other_fixed_monthly: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
-
-    # -- Сменный администратор --
-    # Получает за смену, а не окладом, и выходит примерно через день:
-    # остальные смены закрывает управляющий, который сидит на фиксе выше.
-    # Поэтому нужны оба числа — иначе оплата размажется на все дни месяца
-    # и расходы окажутся вдвое выше настоящих.
-    admin_per_shift: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
-    admin_shifts_per_month: Mapped[Decimal] = mapped_column(Numeric(5, 2), default=0)
+    # -- Постоянные расходы, рублей в месяц, одним числом --
+    fixed_monthly: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
 
     # -- Переменные расходы, доля от выручки в процентах --
     materials_pct: Mapped[Decimal] = mapped_column(Numeric(5, 2), default=0)

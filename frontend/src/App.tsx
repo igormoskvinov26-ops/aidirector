@@ -58,20 +58,11 @@ interface PlanData {
 
 /** Ответ /api/finance/costs — структура расходов, задаётся владельцем. */
 interface CostSettings {
-  rent_monthly: number;
-  utilities_monthly: number;
-  manager_monthly: number;
-  cleaning_monthly: number;
-  taxes_monthly: number;
-  other_fixed_monthly: number;
-  admin_per_shift: number;
-  admin_shifts_per_month: number;
+  fixed_monthly: number;
   materials_pct: number;
   acquiring_pct: number;
   master_commission_pct: number;
   product_commission_pct: number;
-  admin_monthly_total: number;
-  fixed_monthly_total: number;
   fixed_daily: number;
   days_in_month: number;
   is_default: boolean;
@@ -164,15 +155,11 @@ function Spinner() {
   );
 }
 
+// Постоянные расходы — одним числом: разбор по статьям ведётся в отчётности
+// салона, а Директору нужна итоговая сумма, чтобы поделить её на дни.
+// Оплата мастеров и расходники в неё не входят — они ниже, процентами.
 const COST_FIELDS = [
-  { key: "rent_monthly", label: "Аренда", unit: "₽ / мес" },
-  { key: "utilities_monthly", label: "Коммуналка", unit: "₽ / мес" },
-  { key: "manager_monthly", label: "Управляющий", unit: "₽ / мес" },
-  { key: "cleaning_monthly", label: "Уборка", unit: "₽ / мес" },
-  { key: "taxes_monthly", label: "Налоги", unit: "₽ / мес" },
-  { key: "other_fixed_monthly", label: "Прочие постоянные", unit: "₽ / мес" },
-  { key: "admin_per_shift", label: "Администратор", unit: "₽ / смена" },
-  { key: "admin_shifts_per_month", label: "Смен администратора", unit: "в месяц" },
+  { key: "fixed_monthly", label: "Постоянные расходы", unit: "₽ / мес" },
   { key: "materials_pct", label: "Расходники", unit: "% выручки" },
   { key: "acquiring_pct", label: "Эквайринг", unit: "% выручки" },
   { key: "master_commission_pct", label: "Мастеру с услуг", unit: "% выручки" },
@@ -699,10 +686,9 @@ function PlanFactPage() {
               Расходы {costsOpen ? "▴" : "▾"}
             </h3>
             <span className="text-xs text-gray-500 dark:text-zinc-500">
-              {RUB(costs.fixed_monthly_total)} в месяц, из них администратор{" "}
-              {RUB(costs.admin_monthly_total)} за {costs.admin_shifts_per_month} смен ·{" "}
+              {RUB(costs.fixed_monthly)} в месяц ·{" "}
               <span className="text-gray-700 dark:text-zinc-300">
-                итого {RUB(costs.fixed_daily)} в день
+                {RUB(costs.fixed_daily)} в день
               </span>
               {" · мастеру "}{costs.master_commission_pct}% с услуг и{" "}
               {costs.product_commission_pct}% с косметики
@@ -713,9 +699,11 @@ function PlanFactPage() {
             <>
               <p className="text-xs text-gray-500 dark:text-zinc-500 mt-4 max-w-[70ch]">
                 Из этих чисел считается всё остальное: порог безубыточности,
-                выручка под план и прибыль за месяц. Оплата администратора
-                сначала переводится в месяц по числу смен, и только потом всё
-                вместе делится на {costs.days_in_month} дней текущего месяца.
+                выручка под план и прибыль за месяц. Постоянные расходы —
+                аренда, оклады, уборка, налоги — задаются одной суммой за месяц
+                и делятся на {costs.days_in_month} дней текущего месяца.
+                Оплата мастеров и расходники сюда не входят: они считаются
+                процентом от выручки и учлись бы дважды.
               </p>
               <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mt-4">
                 {COST_FIELDS.map((f) => (

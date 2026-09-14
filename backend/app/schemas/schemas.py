@@ -184,21 +184,14 @@ class MonthlyFinancePoint(BaseModel):
 
 
 class CostSettingsRequest(BaseModel):
-    """Структура расходов. Постоянные — суммой в месяц, переменные — в процентах.
+    """Расходы. Постоянные — одной суммой в месяц, переменные — в процентах.
 
     Верхние границы стоят не для красоты: процент мастера вместе с расходниками
     выше сотни означает, что каждый заработанный рубль приносит убыток, и порог
     безубыточности перестаёт существовать.
     """
 
-    rent_monthly: Decimal = Field(..., ge=0)
-    utilities_monthly: Decimal = Field(..., ge=0)
-    manager_monthly: Decimal = Field(..., ge=0)
-    cleaning_monthly: Decimal = Field(..., ge=0)
-    taxes_monthly: Decimal = Field(default=0, ge=0)
-    other_fixed_monthly: Decimal = Field(default=0, ge=0)
-    admin_per_shift: Decimal = Field(..., ge=0)
-    admin_shifts_per_month: Decimal = Field(..., ge=0, le=31)
+    fixed_monthly: Decimal = Field(..., ge=0)
     materials_pct: Decimal = Field(..., ge=0, le=100)
     acquiring_pct: Decimal = Field(default=0, ge=0, le=100)
     master_commission_pct: Decimal = Field(..., ge=0, le=100)

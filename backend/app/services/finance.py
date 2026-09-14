@@ -58,24 +58,25 @@ class Costs:
         return tuple(picked)
 
 
-# Аренда 170 000 и доля расходников 3,52% — из отчёта P&L за август 2026.
-# Оплата труда задана владельцем: управляющий совмещён со вторым
-# администратором на окладе 90 000, сменный администратор получает 4 000 за
-# смену. Коммуналка 15 000 и уборка 15 000, налоги 6 000.
-# Сменный администратор выходит 15-16 раз в месяц, остальные смены закрывает
-# управляющий, поэтому его оплата берётся за месяц, а не за каждый день.
-# Прочие и бизнес-расходы взяты средним за два месяца отчёта — 45 149.
-# Итого 296 000 плюс 4 000 x 15,5 плюс 45 149 = 403 149 в месяц.
-# Ставка мастера 40% и гарант 4 000 за смену названы владельцем. По кассовому
-# отчёту они не выводятся: выплаты смещены на месяц относительно выручки.
-# Ставка мастера 40% с услуг и 10% с косметики, гарант 4 000 за смену у всех —
-# подтверждено владельцем. Гаранты берутся из настроек оплаты барберов: сейчас
-# они одинаковы, но заданы пофамильно, и расчёт выдержит, если разойдутся.
+# Постоянные расходы — 403 149 ₽ в месяц. Число собрано из отчёта P&L за
+# август 2026 и уточнений владельца: аренда 170 000, коммуналка 15 000,
+# управляющий 90 000, уборка 15 000, налоги 6 000, сменный администратор
+# 4 000 x 15,5 смен = 62 000, прочие и бизнес-расходы средним за два месяца
+# 45 149. Разбор оставлен здесь на память о происхождении числа; сам расчёт
+# ведётся одной суммой, и правится она одним полем.
+#
+# Оплаты мастеров и расходников в этой сумме НЕТ: они считаются процентом от
+# выручки и попади они ещё и сюда — учлись бы дважды.
+#
+# Доля расходников 3,52% — из того же отчёта. Ставка мастера 40% с услуг и
+# 10% с косметики, гарант 4 000 за смену у всех — названы владельцем; по
+# кассовому отчёту они не выводятся, выплаты смещены на месяц относительно
+# выручки. Гаранты берутся из настроек оплаты барберов: сейчас они одинаковы,
+# но заданы пофамильно, и расчёт выдержит, если разойдутся.
+DEFAULT_FIXED_MONTHLY = Decimal("403149")
+
 DEFAULT_COSTS = Costs(
-    fixed_daily=(
-        (Decimal("296000") + Decimal("4000") * Decimal("15.5") + Decimal("45149"))
-        / Decimal("30.4")
-    ).quantize(Decimal("0.01")),
+    fixed_daily=(DEFAULT_FIXED_MONTHLY / Decimal("30.4")).quantize(Decimal("0.01")),
     variable_pct=Decimal("0.035"),
     master_commission_pct=Decimal("0.40"),
     product_commission_pct=Decimal("0.10"),
@@ -116,20 +117,8 @@ async def get_costs(session: AsyncSession, when: date | None = None) -> Costs:
     when = when or date.today()
     days = Decimal(_days_in_month(when.year, when.month))
 
-    monthly_fixed = (
-        row.rent_monthly
-        + row.utilities_monthly
-        + row.manager_monthly
-        + row.cleaning_monthly
-        + row.taxes_monthly
-        + row.other_fixed_monthly
-    )
-    # Оплата сменного администратора переводится в месяц по числу его смен и
-    # только потом делится на дни. Добавлять её к каждому дню нельзя: он
-    # выходит примерно через день, остальное закрывает управляющий.
-    monthly_admin = row.admin_per_shift * row.admin_shifts_per_month
     return Costs(
-        fixed_daily=((monthly_fixed + monthly_admin) / days).quantize(Decimal("0.01")),
+        fixed_daily=(row.fixed_monthly / days).quantize(Decimal("0.01")),
         variable_pct=(row.materials_pct + row.acquiring_pct) / Decimal("100"),
         master_commission_pct=row.master_commission_pct / Decimal("100"),
         product_commission_pct=row.product_commission_pct / Decimal("100"),
@@ -536,14 +525,7 @@ async def get_daily_finance(
 
 
 COST_FIELDS = (
-    "rent_monthly",
-    "utilities_monthly",
-    "manager_monthly",
-    "cleaning_monthly",
-    "taxes_monthly",
-    "other_fixed_monthly",
-    "admin_per_shift",
-    "admin_shifts_per_month",
+    "fixed_monthly",
     "materials_pct",
     "acquiring_pct",
     "master_commission_pct",
@@ -552,27 +534,19 @@ COST_FIELDS = (
 
 
 async def get_cost_settings(session: AsyncSession) -> dict:
-    """Расходы как их задаёт владелец — суммами в месяц и процентами."""
+    """Расходы как их задаёт владелец — суммой в месяц и процентами."""
     row = await session.scalar(select(CostModel).order_by(CostModel.id).limit(1))
     today = date.today()
     days = _days_in_month(today.year, today.month)
 
     if row is None:
         values = {f: 0.0 for f in COST_FIELDS}
-        monthly_fixed = 0.0
-        monthly_admin = 0.0
     else:
         values = {f: float(getattr(row, f)) for f in COST_FIELDS}
-        monthly_fixed = sum(
-            values[f] for f in COST_FIELDS if f.endswith("_monthly")
-        )
-        monthly_admin = values["admin_per_shift"] * values["admin_shifts_per_month"]
 
     return {
         **values,
-        "admin_monthly_total": round(monthly_admin, 2),
-        "fixed_monthly_total": round(monthly_fixed + monthly_admin, 2),
-        "fixed_daily": round((monthly_fixed + monthly_admin) / days, 2),
+        "fixed_daily": round(values["fixed_monthly"] / days, 2),
         "days_in_month": days,
         "is_default": row is None,
     }

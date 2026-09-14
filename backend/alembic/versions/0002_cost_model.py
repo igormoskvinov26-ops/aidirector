@@ -106,6 +106,19 @@ def _seed_defaults() -> None:
     existing = bind.execute(sa.text("SELECT COUNT(*) FROM cost_model")).scalar()
     if existing:
         return
+
+    # На чистой базе таблицу создаёт первая миграция прямо из моделей, а там
+    # постоянные расходы давно свёрнуты в одно поле (см. 0003). Заполнять по
+    # разбору статей в этом случае нечего — колонок таких нет.
+    if _has_column("cost_model", "fixed_monthly"):
+        bind.execute(sa.text(
+            "INSERT INTO cost_model ("
+            "id, fixed_monthly, materials_pct, acquiring_pct,"
+            " master_commission_pct, product_commission_pct) VALUES ("
+            "1, 403149, 3.5, 0, 40, 10)"
+        ))
+        return
+
     bind.execute(sa.text(
         "INSERT INTO cost_model ("
         "id, rent_monthly, utilities_monthly, manager_monthly, cleaning_monthly,"
