@@ -41,10 +41,15 @@ def test_rouble_above_break_even_is_a_profit(masters):
     assert _compute_margin(revenue, masters)["margin_rub"] > 0
 
 
-def test_more_masters_need_more_revenue():
-    """Каждый следующий человек на смене поднимает планку, а не опускает."""
+def test_more_masters_never_lower_the_bar():
+    """Каждый следующий человек на смене планку не опускает.
+
+    Строгого роста здесь не требуется: он зависит от того, действует ли ещё
+    гарант, а это меняется вместе с расходами. Свойство, которое верно
+    всегда, — планка не падает.
+    """
     one, two, three = (_break_even_revenue(n) for n in (1, 2, 3))
-    assert one < two < three
+    assert one <= two <= three
 
 
 def test_zero_masters_treated_as_one():
@@ -95,21 +100,31 @@ def test_more_masters_never_need_less_revenue():
         assert one <= two <= three
 
 
-def test_master_count_stops_mattering_above_the_guarantee():
-    """Состав смены влияет на нужную выручку только вблизи безубыточности.
+def test_master_count_matters_only_while_the_guarantee_binds():
+    """Состав смены влияет на нужную выручку только внизу шкалы.
 
     Мастер получает процент с выручки, и в сумме это одна и та же доля
-    независимо от того, на скольких человек она делится. Разница возникает
+    независимо от того, на скольких человек она делится. Разница возникает,
     лишь пока выручка на мастера ниже гаранта: тогда каждый лишний человек
     добавляет фиксированную сумму. Это свойство системы оплаты, а не ошибка
     расчёта, и таблица по составу смены поэтому различается только внизу.
+
+    Расходы заданы явно, а не взяты по умолчанию: где именно проходит
+    граница, зависит от их величины, и тест не должен ломаться каждый раз,
+    когда владелец меняет аренду.
     """
-    # Скромная цель: гарант ещё действует, разница есть.
-    low = [_revenue_for_profit(n, Decimal("0")) for n in (1, 2, 3)]
+    cheap = Costs(
+        fixed_daily=Decimal("5000"),
+        variable_pct=Decimal("0.035"),
+        master_commission_pct=Decimal("0.40"),
+        master_min_salary=Decimal("4000"),
+    )
+    # Низкий порог: выручка на мастера мала, гарант ещё действует.
+    low = [_revenue_for_profit(n, Decimal("0"), cheap) for n in (1, 2, 3)]
     assert low[0] < low[1] < low[2]
 
     # Амбициозная цель: все вышли на процент, разницы нет.
-    high = [_revenue_for_profit(n, Decimal("30000")) for n in (1, 2, 3)]
+    high = [_revenue_for_profit(n, Decimal("30000"), cheap) for n in (1, 2, 3)]
     assert high[0] == high[1] == high[2]
 
 

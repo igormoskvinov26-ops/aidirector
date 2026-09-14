@@ -32,14 +32,17 @@ class Costs:
     master_min_salary: Decimal
 
 
-# Из отчёта P&L за август 2026 — единственный полный месяц с данными.
-# Аренда 170 000, коммуналка 15 000 по оценке владельца, управляющий 41 500,
-# администратор 35 000, уборка 15 000. Итого 276 500 в месяц.
-# Расходники — 29 060 от 824 465 выручки по услугам, то есть 3,52%.
+# Аренда 170 000 и доля расходников 3,52% — из отчёта P&L за август 2026.
+# Оплата труда задана владельцем: управляющий совмещён со вторым
+# администратором на окладе 90 000, сменный администратор получает 4 000 за
+# смену. Коммуналка 15 000 и уборка 15 000, налоги 6 000.
+# Итого постоянных 296 000 в месяц плюс 4 000 за каждый рабочий день.
 # Процент мастера по отчёту не выводится: зарплата платится со сдвигом
 # относительно выручки, — оставлено прежнее значение до подтверждения.
 DEFAULT_COSTS = Costs(
-    fixed_daily=(Decimal("276500") / Decimal("30.4")).quantize(Decimal("0.01")),
+    fixed_daily=(
+        Decimal("296000") / Decimal("30.4") + Decimal("4000")
+    ).quantize(Decimal("0.01")),
     variable_pct=Decimal("0.035"),
     master_commission_pct=Decimal("0.40"),
     master_min_salary=Decimal("4000.00"),
@@ -70,12 +73,16 @@ async def get_costs(session: AsyncSession, when: date | None = None) -> Costs:
         row.rent_monthly
         + row.utilities_monthly
         + row.manager_monthly
-        + row.admin_monthly
         + row.cleaning_monthly
+        + row.taxes_monthly
         + row.other_fixed_monthly
     )
+    # Оклады и аренда размазываются по дням месяца, а оплата администратора
+    # добавляется целиком: она возникает в каждый рабочий день.
     return Costs(
-        fixed_daily=(monthly_fixed / days).quantize(Decimal("0.01")),
+        fixed_daily=(
+            monthly_fixed / days + row.admin_per_shift
+        ).quantize(Decimal("0.01")),
         variable_pct=(row.materials_pct + row.acquiring_pct) / Decimal("100"),
         master_commission_pct=row.master_commission_pct / Decimal("100"),
         master_min_salary=row.master_min_guarantee,
@@ -295,9 +302,10 @@ COST_FIELDS = (
     "rent_monthly",
     "utilities_monthly",
     "manager_monthly",
-    "admin_monthly",
     "cleaning_monthly",
+    "taxes_monthly",
     "other_fixed_monthly",
+    "admin_per_shift",
     "materials_pct",
     "acquiring_pct",
     "master_commission_pct",
@@ -314,16 +322,18 @@ async def get_cost_settings(session: AsyncSession) -> dict:
     if row is None:
         values = {f: 0.0 for f in COST_FIELDS}
         monthly_fixed = 0.0
+        per_shift = 0.0
     else:
         values = {f: float(getattr(row, f)) for f in COST_FIELDS}
         monthly_fixed = sum(
             values[f] for f in COST_FIELDS if f.endswith("_monthly")
         )
+        per_shift = values["admin_per_shift"]
 
     return {
         **values,
         "fixed_monthly_total": round(monthly_fixed, 2),
-        "fixed_daily": round(monthly_fixed / days, 2),
+        "fixed_daily": round(monthly_fixed / days + per_shift, 2),
         "days_in_month": days,
         "is_default": row is None,
     }

@@ -4,10 +4,16 @@
 три процента рядом. Владелец не мог поправить аренду, не редактируя код, и не
 видел, из чего складывается порог безубыточности.
 
-Начальные значения взяты из отчёта P&L за август 2026 — единственный полный
-месяц с данными. Коммунальный платёж в отчёте нулевой, поставлена оценка
-владельца. Процент мастера оставлен прежним: по отчёту его вывести нельзя,
-зарплата выплачивается со сдвигом относительно выручки.
+Аренда взята из отчёта P&L за август 2026, доля расходников — оттуда же.
+Оплата труда задана владельцем и с отчётом не сходится: там управляющий и
+администратор проходят отдельными строками по 41 500 и 35 000, тогда как на
+деле управляющий совмещён со вторым администратором на окладе 90 000, а
+сменный администратор получает за смену. Отчёт кассовый, с переносом выплат
+между месяцами, поэтому источником взяты слова владельца.
+
+Процент мастера оставлен прежним: по отчёту его вывести нельзя — в августе
+выплаты составили 20% от услуг, в сентябре 64%, и ни одна цифра не отражает
+ставку.
 
 Revision ID: 0002_cost_model
 Revises: 0001_initial
@@ -30,9 +36,10 @@ def upgrade() -> None:
         sa.Column("rent_monthly", sa.Numeric(12, 2), nullable=False, server_default="0"),
         sa.Column("utilities_monthly", sa.Numeric(12, 2), nullable=False, server_default="0"),
         sa.Column("manager_monthly", sa.Numeric(12, 2), nullable=False, server_default="0"),
-        sa.Column("admin_monthly", sa.Numeric(12, 2), nullable=False, server_default="0"),
         sa.Column("cleaning_monthly", sa.Numeric(12, 2), nullable=False, server_default="0"),
+        sa.Column("taxes_monthly", sa.Numeric(12, 2), nullable=False, server_default="0"),
         sa.Column("other_fixed_monthly", sa.Numeric(12, 2), nullable=False, server_default="0"),
+        sa.Column("admin_per_shift", sa.Numeric(10, 2), nullable=False, server_default="0"),
         sa.Column("materials_pct", sa.Numeric(5, 2), nullable=False, server_default="0"),
         sa.Column("acquiring_pct", sa.Numeric(5, 2), nullable=False, server_default="0"),
         sa.Column("master_commission_pct", sa.Numeric(5, 2), nullable=False, server_default="0"),
@@ -49,10 +56,11 @@ def upgrade() -> None:
         "id": 1,
         "rent_monthly": "170000.00",       # из отчёта, фиксированная
         "utilities_monthly": "15000.00",   # оценка владельца, в отчёте нуль
-        "manager_monthly": "41500.00",     # управляющий, август
-        "admin_monthly": "35000.00",       # администратор, август
+        "manager_monthly": "90000.00",     # управляющий, совмещён со вторым админом
         "cleaning_monthly": "15000.00",    # уборка, август
+        "taxes_monthly": "6000.00",        # налоги и сборы
         "other_fixed_monthly": "0.00",     # бизнес- и прочие расходы нерегулярны
+        "admin_per_shift": "4000.00",      # администратор, за смену
         "materials_pct": "3.50",           # расходники: 29 060 от 824 465 = 3,52%
         "acquiring_pct": "0.00",           # в отчёте нуль
         "master_commission_pct": "40.00",  # прежнее значение, требует подтверждения

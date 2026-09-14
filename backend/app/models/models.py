@@ -270,10 +270,16 @@ class CostModel(Base):
     # -- Постоянные расходы, рублей в месяц --
     rent_monthly: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
     utilities_monthly: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
+    # Управляющий совмещён со вторым администратором, оклад фиксированный.
     manager_monthly: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
-    admin_monthly: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
     cleaning_monthly: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
+    taxes_monthly: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
     other_fixed_monthly: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
+
+    # -- Расходы за смену, рублей в день работы --
+    # Администратор получает за смену, а не оклад: в отличие от аренды этот
+    # расход возникает в тот день, когда салон работает.
+    admin_per_shift: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
 
     # -- Переменные расходы, доля от выручки в процентах --
     materials_pct: Mapped[Decimal] = mapped_column(Numeric(5, 2), default=0)

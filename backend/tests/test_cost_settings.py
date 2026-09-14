@@ -24,10 +24,11 @@ from app.services.finance import (
 SAMPLE = {
     "rent_monthly": 170000,
     "utilities_monthly": 15000,
-    "manager_monthly": 41500,
-    "admin_monthly": 35000,
+    "manager_monthly": 90000,
     "cleaning_monthly": 15000,
+    "taxes_monthly": 6000,
     "other_fixed_monthly": 0,
+    "admin_per_shift": 4000,
     "materials_pct": 3.5,
     "acquiring_pct": 0,
     "master_commission_pct": 40,
@@ -62,11 +63,11 @@ async def test_saved_values_come_back(session):
     saved = await set_cost_settings(session, SAMPLE)
     assert saved["rent_monthly"] == 170000
     assert saved["master_commission_pct"] == 40
-    assert saved["fixed_monthly_total"] == 276500
+    assert saved["fixed_monthly_total"] == 296000
     assert saved["is_default"] is False
 
     again = await get_cost_settings(session)
-    assert again["fixed_monthly_total"] == 276500
+    assert again["fixed_monthly_total"] == 296000
 
 
 @pytest.mark.asyncio
@@ -74,7 +75,8 @@ async def test_monthly_sums_are_spread_over_the_month(session):
     await set_cost_settings(session, SAMPLE)
     settings = await get_cost_settings(session)
     costs = await get_costs(session)
-    expected = Decimal("276500") / Decimal(settings["days_in_month"])
+    # Оклады делятся на дни месяца, оплата смены добавляется целиком.
+    expected = Decimal("296000") / Decimal(settings["days_in_month"]) + Decimal("4000")
     assert abs(costs.fixed_daily - expected) < Decimal("0.02")
 
 

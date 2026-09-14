@@ -114,9 +114,10 @@ interface CostSettings {
   rent_monthly: number;
   utilities_monthly: number;
   manager_monthly: number;
-  admin_monthly: number;
   cleaning_monthly: number;
+  taxes_monthly: number;
   other_fixed_monthly: number;
+  admin_per_shift: number;
   materials_pct: number;
   acquiring_pct: number;
   master_commission_pct: number;
@@ -578,9 +579,10 @@ const COST_FIELDS = [
   { key: "rent_monthly", label: "Аренда", unit: "₽ / мес" },
   { key: "utilities_monthly", label: "Коммуналка", unit: "₽ / мес" },
   { key: "manager_monthly", label: "Управляющий", unit: "₽ / мес" },
-  { key: "admin_monthly", label: "Администратор", unit: "₽ / мес" },
   { key: "cleaning_monthly", label: "Уборка", unit: "₽ / мес" },
+  { key: "taxes_monthly", label: "Налоги", unit: "₽ / мес" },
   { key: "other_fixed_monthly", label: "Прочие постоянные", unit: "₽ / мес" },
+  { key: "admin_per_shift", label: "Администратор", unit: "₽ / смена" },
   { key: "materials_pct", label: "Расходники", unit: "% выручки" },
   { key: "acquiring_pct", label: "Эквайринг", unit: "% выручки" },
   { key: "master_commission_pct", label: "Мастеру", unit: "% выручки" },
@@ -924,9 +926,10 @@ function PlanFactPage() {
               Расходы {costsOpen ? "▴" : "▾"}
             </h3>
             <span className="text-xs text-gray-500 dark:text-zinc-500">
-              постоянные {RUB(costs.fixed_monthly_total)} в месяц ·{" "}
+              оклады и аренда {RUB(costs.fixed_monthly_total)} в месяц,
+              администратор {RUB(costs.admin_per_shift)} за смену ·{" "}
               <span className="text-gray-700 dark:text-zinc-300">
-                {RUB(costs.fixed_daily)} в день
+                итого {RUB(costs.fixed_daily)} в день
               </span>
               {" · мастеру "}{costs.master_commission_pct}% с гарантом {RUB(costs.master_min_guarantee)}
             </span>
@@ -936,8 +939,10 @@ function PlanFactPage() {
             <>
               <p className="text-xs text-gray-500 dark:text-zinc-500 mt-4 max-w-[70ch]">
                 Из этих чисел считается всё остальное: порог безубыточности,
-                выручка под план и прибыль за месяц. Постоянные расходы делятся
-                на {costs.days_in_month} дней текущего месяца.
+                выручка под план и прибыль за месяц. Месячные суммы делятся на
+                {" "}{costs.days_in_month} дней текущего месяца, а оплата
+                администратора добавляется целиком: она возникает в каждый
+                рабочий день, а не размазывается по календарю.
               </p>
               <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mt-4">
                 {COST_FIELDS.map((f) => (
