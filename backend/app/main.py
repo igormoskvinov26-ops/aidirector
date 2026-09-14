@@ -19,6 +19,7 @@ from loguru import logger
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.routes.ai import router as ai_router
+from app.api.routes.bookings import router as bookings_router
 from app.api.routes.client_base import router as client_base_router
 from app.api.routes.dashboard import router as dashboard_router
 from app.api.routes.employees import router as employees_router
@@ -155,6 +156,7 @@ app.add_middleware(
 
 for r in (
     ai_router,
+    bookings_router,
     client_base_router,
     dashboard_router,
     employees_router,

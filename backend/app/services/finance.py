@@ -15,6 +15,10 @@ DB_HOUR_SHIFT = 1
 DEFAULT_MASTERS = 2
 
 COMPLETED_STATUSES = {"completed"}
+# Записи, по которым деньги ещё придут. Отмены и неявки сюда не входят:
+# складывать несостоявшийся визит с записью на завтра нельзя.
+SCHEDULED_STATUSES = {"scheduled"}
+COUNTED_STATUSES = COMPLETED_STATUSES | SCHEDULED_STATUSES
 
 
 @dataclass(frozen=True)
@@ -204,12 +208,14 @@ async def get_daily_finance(
     rows = await session.execute(
         select(
             day_label.label("day"),
-            func.sum(Visit.total_amount).label("revenue"),
+            func.sum(
+                case((Visit.status.in_(COUNTED_STATUSES), Visit.total_amount), else_=None)
+            ).label("revenue"),
             func.sum(
                 case((Visit.status.in_(COMPLETED_STATUSES), Visit.total_amount), else_=None)
             ).label("completed_amount"),
             func.sum(
-                case((Visit.status.not_in(COMPLETED_STATUSES), Visit.total_amount), else_=None)
+                case((Visit.status.in_(SCHEDULED_STATUSES), Visit.total_amount), else_=None)
             ).label("scheduled_amount"),
             func.count(Visit.id).label("total_visits"),
             func.sum(
@@ -736,7 +742,7 @@ async def get_hourly_finance(
         status = str(row.status or "")
         if status in COMPLETED_STATUSES:
             hourly[hour]["completed"] += revenue
-        else:
+        elif status in SCHEDULED_STATUSES:
             hourly[hour]["scheduled"] += revenue
 
     masters_count = await _get_masters_count(session, target_date)

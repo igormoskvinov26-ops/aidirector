@@ -1,91 +1,28 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  BarChart,
   Bar,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  AreaChart,
-  Area,
-  PieChart,
-  Pie,
   Cell,
   ComposedChart,
   Line,
 } from "recharts";
 import {
-  LayoutDashboard,
   Users,
-  Scissors,
   CreditCard,
-  Sparkles,
-  TrendingDown,
-  DollarSign,
-  Percent,
-  UserCheck,
-  ShoppingBag,
-  Zap,
-  ChevronRight,
-  Activity,
-  ArrowUpRight,
-  ArrowDownRight,
   Sun,
   Moon,
   Save,
+  CalendarClock,
   RefreshCw,
 } from "lucide-react";
 import ClientBasePage from "./ClientBasePage";
 import logo from "./assets/logo.png";
 
-/**
- * First and last day of a month, as YYYY-MM-DD.
- * Day 0 of the next month is the last day of this one, so February gets 28/29
- * and April gets 30. The previous code hardcoded "-31" for every month, which
- * produced 31 February, 31 April, 31 June, 31 September and 31 November.
- */
-function monthRange(year: number, month: number): { from: string; to: string } {
-  const mm = String(month).padStart(2, "0");
-  const lastDay = new Date(year, month, 0).getDate();
-  return { from: `${year}-${mm}-01`, to: `${year}-${mm}-${String(lastDay).padStart(2, "0")}` };
-}
-
 // ── Types ──
-interface DashboardData {
-  period: string;
-  kpis: Record<string, string | number>;
-  revenue_trend: TrendPoint[];
-  top_masters: MasterMetric[];
-  cancellation_rate: number;
-}
-
-interface TrendPoint {
-  date: string;
-  revenue: string;
-  visits: number;
-  avg_check: string;
-}
-
-interface MasterMetric {
-  name: string;
-  avatar_url: string | null;
-  visits: number;
-  revenue: string;
-  avg_check: string;
-  retention_pct: number;
-  product_sales: string;
-}
-
-// ── Utils ──
-const fmt = (n: string | number): string => {
-  const num = typeof n === "string" ? parseFloat(n) : n;
-  if (isNaN(num)) return "0";
-  if (num >= 1_000_000) return (num / 1_000_000).toFixed(1) + "M";
-  if (num >= 1_000) return Math.round(num / 1000) + "K";
-  return String(Math.round(num));
-};
-
 interface DailyFinancePoint {
   date: string;
   revenue: number;
@@ -170,15 +107,12 @@ const GOLD = "#d4a853";
 // ── Navigation ──
 // Роль оператора видит единственный раздел. Ограничение продублировано на
 // сервере: прятать пункты меню — это удобство, а не защита.
-const OPERATOR_PAGES = ["clientbase"];
+const OPERATOR_PAGES = ["clients"];
 
 const NAV = [
   { id: "planfact", label: "План-факт", icon: CreditCard },
-  { id: "dashboard", label: "Дашборд", icon: LayoutDashboard },
-  { id: "masters", label: "Мастера", icon: Scissors },
+  { id: "bookings", label: "Будущие записи", icon: CalendarClock },
   { id: "clients", label: "Клиенты", icon: Users },
-  { id: "clientbase", label: "Клиентская база", icon: Users },
-  { id: "ai", label: "AI Отчёт", icon: Sparkles },
 ];
 
 // ── Components ──
@@ -193,390 +127,6 @@ function Spinner() {
   );
 }
 
-function KpiCard({
-  label,
-  value,
-  icon: Icon,
-  prefix,
-  suffix,
-  trend,
-  negative,
-}: {
-  label: string;
-  value: string;
-  icon: React.ComponentType<{ size?: number; className?: string }>;
-  prefix?: string;
-  suffix?: string;
-  trend?: "up" | "down";
-  negative?: boolean;
-}) {
-  return (
-    <div className="group bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-5 hover:border-rubl-accent/30 transition-all duration-300 hover:shadow-lg hover:shadow-rubl-accent/5 cursor-default">
-      <div className="flex items-center justify-between mb-4">
-        <span className="text-gray-500 dark:text-zinc-500 text-xs font-medium uppercase tracking-widest">
-          {label}
-        </span>
-        <div
-          className={`w-9 h-9 rounded-xl flex items-center justify-center ${
-            negative ? "bg-red-500/10" : "bg-rubl-accent/10"
-          } group-hover:scale-110 transition-transform duration-300`}
-        >
-          <Icon
-            size={17}
-            className={negative ? "text-red-400" : "text-rubl-accent"}
-          />
-        </div>
-      </div>
-      <div className={`text-3xl font-bold tracking-tight ${negative ? "text-red-400" : "text-gray-900 dark:text-white"}`}>
-        {prefix}
-        {fmt(value)}
-        {suffix}
-      </div>
-      {trend && (
-        <div className={`flex items-center gap-1 mt-2 text-xs ${trend === "up" ? "text-emerald-400" : "text-red-400"}`}>
-          {trend === "up" ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}
-          <span>vs прошлый период</span>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Pages ──
-
-function DashboardPage({ data }: { data: DashboardData | null }) {
-  const [year, setYear] = useState(new Date().getFullYear());
-  const [month, setMonth] = useState(new Date().getMonth() + 1);
-  const [localData, setLocalData] = useState(data);
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    if (data) setLocalData(data);
-  }, [data]);
-
-  const changeMonth = async (y: number, m: number) => {
-    setYear(y);
-    setMonth(m);
-    setLoading(true);
-    const { from, to } = monthRange(y, m);
-    try {
-      const r = await fetch(`/api/dashboard/range?date_from=${from}&date_to=${to}`);
-      const json = await r.json();
-      setLocalData(json);
-    } catch {}
-    setLoading(false);
-  };
-
-  const monthNames = [
-    "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
-    "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
-  ];
-
-  const prevMonth = () => {
-    if (month === 1) changeMonth(year - 1, 12);
-    else changeMonth(year, month - 1);
-  };
-  const nextMonth = () => {
-    if (month === 12) changeMonth(year + 1, 1);
-    else changeMonth(year, month + 1);
-  };
-
-  if (!localData) return null;
-
-  return (
-    <div className="animate-in">      
-      {/* Month selector */}
-      <div className="flex items-center justify-between mb-8">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight mb-1">Дашборд</h1>
-          <p className="text-gray-500 dark:text-zinc-500 text-sm">{localData.period}</p>
-        </div>
-        <div className="flex items-center gap-3 bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-xl p-1">
-          <button onClick={prevMonth} className="p-2 hover:bg-gray-200 dark:hover:bg-zinc-800 rounded-lg text-gray-600 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-white transition-colors">
-            ←
-          </button>
-          <span className="text-sm font-medium min-w-[120px] text-center">
-            {monthNames[month - 1]} {year}
-          </span>
-          <button onClick={nextMonth} className="p-2 hover:bg-gray-200 dark:hover:bg-zinc-800 rounded-lg text-gray-600 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-white transition-colors">
-            →
-          </button>
-        </div>
-      </div>
-
-      {loading && (
-        <div className="absolute inset-0 bg-black/50 flex items-center justify-center z-20 rounded-2xl">
-          <div className="w-6 h-6 border-2 border-rubl-accent/20 border-t-rubl-accent rounded-full animate-spin" />
-        </div>
-      )}
-
-      {/* KPI Grid */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <KpiCard label="Выручка" value={String(localData.kpis.total_revenue)} icon={DollarSign} prefix="₽" trend="up" />
-        <KpiCard label="Средний чек" value={String(localData.kpis.avg_check)} icon={Zap} prefix="₽" />
-        <KpiCard label="Записей" value={String(localData.kpis.total_visits)} icon={Activity} />
-        <KpiCard label="Новые клиенты" value={String(localData.kpis.new_clients)} icon={UserCheck} />
-        <KpiCard label="Повторные" value={String(localData.kpis.repeat_clients)} icon={Users} />
-        <KpiCard label="Возвращаемость" value={String(localData.kpis.retention_pct)} icon={Percent} suffix="%" trend="up" />
-        <KpiCard
-          label="Отмены"
-          value={String(localData.kpis.cancellation_pct)}
-          icon={TrendingDown}
-          suffix="%"
-          negative={Number(localData.kpis.cancellation_pct) > 15}
-          trend={Number(localData.kpis.cancellation_pct) > 15 ? "down" : "up"}
-        />
-        <KpiCard label="Косметика" value={String(localData.kpis.product_sales)} icon={ShoppingBag} prefix="₽" />
-      </div>
-
-      {/* Revenue Chart */}
-      <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-6 mb-6">
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h2 className="text-sm font-semibold uppercase tracking-widest text-gray-500 dark:text-zinc-500">Выручка</h2>
-            <p className="text-xs text-gray-400 dark:text-zinc-600 mt-1">Динамика по дням</p>
-          </div>
-        </div>
-        <ResponsiveContainer width="100%" height={280}>
-          <AreaChart data={localData.revenue_trend || []}>
-            <defs>
-              <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={GOLD} stopOpacity={0.25} />
-                <stop offset="100%" stopColor={GOLD} stopOpacity={0} />
-              </linearGradient>
-            </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="#1f1f1f" vertical={false} />
-            <XAxis
-              dataKey="date"
-              stroke="#525252"
-              tick={{ fontSize: 11, fill: "#737373" }}
-              axisLine={false}
-              tickLine={false}
-              tickFormatter={(d: string) =>
-                new Date(d).toLocaleDateString("ru", { day: "numeric", month: "short" })
-              }
-            />
-            <YAxis
-              stroke="#525252"
-              tick={{ fontSize: 11, fill: "#737373" }}
-              axisLine={false}
-              tickLine={false}
-            />
-            <Tooltip
-              contentStyle={{
-                background: "#18181b",
-                border: "1px solid #27272a",
-                borderRadius: "12px",
-                color: "#fff",
-                boxShadow: "0 20px 60px rgba(0,0,0,0.5)",
-              }}
-            />
-            <Area type="monotone" dataKey="revenue" stroke={GOLD} fill="url(#revGrad)" strokeWidth={2} dot={false} />
-          </AreaChart>
-        </ResponsiveContainer>
-      </div>
-
-      {/* Masters + Visits */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-6">
-          <h2 className="text-sm font-semibold uppercase tracking-widest text-gray-500 dark:text-zinc-500 mb-5">
-            Топ мастера
-          </h2>
-          <div className="space-y-1">
-            {localData.top_masters?.map((m, i) => (
-              <div
-                key={m.name}
-                className="flex items-center gap-4 p-3 rounded-xl hover:bg-white/5 transition-colors group"
-              >
-                <span className="text-xs text-gray-400 dark:text-zinc-600 w-5 font-mono">{i + 1}</span>
-                {m.avatar_url ? (
-                  <img src={m.avatar_url} className="w-10 h-10 rounded-xl object-cover ring-1 ring-zinc-700" />
-                ) : (
-                  <div className="w-10 h-10 rounded-xl bg-rubl-accent/10 flex items-center justify-center text-rubl-accent font-bold text-sm">
-                    {m.name[0]}
-                  </div>
-                )}
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium truncate">{m.name}</div>
-                  <div className="text-xs text-gray-500 dark:text-zinc-500">{m.visits} визитов</div>
-                </div>
-                <div className="text-right">
-                  <div className="text-sm font-semibold">{fmt(m.revenue)} ₽</div>
-                  <div className="text-xs text-gray-500 dark:text-zinc-500">чек {fmt(m.avg_check)} ₽</div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-6">
-          <h2 className="text-sm font-semibold uppercase tracking-widest text-gray-500 dark:text-zinc-500 mb-5">
-            Визиты по дням
-          </h2>
-          <ResponsiveContainer width="100%" height={320}>
-            <BarChart data={localData.revenue_trend || []}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1f1f1f" vertical={false} />
-              <XAxis
-                dataKey="date"
-                stroke="#525252"
-                tick={{ fontSize: 11, fill: "#737373" }}
-                axisLine={false}
-                tickLine={false}
-                tickFormatter={(d: string) =>
-                  new Date(d).toLocaleDateString("ru", { day: "numeric" })
-                }
-              />
-              <YAxis
-                stroke="#525252"
-                tick={{ fontSize: 11, fill: "#737373" }}
-                axisLine={false}
-                tickLine={false}
-              />
-              <Tooltip
-                contentStyle={{
-                  background: "#18181b",
-                  border: "1px solid #27272a",
-                  borderRadius: "12px",
-                  color: "#fff",
-                }}
-              />
-              <Bar dataKey="visits" fill={GOLD} radius={[6, 6, 0, 0]} maxBarSize={24} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function MastersPage({ data }: { data: DashboardData | null }) {
-  if (!data) return null;
-  return (
-    <div className="animate-in">
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold tracking-tight mb-1">Мастера</h1>
-        <p className="text-gray-500 dark:text-zinc-500 text-sm">Эффективность и загрузка</p>
-      </div>
-
-      <div className="space-y-3">
-        {data.top_masters?.map((m) => (
-          <div key={m.name} className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-5 hover:border-rubl-accent/20 transition-all">
-            <div className="flex items-center gap-5">
-              {m.avatar_url ? (
-                <img src={m.avatar_url} className="w-14 h-14 rounded-2xl object-cover ring-1 ring-zinc-700" />
-              ) : (
-                <div className="w-14 h-14 rounded-2xl bg-rubl-accent/10 flex items-center justify-center text-rubl-accent font-bold text-xl">
-                  {m.name[0]}
-                </div>
-              )}
-              <div className="flex-1">
-                <div className="font-semibold text-lg">{m.name}</div>
-                <div className="flex gap-6 mt-3">
-                  <Metric label="Визитов" value={String(m.visits)} />
-                  <Metric label="Выручка" value={`${fmt(m.revenue)} ₽`} />
-                  <Metric label="Средний чек" value={`${fmt(m.avg_check)} ₽`} />
-                  <Metric label="Возврат" value={`${m.retention_pct}%`} />
-                  <Metric label="Косметика" value={`${fmt(m.product_sales)} ₽`} />
-                </div>
-              </div>
-              <ChevronRight size={18} className="text-gray-400 dark:text-zinc-600" />
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <div className="text-xs text-gray-500 dark:text-zinc-500">{label}</div>
-      <div className="text-sm font-medium">{value}</div>
-    </div>
-  );
-}
-
-function ClientsPage() {
-  return (
-    <div className="animate-in">
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold tracking-tight mb-1">Клиенты</h1>
-        <p className="text-gray-500 dark:text-zinc-500 text-sm">RFM-анализ и сегментация</p>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-        <SegmentCard title="VIP" description=">5 визитов, >50K ₽" count={0} color={GOLD} />
-        <SegmentCard title="Активные" description="2–4 визита" count={0} color="#22c55e" />
-        <SegmentCard title="Потерянные" description=">60 дней без визита" count={0} color="#ef4444" />
-        <SegmentCard title="Новые" description="Первый визит <30 дн" count={0} color="#3b82f6" />
-        <SegmentCard title="Спящие" description="30–60 дн без визита" count={0} color="#eab308" />
-        <SegmentCard title="Одноразовые" description="1 визит, >90 дн" count={0} color="#737373" />
-      </div>
-
-      <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-6">
-        <h2 className="text-sm font-semibold uppercase tracking-widest text-gray-500 dark:text-zinc-500 mb-4">
-          Распределение клиентов
-        </h2>
-        <ResponsiveContainer width="100%" height={300}>
-          <PieChart>
-            <Pie
-              data={[
-                { name: "VIP", value: 0, color: GOLD },
-                { name: "Активные", value: 0, color: "#22c55e" },
-                { name: "Новые", value: 0, color: "#3b82f6" },
-                { name: "Потерянные", value: 0, color: "#ef4444" },
-                { name: "Спящие", value: 0, color: "#eab308" },
-              ]}
-              cx="50%"
-              cy="50%"
-              innerRadius={70}
-              outerRadius={110}
-              paddingAngle={4}
-              dataKey="value"
-            >
-              {[GOLD, "#22c55e", "#3b82f6", "#ef4444", "#eab308"].map((c) => (
-                <Cell key={c} fill={c} stroke="transparent" />
-              ))}
-            </Pie>
-            <Tooltip
-              contentStyle={{
-                background: "#18181b",
-                border: "1px solid #27272a",
-                borderRadius: "12px",
-              }}
-            />
-          </PieChart>
-        </ResponsiveContainer>
-      </div>
-    </div>
-  );
-}
-
-function SegmentCard({
-  title,
-  description,
-  count,
-  color,
-}: {
-  title: string;
-  description: string;
-  count: number;
-  color: string;
-}) {
-  return (
-    <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-5 hover:border-zinc-700 transition-all">
-      <div className="flex items-center gap-3 mb-3">
-        <div className="w-3 h-3 rounded-full" style={{ backgroundColor: color }} />
-        <span className="font-semibold text-sm">{title}</span>
-      </div>
-      <div className="text-3xl font-bold mb-1">{count}</div>
-      <div className="text-xs text-gray-500 dark:text-zinc-500">{description}</div>
-    </div>
-  );
-}
-
-/** Поля структуры расходов: подпись, единица и ключ в ответе сервера. */
 const COST_FIELDS = [
   { key: "rent_monthly", label: "Аренда", unit: "₽ / мес" },
   { key: "utilities_monthly", label: "Коммуналка", unit: "₽ / мес" },
@@ -1171,127 +721,222 @@ function SumCard({
   );
 }
 
-function AIPage() {
-  const [report, setReport] = useState<any>(null);
-  const [loading, setLoading] = useState(false);
+/** Ответ /api/bookings/upcoming. */
+interface BookingRecord {
+  id: number;
+  time: string;
+  client: string;
+  phone: string;
+  is_new_client: boolean;
+  total_visits: number;
+  master: string;
+  services: string[];
+  amount: number;
+  comment: string;
+}
 
-  const generate = async () => {
+interface BookingDay {
+  date: string;
+  count: number;
+  amount: number;
+  masters: string[];
+  records: BookingRecord[];
+}
+
+interface UpcomingBookings {
+  from: string;
+  to: string;
+  days_ahead: number;
+  total_count: number;
+  total_amount: number;
+  days: BookingDay[];
+}
+
+const HORIZONS = [
+  { days: 7, label: "Неделя" },
+  { days: 14, label: "Две недели" },
+  { days: 30, label: "Месяц" },
+];
+
+const WEEKDAYS = ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"];
+
+/** Дата как «15 сентября, вторник» — в списке на месяц иначе не сориентироваться. */
+function humanDate(iso: string): string {
+  const d = new Date(iso + "T00:00:00");
+  const month = [
+    "января", "февраля", "марта", "апреля", "мая", "июня",
+    "июля", "августа", "сентября", "октября", "ноября", "декабря",
+  ][d.getMonth()];
+  return `${d.getDate()} ${month}, ${WEEKDAYS[d.getDay()]}`;
+}
+
+function BookingsPage() {
+  const [data, setData] = useState<UpcomingBookings | null>(null);
+  const [days, setDays] = useState(14);
+  const [loading, setLoading] = useState(true);
+
+  const load = async (horizon: number) => {
     setLoading(true);
     try {
-      const r = await fetch("/api/ai/quick?days=30");
-      const json = await r.json();
-      setReport(json);
+      const r = await fetch(`/api/bookings/upcoming?days=${horizon}`);
+      setData(await r.json());
     } catch (e) {
-      setReport({ report: "Ошибка генерации. Проверьте DEEPSEEK_API_KEY в .env" });
+      console.error("Bookings fetch error", e);
     }
     setLoading(false);
   };
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { load(days); }, [days]);
+
+  const RUB = (n: number): string => Math.round(n).toLocaleString("ru-RU") + " ₽";
+  const todayIso = new Date().toISOString().slice(0, 10);
+
+  if (loading && !data) return <Spinner />;
+
   return (
     <div className="animate-in">
-      <div className="mb-8 flex items-center justify-between">
+      <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight mb-1">AI Директор</h1>
-          <p className="text-gray-500 dark:text-zinc-500 text-sm">Управленческий отчёт на основе метрик</p>
+          <h1 className="text-2xl font-bold tracking-tight mb-1">Будущие записи</h1>
+          <p className="text-gray-500 dark:text-zinc-500 text-sm">
+            Кто придёт, когда и на какую сумму. Отменённые и неявки сюда не попадают.
+          </p>
         </div>
-        <button
-          onClick={generate}
-          disabled={loading}
-          className="flex items-center gap-2 bg-rubl-accent hover:bg-rubl-accent/90 text-black font-semibold px-5 py-2.5 rounded-xl transition-all disabled:opacity-50"
-        >
-          <Sparkles size={16} />
-          {loading ? "Анализирую..." : "Сгенерировать отчёт"}
-        </button>
+        <div className="flex items-center gap-2">
+          {HORIZONS.map((h) => (
+            <button
+              key={h.days}
+              onClick={() => setDays(h.days)}
+              className={`px-3 py-2 rounded-lg text-sm border transition-all ${
+                days === h.days
+                  ? "border-rubl-accent text-rubl-accent"
+                  : "border-gray-300 dark:border-zinc-700 text-gray-500 dark:text-zinc-500 hover:border-gray-400"
+              }`}
+            >
+              {h.label}
+            </button>
+          ))}
+          <button
+            onClick={() => load(days)}
+            disabled={loading}
+            className="flex items-center gap-1.5 border border-gray-300 dark:border-zinc-700 hover:border-rubl-accent px-4 py-2 rounded-lg text-sm transition-all disabled:opacity-50"
+          >
+            <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
+            Обновить
+          </button>
+        </div>
       </div>
 
-      {report && (
-        <div className="space-y-4">
-          {/* Insights */}
-          {report.insights?.length > 0 && (
-            <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-6">
-              <h3 className="text-sm font-semibold uppercase tracking-widest text-rubl-accent mb-4">
-                Главные выводы
-              </h3>
-              <ul className="space-y-2">
-                {report.insights.map((s: string, i: number) => (
-                  <li key={i} className="flex items-start gap-3 text-sm text-gray-700 dark:text-zinc-300">
-                    <span className="text-rubl-accent mt-1">•</span>
-                    {s}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {/* Risks + Opportunities */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {report.risks?.length > 0 && (
-              <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-6">
-                <h3 className="text-sm font-semibold uppercase tracking-widest text-red-400 mb-4">
-                  Риски
-                </h3>
-                <ul className="space-y-2">
-                  {report.risks.map((s: string, i: number) => (
-                    <li key={i} className="flex items-start gap-3 text-sm text-gray-700 dark:text-zinc-300">
-                      <span className="text-red-400 mt-1">⚠</span>
-                      {s}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            {report.opportunities?.length > 0 && (
-              <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-6">
-                <h3 className="text-sm font-semibold uppercase tracking-widest text-emerald-400 mb-4">
-                  Возможности
-                </h3>
-                <ul className="space-y-2">
-                  {report.opportunities.map((s: string, i: number) => (
-                    <li key={i} className="flex items-start gap-3 text-sm text-gray-700 dark:text-zinc-300">
-                      <span className="text-emerald-400 mt-1">+</span>
-                      {s}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </div>
-
-          {/* Actions */}
-          {report.actions_tomorrow?.length > 0 && (
-            <div className="bg-rubl-accent/5 border border-rubl-accent/20 rounded-2xl p-6">
-              <h3 className="text-sm font-semibold uppercase tracking-widest text-rubl-accent mb-4">
-                Что сделать завтра
-              </h3>
-              <ul className="space-y-2">
-                {report.actions_tomorrow.map((s: string, i: number) => (
-                  <li key={i} className="flex items-start gap-3 text-sm text-zinc-200">
-                    <span className="text-rubl-accent font-bold">{i + 1}.</span>
-                    {s}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {/* Full Report */}
-          {report.report && (
-            <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-6">
-              <h3 className="text-sm font-semibold uppercase tracking-widest text-gray-500 dark:text-zinc-500 mb-4">
-                Полный отчёт
-              </h3>
-              <p className="text-sm text-gray-700 dark:text-zinc-300 leading-relaxed whitespace-pre-line">{report.report}</p>
-            </div>
-          )}
+      {data && (
+        <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+          <SumCard
+            label="Записей впереди"
+            value={String(data.total_count)}
+            note={`с ${data.from} по ${data.to}`}
+            accent
+          />
+          <SumCard
+            label="На сумму"
+            value={RUB(data.total_amount)}
+            note="если все дойдут"
+          />
+          <SumCard
+            label="Дней с записями"
+            value={String(data.days.length)}
+            note={`из ${data.days_ahead} впереди`}
+          />
         </div>
       )}
+
+      {data && data.days.length === 0 && (
+        <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-10 text-center">
+          <p className="text-gray-500 dark:text-zinc-500">
+            На ближайшие {data.days_ahead} дней записей нет.
+          </p>
+        </div>
+      )}
+
+      <div className="space-y-4">
+        {data?.days.map((day) => (
+          <div
+            key={day.date}
+            className={`bg-white dark:bg-zinc-900/80 border rounded-2xl p-6 ${
+              day.date === todayIso
+                ? "border-rubl-accent"
+                : "border-gray-200 dark:border-zinc-800"
+            }`}
+          >
+            <div className="flex flex-wrap items-baseline justify-between gap-3 mb-4">
+              <h3 className="text-sm font-semibold uppercase tracking-widest text-gray-600 dark:text-zinc-300">
+                {humanDate(day.date)}
+                {day.date === todayIso && (
+                  <span className="ml-2 text-rubl-accent">сегодня</span>
+                )}
+              </h3>
+              <span className="text-xs text-gray-500 dark:text-zinc-500">
+                {day.count} записей на {RUB(day.amount)} · {day.masters.join(", ")}
+              </span>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm min-w-[640px]">
+                <thead>
+                  <tr className="text-left text-[11px] uppercase tracking-wider text-gray-500 dark:text-zinc-500">
+                    <th className="pb-2 pr-4 font-semibold">Время</th>
+                    <th className="pb-2 px-4 font-semibold">Клиент</th>
+                    <th className="pb-2 px-4 font-semibold">Мастер</th>
+                    <th className="pb-2 px-4 font-semibold">Услуги</th>
+                    <th className="pb-2 pl-4 font-semibold text-right">Сумма</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {day.records.map((r) => (
+                    <tr key={r.id} className="border-t border-gray-100 dark:border-zinc-800/60">
+                      <td className="py-3 pr-4 font-semibold whitespace-nowrap">{r.time}</td>
+                      <td className="py-3 px-4">
+                        <div className="flex items-center gap-2">
+                          <span>{r.client}</span>
+                          {r.is_new_client && (
+                            <span className="text-[10px] uppercase tracking-wider text-rubl-accent border border-rubl-accent/40 rounded px-1.5 py-0.5">
+                              новый
+                            </span>
+                          )}
+                        </div>
+                        {r.phone && (
+                          <a
+                            href={`tel:${r.phone}`}
+                            className="text-xs text-gray-500 dark:text-zinc-500 hover:text-rubl-accent"
+                          >
+                            {r.phone}
+                          </a>
+                        )}
+                      </td>
+                      <td className="py-3 px-4 text-gray-600 dark:text-zinc-400">{r.master}</td>
+                      <td className="py-3 px-4 text-gray-600 dark:text-zinc-400">
+                        {r.services.length ? r.services.join(", ") : "—"}
+                        {r.comment && (
+                          <div className="text-xs text-gray-400 dark:text-zinc-600 mt-0.5">
+                            {r.comment}
+                          </div>
+                        )}
+                      </td>
+                      <td className="py-3 pl-4 text-right font-semibold whitespace-nowrap">
+                        {RUB(r.amount)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
 
-// ── App ──
 export default function App() {
-  const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [role, setRole] = useState<"owner" | "operator">("operator");
   const [page, setPage] = useState("planfact");
@@ -1308,9 +953,9 @@ export default function App() {
   }, [theme]);
 
   useEffect(() => {
-    // Роль выясняем до всего остального: от неё зависит и меню, и то, какие
-    // запросы вообще имеет смысл делать. Оператору дашборд не запрашиваем —
-    // сервер на него ответит 403.
+    // Роль выясняем до всего остального: от неё зависит и меню, и то, какая
+    // вкладка откроется. Данные каждая вкладка грузит сама — общей загрузки
+    // здесь больше нет.
     (async () => {
       let resolved: "owner" | "operator" = "operator";
       try {
@@ -1323,30 +968,8 @@ export default function App() {
         console.error("Не удалось определить роль:", err);
       }
       setRole(resolved);
-
-      if (resolved !== "owner") {
-        setPage("clientbase");
-        setLoading(false);
-        return;
-      }
-
-      const now = new Date();
-      const { from, to } = monthRange(now.getFullYear(), now.getMonth() + 1);
-      try {
-        const r = await fetch(`/api/dashboard/range?date_from=${from}&date_to=${to}`);
-        setData(await r.json());
-      } catch (err) {
-        console.error("API не доступен:", err);
-        setData({
-          period: "API не доступен",
-          kpis: {},
-          revenue_trend: [],
-          top_masters: [],
-          cancellation_rate: 0,
-        });
-      } finally {
-        setLoading(false);
-      }
+      if (resolved !== "owner") setPage("clients");
+      setLoading(false);
     })();
   }, []);
 
@@ -1409,12 +1032,9 @@ export default function App() {
       {/* Main */}
       <main className="flex-1 ml-60 p-8 min-h-screen">
         <div className="max-w-[1280px] mx-auto">
-          {role === "owner" && page === "dashboard" && <DashboardPage data={data} />}
-          {role === "owner" && page === "masters" && <MastersPage data={data} />}
-          {role === "owner" && page === "clients" && <ClientsPage />}
-          {page === "clientbase" && <ClientBasePage />}
           {role === "owner" && page === "planfact" && <PlanFactPage />}
-          {role === "owner" && page === "ai" && <AIPage />}
+          {role === "owner" && page === "bookings" && <BookingsPage />}
+          {page === "clients" && <ClientBasePage />}
         </div>
       </main>
     </div>

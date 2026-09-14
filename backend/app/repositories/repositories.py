@@ -152,13 +152,25 @@ def _parse_datetime(val: Any) -> datetime | None:
 
 
 def _normalize_visit_status(raw: Any) -> str:
+    """Код посещения YCLIENTS в наш статус.
+
+    В YCLIENTS visit_attendance принимает четыре значения: 1 — пришёл,
+    2 — подтвердил, 0 — ожидание, -1 — не пришёл. Раньше сюда же сваливались
+    отмены и неявки, и всё это становилось «запланировано». В итоге неявка
+    прошлой недели навсегда оставалась будущим доходом: на графике её рисовало
+    контуром как запись, которая ещё принесёт деньги.
+
+    Теперь несостоявшийся визит отличается от предстоящего. Деньги по нему не
+    придут, и складывать его с записями на завтра нельзя.
+    """
     status_str = str(raw).lower() if raw is not None else "unknown"
     if status_str in ("1", "completed", "finished", "attended", "visit"):
         return "completed"
-    if status_str in ("2", "canceled", "cancelled", "noshow", "no_show", "no show"):
-        return "scheduled"
-    if status_str in ("0", "-1", "unattended", "unknown", ""):
-        return "scheduled"
+    if status_str in ("-1", "noshow", "no_show", "no show", "unattended"):
+        return "no_show"
+    if status_str in ("canceled", "cancelled", "deleted"):
+        return "cancelled"
+    # 2 — подтверждена, 0 — ожидает подтверждения. И то и другое впереди.
     return "scheduled"
 
 
