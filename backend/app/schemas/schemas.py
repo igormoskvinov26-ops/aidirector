@@ -198,6 +198,7 @@ class CostSettingsRequest(BaseModel):
     taxes_monthly: Decimal = Field(default=0, ge=0)
     other_fixed_monthly: Decimal = Field(default=0, ge=0)
     admin_per_shift: Decimal = Field(..., ge=0)
+    admin_shifts_per_month: Decimal = Field(..., ge=0, le=31)
     materials_pct: Decimal = Field(..., ge=0, le=100)
     acquiring_pct: Decimal = Field(default=0, ge=0, le=100)
     master_commission_pct: Decimal = Field(..., ge=0, le=100)

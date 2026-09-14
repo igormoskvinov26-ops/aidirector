@@ -36,12 +36,14 @@ class Costs:
 # Оплата труда задана владельцем: управляющий совмещён со вторым
 # администратором на окладе 90 000, сменный администратор получает 4 000 за
 # смену. Коммуналка 15 000 и уборка 15 000, налоги 6 000.
-# Итого постоянных 296 000 в месяц плюс 4 000 за каждый рабочий день.
+# Сменный администратор выходит 15-16 раз в месяц, остальные смены закрывает
+# управляющий, поэтому его оплата берётся за месяц, а не за каждый день.
+# Итого 296 000 плюс 4 000 x 15,5 = 358 000 в месяц.
 # Процент мастера по отчёту не выводится: зарплата платится со сдвигом
 # относительно выручки, — оставлено прежнее значение до подтверждения.
 DEFAULT_COSTS = Costs(
     fixed_daily=(
-        Decimal("296000") / Decimal("30.4") + Decimal("4000")
+        (Decimal("296000") + Decimal("4000") * Decimal("15.5")) / Decimal("30.4")
     ).quantize(Decimal("0.01")),
     variable_pct=Decimal("0.035"),
     master_commission_pct=Decimal("0.40"),
@@ -77,12 +79,12 @@ async def get_costs(session: AsyncSession, when: date | None = None) -> Costs:
         + row.taxes_monthly
         + row.other_fixed_monthly
     )
-    # Оклады и аренда размазываются по дням месяца, а оплата администратора
-    # добавляется целиком: она возникает в каждый рабочий день.
+    # Оплата сменного администратора переводится в месяц по числу его смен и
+    # только потом делится на дни. Добавлять её к каждому дню нельзя: он
+    # выходит примерно через день, остальное закрывает управляющий.
+    monthly_admin = row.admin_per_shift * row.admin_shifts_per_month
     return Costs(
-        fixed_daily=(
-            monthly_fixed / days + row.admin_per_shift
-        ).quantize(Decimal("0.01")),
+        fixed_daily=((monthly_fixed + monthly_admin) / days).quantize(Decimal("0.01")),
         variable_pct=(row.materials_pct + row.acquiring_pct) / Decimal("100"),
         master_commission_pct=row.master_commission_pct / Decimal("100"),
         master_min_salary=row.master_min_guarantee,
@@ -306,6 +308,7 @@ COST_FIELDS = (
     "taxes_monthly",
     "other_fixed_monthly",
     "admin_per_shift",
+    "admin_shifts_per_month",
     "materials_pct",
     "acquiring_pct",
     "master_commission_pct",
@@ -322,18 +325,19 @@ async def get_cost_settings(session: AsyncSession) -> dict:
     if row is None:
         values = {f: 0.0 for f in COST_FIELDS}
         monthly_fixed = 0.0
-        per_shift = 0.0
+        monthly_admin = 0.0
     else:
         values = {f: float(getattr(row, f)) for f in COST_FIELDS}
         monthly_fixed = sum(
             values[f] for f in COST_FIELDS if f.endswith("_monthly")
         )
-        per_shift = values["admin_per_shift"]
+        monthly_admin = values["admin_per_shift"] * values["admin_shifts_per_month"]
 
     return {
         **values,
-        "fixed_monthly_total": round(monthly_fixed, 2),
-        "fixed_daily": round(monthly_fixed / days + per_shift, 2),
+        "admin_monthly_total": round(monthly_admin, 2),
+        "fixed_monthly_total": round(monthly_fixed + monthly_admin, 2),
+        "fixed_daily": round((monthly_fixed + monthly_admin) / days, 2),
         "days_in_month": days,
         "is_default": row is None,
     }

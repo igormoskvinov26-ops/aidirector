@@ -40,6 +40,7 @@ def upgrade() -> None:
         sa.Column("taxes_monthly", sa.Numeric(12, 2), nullable=False, server_default="0"),
         sa.Column("other_fixed_monthly", sa.Numeric(12, 2), nullable=False, server_default="0"),
         sa.Column("admin_per_shift", sa.Numeric(10, 2), nullable=False, server_default="0"),
+        sa.Column("admin_shifts_per_month", sa.Numeric(5, 2), nullable=False, server_default="0"),
         sa.Column("materials_pct", sa.Numeric(5, 2), nullable=False, server_default="0"),
         sa.Column("acquiring_pct", sa.Numeric(5, 2), nullable=False, server_default="0"),
         sa.Column("master_commission_pct", sa.Numeric(5, 2), nullable=False, server_default="0"),
@@ -60,7 +61,8 @@ def upgrade() -> None:
         "cleaning_monthly": "15000.00",    # уборка, август
         "taxes_monthly": "6000.00",        # налоги и сборы
         "other_fixed_monthly": "0.00",     # бизнес- и прочие расходы нерегулярны
-        "admin_per_shift": "4000.00",      # администратор, за смену
+        "admin_per_shift": "4000.00",       # сменный администратор, за смену
+        "admin_shifts_per_month": "15.50",  # 15-16 смен, остальные — за управляющим
         "materials_pct": "3.50",           # расходники: 29 060 от 824 465 = 3,52%
         "acquiring_pct": "0.00",           # в отчёте нуль
         "master_commission_pct": "40.00",  # прежнее значение, требует подтверждения

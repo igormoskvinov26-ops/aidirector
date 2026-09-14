@@ -276,10 +276,13 @@ class CostModel(Base):
     taxes_monthly: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
     other_fixed_monthly: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
 
-    # -- Расходы за смену, рублей в день работы --
-    # Администратор получает за смену, а не оклад: в отличие от аренды этот
-    # расход возникает в тот день, когда салон работает.
+    # -- Сменный администратор --
+    # Получает за смену, а не окладом, и выходит примерно через день:
+    # остальные смены закрывает управляющий, который сидит на фиксе выше.
+    # Поэтому нужны оба числа — иначе оплата размажется на все дни месяца
+    # и расходы окажутся вдвое выше настоящих.
     admin_per_shift: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
+    admin_shifts_per_month: Mapped[Decimal] = mapped_column(Numeric(5, 2), default=0)
 
     # -- Переменные расходы, доля от выручки в процентах --
     materials_pct: Mapped[Decimal] = mapped_column(Numeric(5, 2), default=0)

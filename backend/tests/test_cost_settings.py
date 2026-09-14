@@ -29,6 +29,7 @@ SAMPLE = {
     "taxes_monthly": 6000,
     "other_fixed_monthly": 0,
     "admin_per_shift": 4000,
+    "admin_shifts_per_month": 15.5,
     "materials_pct": 3.5,
     "acquiring_pct": 0,
     "master_commission_pct": 40,
@@ -63,11 +64,12 @@ async def test_saved_values_come_back(session):
     saved = await set_cost_settings(session, SAMPLE)
     assert saved["rent_monthly"] == 170000
     assert saved["master_commission_pct"] == 40
-    assert saved["fixed_monthly_total"] == 296000
+    assert saved["admin_monthly_total"] == 62000  # 4 000 x 15,5 смен
+    assert saved["fixed_monthly_total"] == 358000
     assert saved["is_default"] is False
 
     again = await get_cost_settings(session)
-    assert again["fixed_monthly_total"] == 296000
+    assert again["fixed_monthly_total"] == 358000
 
 
 @pytest.mark.asyncio
@@ -75,8 +77,8 @@ async def test_monthly_sums_are_spread_over_the_month(session):
     await set_cost_settings(session, SAMPLE)
     settings = await get_cost_settings(session)
     costs = await get_costs(session)
-    # Оклады делятся на дни месяца, оплата смены добавляется целиком.
-    expected = Decimal("296000") / Decimal(settings["days_in_month"]) + Decimal("4000")
+    # Оплата смен переводится в месяц и только потом делится на дни.
+    expected = Decimal("358000") / Decimal(settings["days_in_month"])
     assert abs(costs.fixed_daily - expected) < Decimal("0.02")
 
 
@@ -119,3 +121,29 @@ def test_realistic_economics_is_accepted():
     from app.schemas.schemas import CostSettingsRequest
 
     assert CostSettingsRequest(**SAMPLE).master_commission_pct == 40
+
+
+@pytest.mark.asyncio
+async def test_admin_shifts_are_not_charged_every_day(session):
+    """Сменный администратор выходит через день, а не ежедневно.
+
+    Умножать его ставку на каждый день месяца — значит удвоить расход:
+    остальные смены закрывает управляющий, уже сидящий на окладе.
+    """
+    await set_cost_settings(session, SAMPLE)
+    settings = await get_cost_settings(session)
+    costs = await get_costs(session)
+
+    every_day = (
+        Decimal("296000") / Decimal(settings["days_in_month"]) + Decimal("4000")
+    )
+    assert costs.fixed_daily < every_day
+
+
+@pytest.mark.asyncio
+async def test_more_admin_shifts_cost_more(session):
+    await set_cost_settings(session, {**SAMPLE, "admin_shifts_per_month": 10})
+    fewer = (await get_costs(session)).fixed_daily
+    await set_cost_settings(session, {**SAMPLE, "admin_shifts_per_month": 20})
+    more = (await get_costs(session)).fixed_daily
+    assert more > fewer

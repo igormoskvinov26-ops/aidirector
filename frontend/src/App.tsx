@@ -118,10 +118,12 @@ interface CostSettings {
   taxes_monthly: number;
   other_fixed_monthly: number;
   admin_per_shift: number;
+  admin_shifts_per_month: number;
   materials_pct: number;
   acquiring_pct: number;
   master_commission_pct: number;
   master_min_guarantee: number;
+  admin_monthly_total: number;
   fixed_monthly_total: number;
   fixed_daily: number;
   days_in_month: number;
@@ -583,6 +585,7 @@ const COST_FIELDS = [
   { key: "taxes_monthly", label: "Налоги", unit: "₽ / мес" },
   { key: "other_fixed_monthly", label: "Прочие постоянные", unit: "₽ / мес" },
   { key: "admin_per_shift", label: "Администратор", unit: "₽ / смена" },
+  { key: "admin_shifts_per_month", label: "Смен администратора", unit: "в месяц" },
   { key: "materials_pct", label: "Расходники", unit: "% выручки" },
   { key: "acquiring_pct", label: "Эквайринг", unit: "% выручки" },
   { key: "master_commission_pct", label: "Мастеру", unit: "% выручки" },
@@ -926,8 +929,8 @@ function PlanFactPage() {
               Расходы {costsOpen ? "▴" : "▾"}
             </h3>
             <span className="text-xs text-gray-500 dark:text-zinc-500">
-              оклады и аренда {RUB(costs.fixed_monthly_total)} в месяц,
-              администратор {RUB(costs.admin_per_shift)} за смену ·{" "}
+              {RUB(costs.fixed_monthly_total)} в месяц, из них администратор{" "}
+              {RUB(costs.admin_monthly_total)} за {costs.admin_shifts_per_month} смен ·{" "}
               <span className="text-gray-700 dark:text-zinc-300">
                 итого {RUB(costs.fixed_daily)} в день
               </span>
@@ -939,10 +942,9 @@ function PlanFactPage() {
             <>
               <p className="text-xs text-gray-500 dark:text-zinc-500 mt-4 max-w-[70ch]">
                 Из этих чисел считается всё остальное: порог безубыточности,
-                выручка под план и прибыль за месяц. Месячные суммы делятся на
-                {" "}{costs.days_in_month} дней текущего месяца, а оплата
-                администратора добавляется целиком: она возникает в каждый
-                рабочий день, а не размазывается по календарю.
+                выручка под план и прибыль за месяц. Оплата администратора
+                сначала переводится в месяц по числу смен, и только потом всё
+                вместе делится на {costs.days_in_month} дней текущего месяца.
               </p>
               <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mt-4">
                 {COST_FIELDS.map((f) => (
