@@ -63,7 +63,7 @@ interface CostSettings {
   materials_pct: number;
   acquiring_pct: number;
   master_commission_pct: number;
-  master_min_guarantee: number;
+  product_commission_pct: number;
   admin_monthly_total: number;
   fixed_monthly_total: number;
   fixed_daily: number;
@@ -148,8 +148,8 @@ const COST_FIELDS = [
   { key: "admin_shifts_per_month", label: "Смен администратора", unit: "в месяц" },
   { key: "materials_pct", label: "Расходники", unit: "% выручки" },
   { key: "acquiring_pct", label: "Эквайринг", unit: "% выручки" },
-  { key: "master_commission_pct", label: "Мастеру", unit: "% выручки" },
-  { key: "master_min_guarantee", label: "Гарант мастера", unit: "₽ / смена" },
+  { key: "master_commission_pct", label: "Мастеру с услуг", unit: "% выручки" },
+  { key: "product_commission_pct", label: "Мастеру с косметики", unit: "% продаж" },
 ] as const;
 
 function PlanFactPage() {
@@ -494,7 +494,8 @@ function PlanFactPage() {
               <span className="text-gray-700 dark:text-zinc-300">
                 итого {RUB(costs.fixed_daily)} в день
               </span>
-              {" · мастеру "}{costs.master_commission_pct}% с гарантом {RUB(costs.master_min_guarantee)}
+              {" · мастеру "}{costs.master_commission_pct}% с услуг и{" "}
+              {costs.product_commission_pct}% с косметики
             </span>
           </button>
 

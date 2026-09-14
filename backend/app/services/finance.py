@@ -8,6 +8,7 @@ from decimal import Decimal
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models.models import CostModel, PlanTarget, Sale, SaleItem, Visit
 
 WORKING_HOURS = range(10, 22)
@@ -27,13 +28,33 @@ class Costs:
 
     Постоянные расходы уже приведены к дню: аренда и оклады задаются суммой
     в месяц и делятся на число дней в месяце. Переменные — доля от выручки.
-    Мастер получает процент, но не меньше гаранта за смену.
+
+    Мастер получает процент с услуг и отдельный, меньший процент с проданной
+    косметики, но в сумме не меньше гаранта за смену. Гаранты у мастеров
+    разные, поэтому здесь список, а не одно число: при двух работающих важно,
+    какие именно двое вышли.
     """
 
     fixed_daily: Decimal
     variable_pct: Decimal
     master_commission_pct: Decimal
-    master_min_salary: Decimal
+    product_commission_pct: Decimal
+    guarantees: tuple[Decimal, ...]
+
+    def shift_guarantees(self, num_masters: int) -> tuple[Decimal, ...]:
+        """Гаранты для смены из указанного числа мастеров.
+
+        Берутся самые крупные: кто именно выйдет, заранее неизвестно, и
+        занизить планку хуже, чем завысить. День, посчитанный прибыльным по
+        ошибке, узнаётся только в конце месяца.
+        """
+        if num_masters <= 0:
+            num_masters = 1
+        ordered = sorted(self.guarantees, reverse=True) or [Decimal("0")]
+        picked = list(ordered[:num_masters])
+        while len(picked) < num_masters:
+            picked.append(ordered[-1])
+        return tuple(picked)
 
 
 # Аренда 170 000 и доля расходников 3,52% — из отчёта P&L за август 2026.
@@ -45,20 +66,36 @@ class Costs:
 # Итого 296 000 плюс 4 000 x 15,5 = 358 000 в месяц.
 # Ставка мастера 40% и гарант 4 000 за смену названы владельцем. По кассовому
 # отчёту они не выводятся: выплаты смещены на месяц относительно выручки.
+# Ставка мастера 40% с услуг и 10% с косметики, гаранты 4 000 у Ксении и
+# Дмитрия, 5 000 у Арташа — из настроек оплаты барберов.
 DEFAULT_COSTS = Costs(
     fixed_daily=(
         (Decimal("296000") + Decimal("4000") * Decimal("15.5")) / Decimal("30.4")
     ).quantize(Decimal("0.01")),
     variable_pct=Decimal("0.035"),
     master_commission_pct=Decimal("0.40"),
-    master_min_salary=Decimal("4000.00"),
+    product_commission_pct=Decimal("0.10"),
+    guarantees=(Decimal("5000.00"), Decimal("4000.00"), Decimal("4000.00")),
 )
 
 # Прежние имена — чтобы не переписывать всё, что на них опиралось.
 FIXED_DAILY_COST = DEFAULT_COSTS.fixed_daily
 VARIABLE_COST_PCT = DEFAULT_COSTS.variable_pct
 MASTER_COMMISSION_PCT = DEFAULT_COSTS.master_commission_pct
-MASTER_MIN_SALARY = DEFAULT_COSTS.master_min_salary
+
+
+def _guarantees_from_settings() -> tuple[Decimal, ...]:
+    """Гаранты барберов из настроек оплаты.
+
+    Источник один — список барберов: там они заданы пофамильно и там же их
+    правят. Дублировать это число в таблице расходов значит однажды поменять
+    его в одном месте и забыть про другое.
+    """
+    values = [
+        Decimal(str(rule.get("guarantee", 0)))
+        for rule in getattr(settings, "barber_payroll_rules", [])
+    ]
+    return tuple(v for v in values if v > 0) or DEFAULT_COSTS.guarantees
 
 
 async def get_costs(session: AsyncSession, when: date | None = None) -> Costs:
@@ -91,45 +128,69 @@ async def get_costs(session: AsyncSession, when: date | None = None) -> Costs:
         fixed_daily=((monthly_fixed + monthly_admin) / days).quantize(Decimal("0.01")),
         variable_pct=(row.materials_pct + row.acquiring_pct) / Decimal("100"),
         master_commission_pct=row.master_commission_pct / Decimal("100"),
-        master_min_salary=row.master_min_guarantee,
+        product_commission_pct=row.product_commission_pct / Decimal("100"),
+        guarantees=_guarantees_from_settings(),
     )
 
 
-def _compute_margin(
-    revenue: Decimal,
+def _master_payout(
+    service_revenue: Decimal,
+    product_revenue: Decimal,
     num_masters: int,
-    costs: Costs = DEFAULT_COSTS,
-) -> dict:
-    actual_masters = max(num_masters, 1)
-    if revenue <= 0:
-        return {
-            "margin_rub": Decimal("0"),
-            "margin_pct": Decimal("0"),
-            "break_even": _break_even_revenue(num_masters, costs),
-            "costs": {
-                "fixed": costs.fixed_daily,
-                "variable": Decimal("0"),
-                "master_commission": Decimal("0"),
-                "total": costs.fixed_daily,
-            },
-        }
+    costs: Costs,
+) -> Decimal:
+    """Сколько всего получат мастера за день.
 
-    variable_cost = revenue * costs.variable_pct
-
-    revenue_per_master = revenue / actual_masters
-    master_commission_per = max(
-        costs.master_min_salary, revenue_per_master * costs.master_commission_pct
+    Каждый берёт процент со своей доли услуг плюс процент с косметики, но не
+    меньше своего гаранта. Гаранты разные, поэтому считается по каждому, а не
+    умножением одного числа на количество: при одном работающем это разница
+    в тысячу рублей, при трёх — уже заметнее.
+    """
+    masters = max(num_masters, 1)
+    # Числа приходят из разных мест — из базы, из подбора, из тестов — и не
+    # всегда Decimal. Смешивать float с Decimal нельзя, приводим на входе.
+    services = max(Decimal(str(service_revenue)), Decimal("0"))
+    products = max(Decimal(str(product_revenue)), Decimal("0"))
+    per_master_services = services / masters
+    per_master_products = products / masters
+    earned_each = (
+        per_master_services * costs.master_commission_pct
+        + per_master_products * costs.product_commission_pct
     )
-    master_commission = master_commission_per * actual_masters
+    return sum(
+        (max(guarantee, earned_each) for guarantee in costs.shift_guarantees(masters)),
+        Decimal("0"),
+    )
 
+
+def _day_costs(
+    service_revenue: Decimal,
+    product_revenue: Decimal,
+    num_masters: int,
+    costs: Costs,
+) -> dict:
+    """Расходы и прибыль дня без порога безубыточности.
+
+    Порог сюда не входит намеренно. Он считается подбором выручки, при которой
+    прибыль равна нулю, то есть через эту же функцию — если положить его
+    внутрь, расчёт начнёт вызывать сам себя без конца.
+    """
+    revenue = max(Decimal(str(service_revenue)), Decimal("0")) + max(
+        Decimal(str(product_revenue)), Decimal("0")
+    )
+    variable_cost = revenue * costs.variable_pct
+    master_commission = _master_payout(
+        service_revenue, product_revenue, num_masters, costs
+    )
     total_costs = costs.fixed_daily + variable_cost + master_commission
-    margin_rub = revenue - total_costs
-    margin_pct = (margin_rub / revenue * 100).quantize(Decimal("0.1"))
+
+    margin_pct = Decimal("0")
+    if revenue > 0:
+        margin_pct = ((revenue - total_costs) / revenue * 100).quantize(Decimal("0.1"))
 
     return {
-        "margin_rub": margin_rub,
+        "margin_rub": revenue - total_costs,
         "margin_pct": margin_pct,
-        "break_even": _break_even_revenue(num_masters, costs),
         "costs": {
             "fixed": costs.fixed_daily,
             "variable": variable_cost,
@@ -139,49 +200,75 @@ def _compute_margin(
     }
 
 
+def _compute_margin(
+    service_revenue: Decimal,
+    product_revenue: Decimal = Decimal("0"),
+    num_masters: int = 1,
+    costs: Costs = DEFAULT_COSTS,
+) -> dict:
+    """Прибыль дня. Услуги и косметика разведены: ставки по ним разные."""
+    result = _day_costs(service_revenue, product_revenue, num_masters, costs)
+    result["break_even"] = _break_even_revenue(num_masters, costs)
+    return result
+
+
 def _revenue_for_profit(
     num_masters: int,
     profit: Decimal = Decimal("0"),
     costs: Costs = DEFAULT_COSTS,
+    product_revenue: Decimal = Decimal("0"),
 ) -> Decimal:
-    """Какая выручка за день нужна, чтобы получить заданную прибыль.
+    """Какая выручка по услугам нужна, чтобы получить заданную прибыль.
 
-    Оплата мастера ломает зависимость надвое. Пока выручка на мастера мала,
-    он получает гарант — фиксированную сумму, и она входит в расходы как
-    постоянная. Выше точки переключения начинает действовать процент, и
-    расход растёт вместе с выручкой. Поэтому сначала проверяется режим
-    процента, и если полученная выручка в него не попадает — считается по
-    гаранту.
+    Прежде это решалось формулой, но она держалась на двух допущениях: все
+    мастера с одинаковым гарантом и единая ставка со всей выручки. Ни то, ни
+    другое не верно — гаранты разные, а с косметики процент свой. Формула для
+    такого случая разваливается на разбор режимов, по одному на каждого
+    мастера, и каждый из них легко написать неправильно.
+
+    Поэтому здесь двоичный поиск. Прибыль строго растёт вместе с выручкой:
+    каждый добавленный рубль оставляет в кассе долю, которая всегда больше
+    нуля. Значит, решение единственное и находится делением отрезка пополам.
+
+    Продажи косметики по умолчанию нулевые: сколько её купят, заранее
+    неизвестно, а их отсутствие — вариант осторожный. Косметика приносит
+    больше, чем стоит, и с ней порог только снизится.
 
     Прибыль, равная нулю, даёт точку безубыточности.
     """
     masters = max(num_masters, 1)
-    need = costs.fixed_daily + profit
 
-    denom_high = Decimal("1") - costs.variable_pct - costs.master_commission_pct
-    if denom_high > 0 and costs.master_commission_pct > 0:
-        rev_high = need / denom_high
-        # Точка переключения: выручка на мастера, при которой процент
-        # сравнивается с гарантом. При 40% и гаранте 4 000 это 10 000 —
-        # прежде это число было записано в коде вручную и ломалось при
-        # любой смене ставки.
-        switch_per_master = costs.master_min_salary / costs.master_commission_pct
-        if rev_high / masters >= switch_per_master:
-            return rev_high.quantize(Decimal("0.01"))
+    def margin_at(service_revenue: Decimal) -> Decimal:
+        return _day_costs(service_revenue, product_revenue, masters, costs)["margin_rub"]
 
-    denom_low = Decimal("1") - costs.variable_pct
-    rev_low = (need + costs.master_min_salary * masters) / denom_low
-    return rev_low.quantize(Decimal("0.01"))
+    low = Decimal("0")
+    if margin_at(low) >= profit:
+        return low
+
+    # Верхняя граница подбирается удвоением: сколько бы ни стоила смена,
+    # достаточно большая выручка её перекроет.
+    high = max(costs.fixed_daily + profit, Decimal("1000"))
+    for _ in range(60):
+        if margin_at(high) >= profit:
+            break
+        high *= 2
+    else:  # pragma: no cover - недостижимо при доле расходов меньше единицы
+        raise ValueError("Прибыль недостижима: переменные расходы съедают всю выручку")
+
+    cent = Decimal("0.01")
+    while high - low > cent:
+        middle = (low + high) / 2
+        if margin_at(middle) >= profit:
+            high = middle
+        else:
+            low = middle
+
+    return high.quantize(cent)
 
 
 def _break_even_revenue(num_masters: int, costs: Costs = DEFAULT_COSTS) -> Decimal:
-    """Выручка, при которой день выходит ровно в ноль."""
+    """Выручка по услугам, при которой день выходит ровно в ноль."""
     return _revenue_for_profit(num_masters, Decimal("0"), costs)
-
-
-# Ориентир для интерфейса, пока данные не загружены. В ответы по дням не
-# попадает: там всегда считается по фактическому числу мастеров.
-DAILY_BREAK_EVEN = _break_even_revenue(DEFAULT_MASTERS)
 
 
 async def get_daily_finance(
@@ -254,7 +341,9 @@ async def get_daily_finance(
         completed = Decimal(str(row.completed_amount or 0))
         scheduled = Decimal(str(row.scheduled_amount or 0))
         num_masters = int(row.masters_count or 0)
-        margin = _compute_margin(completed, num_masters, costs)
+        products = sales_by_day.get(day_str, Decimal("0"))
+        # Услуги и косметика передаются раздельно: ставка мастера по ним разная.
+        margin = _compute_margin(completed, products, num_masters, costs)
 
         result.append({
             "date": day_str,
@@ -318,7 +407,7 @@ COST_FIELDS = (
     "materials_pct",
     "acquiring_pct",
     "master_commission_pct",
-    "master_min_guarantee",
+    "product_commission_pct",
 )
 
 
@@ -465,10 +554,12 @@ async def _profit_to_date(
     days = await get_daily_finance(session, date_from, date_to)
     total = Decimal("0")
     for day in days:
-        earned = Decimal(str(day["completed"])) + Decimal(str(day["product_sales"]))
-        if earned <= 0:
+        services = Decimal(str(day["completed"]))
+        products = Decimal(str(day["product_sales"]))
+        if services + products <= 0:
             continue
-        total += _compute_margin(earned, int(day["masters_count"] or 0), costs)["margin_rub"]
+        margin = _compute_margin(services, products, int(day["masters_count"] or 0), costs)
+        total += margin["margin_rub"]
     return total.quantize(Decimal("0.01"))
 
 

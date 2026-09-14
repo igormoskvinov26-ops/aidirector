@@ -33,7 +33,7 @@ SAMPLE = {
     "materials_pct": 3.5,
     "acquiring_pct": 0,
     "master_commission_pct": 40,
-    "master_min_guarantee": 4000,
+    "product_commission_pct": 10,
 }
 
 

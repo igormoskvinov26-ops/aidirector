@@ -45,7 +45,7 @@ def upgrade() -> None:
         sa.Column("materials_pct", sa.Numeric(5, 2), nullable=False, server_default="0"),
         sa.Column("acquiring_pct", sa.Numeric(5, 2), nullable=False, server_default="0"),
         sa.Column("master_commission_pct", sa.Numeric(5, 2), nullable=False, server_default="0"),
-        sa.Column("master_min_guarantee", sa.Numeric(10, 2), nullable=False, server_default="0"),
+        sa.Column("product_commission_pct", sa.Numeric(5, 2), nullable=False, server_default="0"),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
@@ -66,8 +66,8 @@ def upgrade() -> None:
         "admin_shifts_per_month": "15.50",  # 15-16 смен, остальные — за управляющим
         "materials_pct": "3.50",           # расходники: 29 060 от 824 465 = 3,52%
         "acquiring_pct": "0.00",           # в отчёте нуль
-        "master_commission_pct": "40.00",   # подтверждено владельцем
-        "master_min_guarantee": "4000.00",  # гарант за смену, подтверждён
+        "master_commission_pct": "40.00",   # с услуг, подтверждено владельцем
+        "product_commission_pct": "10.00",  # с косметики, требует подтверждения
     }])
 
 

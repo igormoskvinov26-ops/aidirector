@@ -202,7 +202,7 @@ class CostSettingsRequest(BaseModel):
     materials_pct: Decimal = Field(..., ge=0, le=100)
     acquiring_pct: Decimal = Field(default=0, ge=0, le=100)
     master_commission_pct: Decimal = Field(..., ge=0, le=100)
-    master_min_guarantee: Decimal = Field(..., ge=0)
+    product_commission_pct: Decimal = Field(default=0, ge=0, le=100)
 
     @model_validator(mode="after")
     def _variable_share_must_leave_something(self) -> "CostSettingsRequest":

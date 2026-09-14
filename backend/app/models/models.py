@@ -288,9 +288,12 @@ class CostModel(Base):
     materials_pct: Mapped[Decimal] = mapped_column(Numeric(5, 2), default=0)
     acquiring_pct: Mapped[Decimal] = mapped_column(Numeric(5, 2), default=0)
 
-    # -- Оплата мастера: процент с выручки, но не ниже гаранта за смену --
+    # -- Оплата мастера: проценты одинаковы для всех, поэтому живут здесь --
     master_commission_pct: Mapped[Decimal] = mapped_column(Numeric(5, 2), default=0)
-    master_min_guarantee: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
+    product_commission_pct: Mapped[Decimal] = mapped_column(Numeric(5, 2), default=0)
+    # Гаранты у мастеров разные и задаются пофамильно в настройках барберов.
+    # Держать их ещё и здесь значит однажды поправить в одном месте и забыть
+    # про другое.
 
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
