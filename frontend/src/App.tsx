@@ -179,6 +179,74 @@ const COST_FIELDS = [
   { key: "product_commission_pct", label: "Мастеру с косметики", unit: "% продаж" },
 ] as const;
 
+const ZONE_TEXT: Record<string, { label: string; color: string }> = {
+  red: { label: "убыток при любом раскладе", color: "#ef4444" },
+  amber: { label: "исход зависит от загрузки мастеров", color: "#eab308" },
+  green: { label: "прибыль при любом раскладе", color: "#22c55e" },
+};
+
+/**
+ * Подсказка дня. Раньше сумма дня висела подписью над каждым столбцом, и к
+ * концу месяца тридцать подписей налезали друг на друга. Теперь по наведению —
+ * и вместе с суммой помещается то, что подписью было не показать: пороги дня
+ * и во что этот день обошёлся.
+ */
+function DayTooltip({ active, payload }: { active?: boolean; payload?: any[] }) {
+  if (!active || !payload?.length) return null;
+  const day = payload[0].payload;
+  const rub = (n: number) => Math.round(n).toLocaleString("ru-RU") + " ₽";
+  const zone = day.zone ? ZONE_TEXT[day.zone] : null;
+  const planned = day.scheduled_day ?? 0;
+
+  return (
+    <div className="bg-white dark:bg-zinc-900 border border-gray-300 dark:border-zinc-700 rounded-xl px-4 py-3 text-xs shadow-xl">
+      <div className="font-semibold text-sm mb-2 text-gray-900 dark:text-white">
+        {day.date}
+        {day.masters_count > 0 && (
+          <span className="ml-2 font-normal text-gray-500 dark:text-zinc-500">
+            мастеров на смене: {day.masters_count}
+          </span>
+        )}
+      </div>
+
+      {day.delta > 0 ? (
+        <>
+          <div className="flex items-baseline gap-2">
+            <span className="text-gray-500 dark:text-zinc-400">За день:</span>
+            <span className="text-base font-bold" style={{ color: zone?.color }}>
+              {rub(day.delta)}
+            </span>
+          </div>
+          {zone && (
+            <div className="mb-2" style={{ color: zone.color }}>
+              {zone.label}
+            </div>
+          )}
+          <div className="text-gray-500 dark:text-zinc-500 mb-2">
+            пороги дня: {rub(day.zone_low)}
+            {day.zone_high > day.zone_low && ` … ${rub(day.zone_high)}`}
+          </div>
+        </>
+      ) : (
+        <div className="text-gray-500 dark:text-zinc-400 mb-2">
+          {planned > 0 ? `Записей на ${rub(planned)}` : "Выручки нет"}
+        </div>
+      )}
+
+      <div className="border-t border-gray-200 dark:border-zinc-800 pt-2 space-y-0.5 text-gray-600 dark:text-zinc-400">
+        <div className="text-[10px] uppercase tracking-wider text-gray-400 dark:text-zinc-600">
+          накопленным итогом
+        </div>
+        <div>Услуги: {rub(day.services)}</div>
+        <div>Товары: {rub(day.products)}</div>
+        <div>Запланировано: {rub(day.scheduled)}</div>
+        <div>Мин. маржинальность: {rub(day.break_even)}</div>
+        {day.daily_plan_cum > 0 && <div>Выручка под план: {rub(day.daily_plan_cum)}</div>}
+      </div>
+    </div>
+  );
+}
+
 function PlanFactPage() {
   const [hourly, setHourly] = useState<any[]>([]);
   const [daily, setDaily] = useState<DailyFinancePoint[]>([]);
@@ -320,6 +388,9 @@ function PlanFactPage() {
       const delta = d.completed + (d.product_sales || 0);
       return {
         ...d,
+        // Накопленные ряды затирают дневные значения, поэтому запись на этот
+        // день сохраняется отдельно — она нужна подсказке.
+        scheduled_day: d.scheduled,
         services: cumServices,
         products: cumProducts,
         scheduled: cumScheduled,
@@ -784,40 +855,27 @@ function PlanFactPage() {
             <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
             <XAxis dataKey="date" tick={{ fill: "#71717a", fontSize: 11 }} tickFormatter={(d: string) => d.slice(5)} />
             <YAxis tick={{ fill: "#71717a", fontSize: 11 }} tickFormatter={(v) => FMT(v)} />
-            <Tooltip
-              contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", borderRadius: "12px", fontSize: 12 }}
-              formatter={(value: any, name: any) => {
-                if (name === "services") return [FMT_RUB(value), "Услуги (накопл.)"];
-                if (name === "products") return [FMT_RUB(value), "Товары (накопл.)"];
-                if (name === "scheduled") return [FMT_RUB(value), "Запланировано (накопл.)"];
-                if (name === "break_even") return [FMT_RUB(value), "Мин. маржинальность"];
-                if (name === "daily_plan_cum") return [FMT_RUB(value), "Выручка под план (накопл.)"];
-                return [value, name];
-              }}
-            />
-            <Bar dataKey="services" stackId="rev" name="services" radius={[6, 6, 0, 0]} label={({ x, y, width, index }: any) => {
-              const entry = dailyCumulative[index];
-              const delta = entry?.delta || 0;
-              if (delta <= 0) return null;
-              // Три зоны: красная — день убыточен при любом распределении
-              // выручки между мастерами, жёлтая — исход зависит от него,
-              // зелёная — прибыль при любом. Границы считает сервер: они
-              // зависят от того, сколько человек было на смене.
-              const color =
-                entry.zone === "green"
-                  ? "#22c55e"
-                  : entry.zone === "amber"
-                    ? "#eab308"
-                    : "#ef4444";
-              return (
-                <g>
-                  <text x={x + width / 2} y={y - 6} fill="#000" fontSize={11} fontWeight={700} textAnchor="middle" stroke="#000" strokeWidth={3} paintOrder="stroke">{FMT_RUB(delta)}</text>
-                  <text x={x + width / 2} y={y - 6} fill={color} fontSize={11} fontWeight={700} textAnchor="middle">{FMT_RUB(delta)}</text>
-                </g>
-              );
-            }}>
+            <Tooltip cursor={{ fill: "rgba(212,168,83,0.08)" }} content={<DayTooltip />} />
+            {/* Столбец красится по зоне дня: подписей над каждым больше нет,
+                сумма и пояснение — в подсказке при наведении. */}
+            <Bar dataKey="services" stackId="rev" name="services" radius={[6, 6, 0, 0]}>
               {dailyCumulative.map((entry, i) => (
-                <Cell key={i} fill={GOLD} stroke={entry.date === todayStr ? "#22d3ee" : "transparent"} strokeWidth={entry.date === todayStr ? 2 : 0} />
+                <Cell
+                  key={i}
+                  fill={GOLD}
+                  stroke={
+                    entry.date === todayStr
+                      ? "#22d3ee"
+                      : entry.zone === "green"
+                        ? "#22c55e"
+                        : entry.zone === "amber"
+                          ? "#eab308"
+                          : entry.zone === "red"
+                            ? "#ef4444"
+                            : "transparent"
+                  }
+                  strokeWidth={entry.date === todayStr ? 2 : entry.zone ? 1.5 : 0}
+                />
               ))}
             </Bar>
             <Bar dataKey="products" stackId="rev" fill="#22c55e" name="products" radius={[0, 0, 0, 0]} />
