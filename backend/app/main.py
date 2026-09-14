@@ -19,6 +19,7 @@ from loguru import logger
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.routes.ai import router as ai_router
+from app.api.routes.barber_month import router as barber_month_router
 from app.api.routes.bookings import router as bookings_router
 from app.api.routes.client_base import router as client_base_router
 from app.api.routes.dashboard import router as dashboard_router
@@ -29,35 +30,47 @@ from app.api.routes.stories import router as stories_router
 from app.api.routes.sync import router as sync_router
 from app.config import settings
 from app.database import check_db, init_db
+from app.main_roles import ROLE_MASTER, ROLE_OPERATOR, ROLE_OWNER
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 PUBLIC_PATHS = {"/health"}
 
-ROLE_OWNER = "owner"
-ROLE_OPERATOR = "operator"
+# Что разрешено роли operator помимо статики страницы: база обзвона и общий
+# расчёт зарплаты. Список из префиксов, а не из точных путей, потому что под
+# /api/client-base лежат и задачи, и результаты звонков, и они ещё будут
+# добавляться.
+OPERATOR_API_PREFIXES = ("/api/client-base", "/api/barbers", "/api/me")
 
-# Что разрешено роли operator помимо статики страницы: только база обзвона.
-# Список из префиксов, а не из точных путей, потому что под /api/client-base
-# лежат и задачи, и результаты звонков, и они ещё будут добавляться.
-OPERATOR_API_PREFIXES = ("/api/client-base", "/api/me")
+# Мастер заходит только за своими деньгами. Внутри /api/barbers ответ ещё и
+# урезается до его собственной строки — одного лишь доступа к пути мало.
+MASTER_API_PREFIXES = ("/api/barbers", "/api/me")
 
 
-def _resolve_role(login: str, password: str) -> str | None:
-    """Вернуть роль по паре логин-пароль либо None.
+def _resolve_identity(login: str, password: str) -> tuple[str, int | None] | None:
+    """Роль и привязка к мастеру по паре логин-пароль, либо None.
 
-    Все четыре сравнения выполняются всегда, до проверки результата: иначе по
-    времени ответа можно определить, существует ли такой логин.
+    Сравнения выполняются для всех учётных записей до проверки результата:
+    иначе по времени ответа можно определить, существует ли такой логин.
     """
+    matched: tuple[str, int | None] | None = None
+
     owner_login_ok = secrets.compare_digest(login, settings.owner_login)
     owner_password_ok = secrets.compare_digest(password, settings.owner_password)
     operator_login_ok = secrets.compare_digest(login, settings.operator_login)
     operator_password_ok = secrets.compare_digest(password, settings.operator_password)
 
     if owner_login_ok and owner_password_ok:
-        return ROLE_OWNER
-    if operator_login_ok and operator_password_ok:
-        return ROLE_OPERATOR
-    return None
+        matched = (ROLE_OWNER, None)
+    elif operator_login_ok and operator_password_ok:
+        matched = (ROLE_OPERATOR, None)
+
+    for account in settings.master_accounts:
+        login_ok = secrets.compare_digest(login, str(account.get("login", "")))
+        password_ok = secrets.compare_digest(password, str(account.get("password", "")))
+        if login_ok and password_ok and matched is None:
+            matched = (ROLE_MASTER, int(account["staff_id"]))
+
+    return matched
 
 
 class BasicAuthMiddleware(BaseHTTPMiddleware):
@@ -82,21 +95,26 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
         except Exception:
             return self._challenge()
 
-        role = _resolve_role(login, password)
-        if role is None:
+        identity = _resolve_identity(login, password)
+        if identity is None:
             logger.warning(f"failed auth from {request.client.host if request.client else '?'}")
             return self._challenge()
 
+        role, staff_id = identity
         path = request.url.path
-        if role == ROLE_OPERATOR and path.startswith("/api/"):
-            if not path.startswith(OPERATOR_API_PREFIXES):
-                logger.warning(f"operator denied {path}")
-                return JSONResponse(
-                    status_code=403,
-                    content={"detail": "Недостаточно прав для этого раздела"},
-                )
+        allowed = {
+            ROLE_OPERATOR: OPERATOR_API_PREFIXES,
+            ROLE_MASTER: MASTER_API_PREFIXES,
+        }.get(role)
+        if allowed is not None and path.startswith("/api/") and not path.startswith(allowed):
+            logger.warning(f"{role} denied {path}")
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "Недостаточно прав для этого раздела"},
+            )
 
         request.state.role = role
+        request.state.staff_id = staff_id
         return await call_next(request)
 
     @staticmethod
@@ -156,6 +174,7 @@ app.add_middleware(
 
 for r in (
     ai_router,
+    barber_month_router,
     bookings_router,
     client_base_router,
     dashboard_router,
@@ -182,8 +201,21 @@ async def health() -> dict:
 
 @app.get("/api/me")
 async def me(request: Request) -> dict:
-    """Роль текущего пользователя — по ней интерфейс решает, что показывать."""
-    return {"role": getattr(request.state, "role", ROLE_OPERATOR)}
+    """Кто вошёл — по этому интерфейс решает, что показывать."""
+    staff_id = getattr(request.state, "staff_id", None)
+    name = next(
+        (
+            r["name"]
+            for r in settings.barber_payroll_rules
+            if int(r["staff_id"]) == staff_id
+        ),
+        None,
+    )
+    return {
+        "role": getattr(request.state, "role", ROLE_MASTER),
+        "staff_id": staff_id,
+        "name": name,
+    }
 
 
 @app.get("/api/info")

@@ -82,6 +82,22 @@ class Settings(BaseSettings):
     operator_login: str
     operator_password: str
 
+    # Учётные записи мастеров: каждый видит только свою зарплату. Задаются
+    # списком в .env, потому что состав команды меняется чаще, чем код.
+    # Формат: [{"login": "ksenia", "password": "...", "staff_id": 5659614}]
+    master_accounts: list[dict] = []
+
+    # Барберы и условия их оплаты. Управляющий сюда не входит: он на окладе,
+    # и в статистике мастеров ему делать нечего.
+    barber_payroll_rules: list[dict] = [
+        {"staff_id": 5659614, "name": "Ксения", "service_rate": 0.4,
+         "product_rate": 0.1, "guarantee": 4000},
+        {"staff_id": 5659611, "name": "Арташ", "service_rate": 0.4,
+         "product_rate": 0.1, "guarantee": 5000},
+        {"staff_id": 5659617, "name": "Дмитрий", "service_rate": 0.4,
+         "product_rate": 0.1, "guarantee": 4000},
+    ]
+
     # -- Telegram --
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
@@ -115,6 +131,37 @@ class Settings(BaseSettings):
             raise ValueError(
                 "POSTGRES_PASSWORD is a known weak/default value. Set a unique password in .env."
             )
+        return v
+
+    @field_validator("master_accounts")
+    @classmethod
+    def _check_master_accounts(cls, v: list[dict]) -> list[dict]:
+        """Учётная запись мастера бесполезна и опасна без привязки к человеку.
+
+        Без staff_id роль не знает, чью зарплату показывать, и показала бы
+        либо ничью, либо всех. Пароли проверяются на длину так же, как у
+        остальных: это доступ к деньгам, пусть и к своим.
+        """
+        seen_logins: set[str] = set()
+        seen_staff: set[int] = set()
+        for account in v:
+            login = str(account.get("login", "")).strip()
+            password = str(account.get("password", ""))
+            staff_id = account.get("staff_id")
+            if not login:
+                raise ValueError("MASTER_ACCOUNTS: у записи нет логина")
+            if login in seen_logins:
+                raise ValueError(f"MASTER_ACCOUNTS: логин {login} повторяется")
+            if not isinstance(staff_id, int) or staff_id <= 0:
+                raise ValueError(f"MASTER_ACCOUNTS: у {login} нет staff_id")
+            if staff_id in seen_staff:
+                raise ValueError(f"MASTER_ACCOUNTS: staff_id {staff_id} повторяется")
+            if _is_known_weak(password) or len(password) < 12:
+                raise ValueError(
+                    f"MASTER_ACCOUNTS: пароль {login} слабый или короче 12 символов"
+                )
+            seen_logins.add(login)
+            seen_staff.add(staff_id)
         return v
 
     @property

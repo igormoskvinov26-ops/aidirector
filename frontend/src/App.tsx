@@ -17,12 +17,16 @@ import {
   Moon,
   Save,
   CalendarClock,
+  Wallet,
   RefreshCw,
 } from "lucide-react";
 import ClientBasePage from "./ClientBasePage";
+import BarberMonthPage from "./BarberMonthPage";
 import logo from "./assets/logo.png";
 
 // ── Types ──
+type Role = "owner" | "operator" | "master";
+
 interface DailyFinancePoint {
   date: string;
   revenue: number;
@@ -105,13 +109,19 @@ interface PlanFactSummary {
 const GOLD = "#d4a853";
 
 // ── Navigation ──
-// Роль оператора видит единственный раздел. Ограничение продублировано на
-// сервере: прятать пункты меню — это удобство, а не защита.
-const OPERATOR_PAGES = ["clients"];
+// Какие разделы видит каждая роль. Ограничение продублировано на сервере:
+// прятать пункты меню — это удобство, а не защита. Мастер, зашедший по
+// прямому адресу, всё равно получит от сервера только свою строку.
+const PAGES_BY_ROLE: Record<string, string[]> = {
+  owner: ["planfact", "bookings", "payroll", "clients"],
+  operator: ["payroll", "clients"],
+  master: ["payroll"],
+};
 
 const NAV = [
   { id: "planfact", label: "План-факт", icon: CreditCard },
   { id: "bookings", label: "Будущие записи", icon: CalendarClock },
+  { id: "payroll", label: "Расчёт ЗП", icon: Wallet },
   { id: "clients", label: "Клиенты", icon: Users },
 ];
 
@@ -938,8 +948,9 @@ function BookingsPage() {
 
 export default function App() {
   const [loading, setLoading] = useState(true);
-  const [role, setRole] = useState<"owner" | "operator">("operator");
-  const [page, setPage] = useState("planfact");
+  const [role, setRole] = useState<Role>("master");
+  const [userName, setUserName] = useState<string | null>(null);
+  const [page, setPage] = useState("payroll");
   const [theme, setTheme] = useState<"dark" | "light">(() => {
     if (typeof window !== "undefined") {
       return localStorage.getItem("rubl-theme") === "light" ? "light" : "dark";
@@ -957,18 +968,23 @@ export default function App() {
     // вкладка откроется. Данные каждая вкладка грузит сама — общей загрузки
     // здесь больше нет.
     (async () => {
-      let resolved: "owner" | "operator" = "operator";
+      // Роль по умолчанию — самая узкая: если сервер не ответил, лучше
+      // показать меньше, чем случайно показать чужое.
+      let resolved: Role = "master";
       try {
         const r = await fetch("/api/me");
         if (r.ok) {
           const body = await r.json();
-          resolved = body.role === "owner" ? "owner" : "operator";
+          if (body.role === "owner" || body.role === "operator" || body.role === "master") {
+            resolved = body.role;
+          }
+          setUserName(body.name ?? null);
         }
       } catch (err) {
         console.error("Не удалось определить роль:", err);
       }
       setRole(resolved);
-      if (resolved !== "owner") setPage("clients");
+      setPage(PAGES_BY_ROLE[resolved][0]);
       setLoading(false);
     })();
   }, []);
@@ -991,9 +1007,7 @@ export default function App() {
           </div>
 
           <nav className="space-y-1">
-            {NAV.filter(
-              (item) => role === "owner" || OPERATOR_PAGES.includes(item.id),
-            ).map((item) => {
+            {NAV.filter((item) => PAGES_BY_ROLE[role].includes(item.id)).map((item) => {
               const Icon = item.icon;
               const active = page === item.id;
               return (
@@ -1025,16 +1039,33 @@ export default function App() {
             {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
             {theme === "dark" ? "Светлая тема" : "Тёмная тема"}
           </button>
-          <div className="text-xs text-gray-400 dark:text-zinc-600 mt-3">v1.0.0</div>
+          {/* Кто вошёл. Мастеру это важнее всего: он должен видеть, что перед
+              ним его собственный расчёт, а не чужой. */}
+          <div className="text-xs text-gray-400 dark:text-zinc-600 mt-3">
+            {userName
+              ? userName
+              : role === "owner"
+                ? "Владелец"
+                : role === "operator"
+                  ? "Администратор"
+                  : "Мастер"}
+          </div>
         </div>
       </aside>
 
       {/* Main */}
       <main className="flex-1 ml-60 p-8 min-h-screen">
         <div className="max-w-[1280px] mx-auto">
-          {role === "owner" && page === "planfact" && <PlanFactPage />}
-          {role === "owner" && page === "bookings" && <BookingsPage />}
-          {page === "clients" && <ClientBasePage />}
+          {/* Каждая страница показывается, только если роль её действительно
+              имеет. Список ролей один, и меню, и маршрутизация читают его. */}
+          {PAGES_BY_ROLE[role].includes(page) && (
+            <>
+              {page === "planfact" && <PlanFactPage />}
+              {page === "bookings" && <BookingsPage />}
+              {page === "payroll" && <BarberMonthPage payroll />}
+              {page === "clients" && <ClientBasePage />}
+            </>
+          )}
         </div>
       </main>
     </div>

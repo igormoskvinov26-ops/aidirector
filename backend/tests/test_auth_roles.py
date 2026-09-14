@@ -13,7 +13,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.config import settings
-from app.main import ROLE_OPERATOR, ROLE_OWNER, BasicAuthMiddleware, _resolve_role
+from app.main import BasicAuthMiddleware, _resolve_identity
+from app.main_roles import ROLE_MASTER, ROLE_OPERATOR, ROLE_OWNER
 
 
 def _auth(login: str, password: str) -> dict[str, str]:
@@ -43,6 +44,10 @@ def client() -> TestClient:
     async def finance() -> dict:
         return {"revenue": 1}
 
+    @app.get("/api/barbers/payroll")
+    async def payroll() -> dict:
+        return {"masters": []}
+
     @app.get("/api/brand-new-route")
     async def brand_new() -> dict:
         return {"ok": True}
@@ -54,15 +59,29 @@ def client() -> TestClient:
     return TestClient(app)
 
 
-def test_resolve_role_distinguishes_accounts():
-    assert _resolve_role(settings.owner_login, settings.owner_password) == ROLE_OWNER
-    assert _resolve_role(settings.operator_login, settings.operator_password) == ROLE_OPERATOR
+def test_resolve_identity_distinguishes_accounts():
+    assert _resolve_identity(settings.owner_login, settings.owner_password) == (ROLE_OWNER, None)
+    assert _resolve_identity(settings.operator_login, settings.operator_password) == (
+        ROLE_OPERATOR,
+        None,
+    )
 
 
-def test_resolve_role_rejects_crossed_credentials():
+def test_resolve_identity_rejects_crossed_credentials():
     """Логин одной записи с паролем другой не должен подходить никуда."""
-    assert _resolve_role(settings.owner_login, settings.operator_password) is None
-    assert _resolve_role(settings.operator_login, settings.owner_password) is None
+    assert _resolve_identity(settings.owner_login, settings.operator_password) is None
+    assert _resolve_identity(settings.operator_login, settings.owner_password) is None
+
+
+def test_master_account_carries_its_staff_id(monkeypatch):
+    """Роль мастера бесполезна без привязки: иначе непонятно, чью зарплату дать."""
+    monkeypatch.setattr(
+        settings,
+        "master_accounts",
+        [{"login": "ksenia", "password": "master-password-x", "staff_id": 5659614}],
+    )
+    assert _resolve_identity("ksenia", "master-password-x") == (ROLE_MASTER, 5659614)
+    assert _resolve_identity("ksenia", "wrong-password") is None
 
 
 def test_health_is_public(client):
@@ -93,6 +112,24 @@ def test_operator_reaches_call_base(client):
 def test_operator_denied_finance(client):
     r = client.get("/api/finance/daily", headers=OPERATOR)
     assert r.status_code == 403
+
+
+def test_operator_reaches_payroll(client):
+    """Администратор видит зарплату всех — это его работа."""
+    assert client.get("/api/barbers/payroll", headers=OPERATOR).status_code == 200
+
+
+def test_master_reaches_only_payroll(client, monkeypatch):
+    monkeypatch.setattr(
+        settings,
+        "master_accounts",
+        [{"login": "ksenia", "password": "master-password-x", "staff_id": 5659614}],
+    )
+    master = _auth("ksenia", "master-password-x")
+    assert client.get("/api/barbers/payroll", headers=master).status_code == 200
+    assert client.get("/api/finance/daily", headers=master).status_code == 403
+    assert client.get("/api/client-base/tasks", headers=master).status_code == 403
+    assert client.get("/api/brand-new-route", headers=master).status_code == 403
 
 
 def test_unlisted_route_is_closed_for_operator_by_default(client):
