@@ -7,18 +7,21 @@
 Личные данные не печатаются: только названия статей, суммы и даты. Вывод
 можно показывать кому угодно.
 
-Запуск — из папки проекта, скрипт скармливается контейнеру на вход, потому
-что внутрь образа папка scripts не попадает:
+Docker не нужен: скрипту хватает трёх ключей YCLIENTS из .env, база и вход
+он не трогает. Запуск из папки проекта:
+
+    cd backend && uv run python "../scripts/показать-расходы.py"
+
+Если Директор уже работает в контейнере, можно и через него — папка scripts
+внутрь образа не попадает, поэтому файл подаётся на вход:
 
     docker compose -f local/docker-compose.yml --env-file .env \
         exec -T director python - < "scripts/показать-расходы.py"
-
-Без Docker:
-    cd backend && python "../scripts/показать-расходы.py"
 """
 
 import asyncio
 import json
+import os
 import sys
 from collections import defaultdict
 from datetime import date, timedelta
@@ -33,7 +36,61 @@ try:
 except NameError:
     pass
 
-from app.api.yclients import YClientsClient  # noqa: E402
+# Настройки приложения требуют пароли к базе, логины входа и учётные записи
+# мастеров. Скрипту не нужно ничего из этого: он только спрашивает YCLIENTS.
+# Подставляем заглушки, чтобы для запуска хватило трёх ключей, а не всего
+# .env целиком. Ключи YCLIENTS здесь не трогаются — они читаются как обычно.
+for имя, заглушка in (
+    ("POSTGRES_PASSWORD", "этим-скриптом-база-не-используется"),
+    ("OWNER_LOGIN", "не-используется"),
+    ("OWNER_PASSWORD", "этим-скриптом-вход-не-используется"),
+    ("OPERATOR_LOGIN", "не-используется"),
+    ("OPERATOR_PASSWORD", "этим-скриптом-вход-не-используется"),
+    ("MASTER_ACCOUNTS", "[]"),
+):
+    os.environ[имя] = заглушка
+
+ПОДСКАЗКА = (
+    "Заполните в файле .env три строки:\n"
+    "    YCLIENTS_PARTNER_TOKEN=\n"
+    "    YCLIENTS_COMPANY_ID=\n"
+    "    YCLIENTS_USER_TOKEN=\n"
+    "Остальное этому скрипту не нужно: базу и вход он не трогает.\n"
+    "Ключи лежат в настройках YCLIENTS или в .env работающей установки."
+)
+
+# Настройки проверяются при загрузке, и незаполненный .env роняет импорт
+# ещё до первой строки main. Трейсбек pydantic человеку ничего не говорит,
+# поэтому ошибку перехватываем здесь и объясняем словами.
+try:
+    from app.api.yclients import YClientsClient
+    from app.config import settings
+except Exception as ошибка:  # noqa: BLE001 — причина печатается целиком
+    print("Не удалось прочитать настройки.\n")
+    print(ПОДСКАЗКА)
+    print(f"\nЧто именно не понравилось:\n{ошибка}")
+    sys.exit(1)
+
+
+def проверить_ключи() -> bool:
+    """Сказать прямо, каких ключей не хватает, вместо невнятной ошибки."""
+    пусто = [
+        имя
+        for имя, значение in (
+            ("YCLIENTS_PARTNER_TOKEN", settings.yclients_partner_token),
+            ("YCLIENTS_USER_TOKEN", settings.yclients_user_token),
+        )
+        if not значение or значение.startswith("<")
+    ]
+    if not settings.yclients_company_id:
+        пусто.append("YCLIENTS_COMPANY_ID")
+    if пусто:
+        print("В файле .env не заполнены ключи YCLIENTS:")
+        for имя in пусто:
+            print(f"    {имя}")
+        print("\n" + ПОДСКАЗКА)
+        return False
+    return True
 
 # Смотрим прошлый месяц целиком и текущий по сегодня. Прошлый — главный: в нём
 # картина полная, и по нему видно, попала ли аренда в выгрузку.
@@ -168,4 +225,5 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    if проверить_ключи():
+        asyncio.run(main())
