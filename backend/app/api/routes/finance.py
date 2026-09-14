@@ -12,6 +12,7 @@ from app.services.finance import (
     get_daily_finance,
     get_hourly_finance,
     get_monthly_finance,
+    get_plan_fact,
     set_monthly_plan,
 )
 
@@ -44,6 +45,14 @@ async def monthly(
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
     return await get_monthly_finance(db, year)
+
+
+@router.get("/plan-fact")
+async def plan_fact(
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Сводка текущего месяца: факт, план и таблица по составу смены."""
+    return await get_plan_fact(db)
 
 
 @router.get("/plan")

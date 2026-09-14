@@ -7,7 +7,7 @@ from decimal import Decimal
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.models import PlanTarget, Sale, Visit
+from app.models.models import PlanTarget, Sale, SaleItem, Visit
 
 WORKING_HOURS = range(10, 22)
 DB_HOUR_SHIFT = 1
@@ -75,6 +75,8 @@ def _break_even_revenue(num_masters: int) -> Decimal:
     return rev_low
 
 
+# Ориентир для интерфейса, пока данные не загружены. В ответы по дням не
+# попадает: там всегда считается по фактическому числу мастеров.
 DAILY_BREAK_EVEN = _break_even_revenue(DEFAULT_MASTERS)
 
 
@@ -145,7 +147,9 @@ async def get_daily_finance(
             "masters_count": num_masters,
             "margin_rub": float(margin["margin_rub"]),
             "margin_pct": float(margin["margin_pct"]),
-            "break_even": float(DAILY_BREAK_EVEN),
+            # Порог по фактическому числу мастеров в этот день, а не константа:
+            # смена из одного человека и смена из трёх окупаются по-разному.
+            "break_even": float(margin["break_even"]),
             "costs": {k: float(v) for k, v in margin["costs"].items()},
         })
 
@@ -168,12 +172,157 @@ async def get_daily_finance(
                 "masters_count": 0,
                 "margin_rub": 0,
                 "margin_pct": 0,
-                "break_even": float(DAILY_BREAK_EVEN),
+                "break_even": float(_break_even_revenue(1)),
                 "costs": {"fixed": 0, "variable": 0, "master_commission": 0, "total": 0},
             })
         current += timedelta(days=1)
 
     return filled
+
+
+async def get_plan_fact(session: AsyncSession) -> dict:
+    """Сводка текущего месяца для вкладки «План-факт».
+
+    Возвращает три вещи: что уже заработано с начала месяца, какой стоит план
+    и таблицу по количеству мастеров на смене — порог безубыточности, сколько
+    нужно зарабатывать в день, чтобы догнать план, и сколько выходит на самом
+    деле в дни с таким составом смены.
+    """
+    today = date.today()
+    period = today.strftime("%Y-%m")
+    days_in_month = _days_in_month(today.year, today.month)
+    month_start = today.replace(day=1)
+    month_end = today.replace(day=days_in_month)
+
+    services = await _month_services(session, month_start, month_end)
+    products = await _month_products(session, month_start, month_end)
+    plan = await get_current_month_plan(session)
+
+    earned = services["amount"] + products["amount"]
+    target = Decimal(str(plan["revenue_target"]))
+
+    # Догоняющий план: остаток делится на оставшиеся дни, включая сегодняшний.
+    # Делить месячный план на все дни месяца нельзя — к середине месяца такая
+    # цифра перестаёт отвечать на вопрос «сколько нужно сегодня».
+    days_left = days_in_month - today.day + 1
+    remaining = max(target - earned, Decimal("0"))
+    required_daily = Decimal("0")
+    if target > 0:
+        required_daily = (remaining / days_left).quantize(Decimal("0.01"))
+
+    fact_by_masters = await _fact_daily_average_by_masters(session, month_start, today)
+    masters_today = await _get_masters_count(session, today)
+
+    rows = []
+    for masters in (1, 2, 3):
+        fact = fact_by_masters.get(masters)
+        rows.append({
+            "masters": masters,
+            "break_even_daily": float(_break_even_revenue(masters)),
+            # Сумма для плана от состава смены не зависит: план один на месяц.
+            # Осмысленным в разрезе смены становится второе число — сколько
+            # при этом должен сделать каждый мастер.
+            "plan_daily_required": float(required_daily),
+            "plan_per_master": float((required_daily / masters).quantize(Decimal("0.01"))),
+            "fact_daily_avg": float(fact["avg"]) if fact else None,
+            "fact_days": fact["days"] if fact else 0,
+            "is_today": masters == masters_today,
+        })
+
+    return {
+        "period": period,
+        "today": today.isoformat(),
+        "days_in_month": days_in_month,
+        "days_passed": today.day,
+        "days_left": days_left,
+        "masters_today": masters_today,
+        "fact": {
+            "earned_total": float(earned),
+            "services_amount": float(services["amount"]),
+            "services_count": services["count"],
+            "products_amount": float(products["amount"]),
+            "products_units": products["units"],
+        },
+        "plan": {
+            "revenue_target": float(target),
+            "remaining": float(remaining),
+            "required_daily": float(required_daily),
+            "completion_pct": float(
+                (earned / target * 100).quantize(Decimal("0.1"))
+            ) if target > 0 else 0.0,
+        },
+        "rows": rows,
+    }
+
+
+async def _month_services(session: AsyncSession, date_from: date, date_to: date) -> dict:
+    """Выполненные услуги за период: сумма и количество записей."""
+    day_label = func.date(Visit.datetime)
+    row = (await session.execute(
+        select(
+            func.coalesce(func.sum(Visit.total_amount), 0).label("amount"),
+            func.count(Visit.id).label("count"),
+        ).where(
+            day_label >= date_from,
+            day_label <= date_to,
+            Visit.status.in_(COMPLETED_STATUSES),
+        )
+    )).one()
+    return {"amount": Decimal(str(row.amount or 0)), "count": int(row.count or 0)}
+
+
+async def _month_products(session: AsyncSession, date_from: date, date_to: date) -> dict:
+    """Продажи косметики за период: сумма и количество штук.
+
+    Сумма берётся из чеков, а штуки — из позиций в них: один чек может
+    содержать несколько единиц, и считать чеки вместо единиц значит занижать.
+    """
+    sale_day = func.date(Sale.datetime)
+    amount = await session.scalar(
+        select(func.coalesce(func.sum(Sale.total_amount), 0)).where(
+            sale_day >= date_from,
+            sale_day <= date_to,
+        )
+    )
+    units = await session.scalar(
+        select(func.coalesce(func.sum(SaleItem.quantity), 0))
+        .select_from(SaleItem)
+        .join(Sale, SaleItem.sale_id == Sale.id)
+        .where(
+            sale_day >= date_from,
+            sale_day <= date_to,
+        )
+    )
+    return {"amount": Decimal(str(amount or 0)), "units": int(units or 0)}
+
+
+async def _fact_daily_average_by_masters(
+    session: AsyncSession,
+    date_from: date,
+    date_to: date,
+) -> dict[int, dict]:
+    """Средняя выручка дня в разрезе количества мастеров на смене.
+
+    Считается только по прошедшим дням, в которые была хоть какая-то выручка:
+    выходные и пустые дни занижали бы среднее, отвечая не на тот вопрос.
+    """
+    days = await get_daily_finance(session, date_from, date_to)
+
+    buckets: dict[int, list[Decimal]] = {}
+    for day in days:
+        masters = int(day["masters_count"] or 0)
+        earned = Decimal(str(day["completed"])) + Decimal(str(day["product_sales"]))
+        if masters <= 0 or earned <= 0:
+            continue
+        buckets.setdefault(masters, []).append(earned)
+
+    return {
+        masters: {
+            "avg": (sum(values) / len(values)).quantize(Decimal("0.01")),
+            "days": len(values),
+        }
+        for masters, values in buckets.items()
+    }
 
 
 async def get_monthly_finance(

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   BarChart,
   Bar,
@@ -12,6 +12,8 @@ import {
   PieChart,
   Pie,
   Cell,
+  ComposedChart,
+  Line,
 } from "recharts";
 import {
   LayoutDashboard,
@@ -19,7 +21,6 @@ import {
   Scissors,
   CreditCard,
   Sparkles,
-  TrendingUp,
   TrendingDown,
   DollarSign,
   Percent,
@@ -27,12 +28,13 @@ import {
   ShoppingBag,
   Zap,
   ChevronRight,
-  BarChart3,
   Activity,
   ArrowUpRight,
   ArrowDownRight,
   Sun,
   Moon,
+  Save,
+  RefreshCw,
 } from "lucide-react";
 import ClientBasePage from "./ClientBasePage";
 import logo from "./assets/logo.png";
@@ -84,6 +86,61 @@ const fmt = (n: string | number): string => {
   return String(Math.round(num));
 };
 
+interface DailyFinancePoint {
+  date: string;
+  revenue: number;
+  completed: number;
+  scheduled: number;
+  product_sales: number;
+  total_visits: number;
+  completed_visits: number;
+  masters_count: number;
+  margin_rub: number;
+  margin_pct: number;
+  break_even: number;
+  costs: { fixed: number; variable: number; master_commission: number; total: number };
+}
+
+interface PlanData {
+  period: string;
+  revenue_target: number;
+  margin_target_pct: number;
+}
+
+/** Ответ /api/finance/plan-fact — сводка месяца и разбивка по составу смены. */
+interface PlanFactRow {
+  masters: number;
+  break_even_daily: number;
+  plan_daily_required: number;
+  plan_per_master: number;
+  fact_daily_avg: number | null;
+  fact_days: number;
+  is_today: boolean;
+}
+
+interface PlanFactSummary {
+  period: string;
+  today: string;
+  days_in_month: number;
+  days_passed: number;
+  days_left: number;
+  masters_today: number;
+  fact: {
+    earned_total: number;
+    services_amount: number;
+    services_count: number;
+    products_amount: number;
+    products_units: number;
+  };
+  plan: {
+    revenue_target: number;
+    remaining: number;
+    required_daily: number;
+    completion_pct: number;
+  };
+  rows: PlanFactRow[];
+}
+
 const GOLD = "#d4a853";
 
 // ── Navigation ──
@@ -92,11 +149,11 @@ const GOLD = "#d4a853";
 const OPERATOR_PAGES = ["clientbase"];
 
 const NAV = [
+  { id: "planfact", label: "План-факт", icon: CreditCard },
   { id: "dashboard", label: "Дашборд", icon: LayoutDashboard },
   { id: "masters", label: "Мастера", icon: Scissors },
   { id: "clients", label: "Клиенты", icon: Users },
   { id: "clientbase", label: "Клиентская база", icon: Users },
-  { id: "finance", label: "Финансы", icon: CreditCard },
   { id: "ai", label: "AI Отчёт", icon: Sparkles },
 ];
 
@@ -495,65 +552,453 @@ function SegmentCard({
   );
 }
 
-function FinancePage() {
+function PlanFactPage() {
+  const [hourly, setHourly] = useState<any[]>([]);
+  const [daily, setDaily] = useState<DailyFinancePoint[]>([]);
+  const [plan, setPlan] = useState<PlanData>({ period: "", revenue_target: 0, margin_target_pct: 30 });
+  const [summary, setSummary] = useState<PlanFactSummary | null>(null);
+  const [planInput, setPlanInput] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  const now = new Date();
+  const todayStr = now.toISOString().split("T")[0];
+  const currentPeriod = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const year = now.getFullYear();
+  const monthStart = `${year}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+  const monthEnd = `${year}-${String(now.getMonth() + 1).padStart(2, "0")}-${new Date(year, now.getMonth() + 1, 0).getDate()}`;
+
+  const fetchData = async () => {
+    setLoading(true);
+    try {
+      const [hRes, dRes, pRes, sRes] = await Promise.all([
+        fetch(`/api/finance/hourly?date=${todayStr}`),
+        fetch(`/api/finance/daily?date_from=${monthStart}&date_to=${monthEnd}`),
+        fetch("/api/finance/plan"),
+        fetch("/api/finance/plan-fact"),
+      ]);
+      setHourly(await hRes.json());
+      setDaily(await dRes.json());
+      const p = await pRes.json();
+      setPlan(p);
+      setPlanInput(p.revenue_target > 0 ? String(Math.round(p.revenue_target)) : "");
+      setSummary(await sRes.json());
+    } catch (e) {
+      console.error("Finance fetch error", e);
+    }
+    setLoading(false);
+  };
+
+  // Один раз при открытии вкладки. Перечитывание — по кнопке «Обновить
+  // данные», поэтому fetchData намеренно не в зависимостях: иначе загрузка
+  // пойдёт на каждую перерисовку.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { fetchData(); }, []);
+
+  const savePlan = async () => {
+    const val = parseFloat(planInput);
+    if (isNaN(val) || val <= 0) return;
+    try {
+      await fetch("/api/finance/plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ period: currentPeriod, revenue_target: val, margin_target_pct: plan.margin_target_pct }),
+      });
+      setPlan({ ...plan, revenue_target: val });
+      await fetchData();
+    } catch (e) {
+      console.error("Plan save error", e);
+    }
+  };
+
+  const daysInMonth = new Date(year, now.getMonth() + 1, 0).getDate();
+  const dailyPlan = plan.revenue_target > 0 ? Math.round(plan.revenue_target / daysInMonth) : 0;
+  const breakEvenDaily = hourly.length > 0 ? hourly[0].break_even : 19500;
+  const todayRevenue = hourly.reduce((s: number, h: any) => s + h.completed + h.scheduled, 0);
+  const mastersToday = hourly.length > 0 ? hourly[0].masters_count : 0;
+
+  const FMT = (n: number): string => {
+    if (Math.abs(n) >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
+    if (Math.abs(n) >= 1_000) return Math.round(n / 1000) + "K";
+    return String(Math.round(n));
+  };
+  const FMT_RUB = (n: number): string => FMT(n) + " ₽";
+  // Точный формат для сводки и таблицы: округление до тысяч уместно на осях
+  // графика, но не в числе «сколько нужно заработать, чтобы выйти в ноль».
+  const RUB = (n: number): string => Math.round(n).toLocaleString("ru-RU") + " ₽";
+
+  const nowHour = `${now.getHours()}:00`;
+
+  const hourlyCumulative = useMemo(() => {
+    let cumCompleted = 0;
+    let cumScheduled = 0;
+    let cumProducts = 0;
+    return hourly.map((h) => {
+      cumCompleted += h.completed;
+      cumProducts += (h.product_sales || 0);
+      cumScheduled += h.scheduled;
+      return { ...h, services: cumCompleted, products: cumProducts, scheduled: cumScheduled };
+    });
+  }, [hourly]);
+
+  const dailyPlanRequired = plan.revenue_target > 0 ? Math.round(plan.revenue_target / daysInMonth) : 0;
+
+  const dailyCumulative = useMemo(() => {
+    let cumServices = 0;
+    let cumProducts = 0;
+    let cumScheduled = 0;
+    let cumBE = 0;
+    let cumPlan = 0;
+    return daily.map((d) => {
+      cumServices += d.completed;
+      cumProducts += (d.product_sales || 0);
+      cumScheduled += d.scheduled;
+      cumBE += d.break_even;
+      cumPlan += dailyPlanRequired;
+      const delta = d.completed + (d.product_sales || 0);
+      return {
+        ...d,
+        services: cumServices,
+        products: cumProducts,
+        scheduled: cumScheduled,
+        break_even: cumBE,
+        daily_plan_cum: dailyPlanRequired > 0 ? cumPlan : 0,
+        delta,
+      };
+    });
+  }, [daily, dailyPlanRequired]);
+
+  if (loading) return <Spinner />;
+
   return (
     <div className="animate-in">
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold tracking-tight mb-1">Финансы</h1>
-        <p className="text-gray-500 dark:text-zinc-500 text-sm">P&L и ключевые показатели</p>
+      {/* Header with plan input */}
+      <div className="mb-6 flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight mb-1">План-факт</h1>
+          <p className="text-gray-500 dark:text-zinc-500 text-sm">Маржинальность, точка безубыточности, план/факт</p>
+        </div>
+        <div className="flex items-end gap-3">
+          <div>
+            {/* Единицы подписаны не случайно: раньше поле принимало голое
+                число, и «500» вместо 500 000 молча превращалось в план
+                в пятьсот рублей. */}
+            <label className="block text-[11px] uppercase tracking-wider text-gray-500 dark:text-zinc-500 mb-1">
+              План на месяц, ₽
+            </label>
+            <input
+              type="number"
+              value={planInput}
+              onChange={(e) => setPlanInput(e.target.value)}
+              placeholder="например, 500000"
+              className="w-40 bg-gray-100 dark:bg-zinc-900 border border-gray-300 dark:border-zinc-700 rounded-lg px-3 py-2 text-sm text-right focus:outline-none focus:border-rubl-accent"
+            />
+          </div>
+          <button
+            onClick={fetchData}
+            disabled={loading}
+            className="flex items-center gap-1.5 border border-gray-300 dark:border-zinc-700 hover:border-rubl-accent px-4 py-2 rounded-lg text-sm transition-all disabled:opacity-50"
+          >
+            <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
+            Обновить данные
+          </button>
+          <button
+            onClick={savePlan}
+            className="flex items-center gap-1.5 bg-rubl-accent hover:bg-rubl-accent/90 text-black font-semibold px-4 py-2 rounded-lg text-sm transition-all"
+          >
+            <Save size={14} />
+            Сохранить
+          </button>
+        </div>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <KpiCard label="Выручка" value="0" icon={DollarSign} prefix="₽" />
-        <KpiCard label="Прибыль" value="0" icon={TrendingUp} prefix="₽" trend="up" />
-        <KpiCard label="Расходы" value="0" icon={TrendingDown} prefix="₽" />
-        <KpiCard label="EBITDA" value="0" icon={BarChart3} prefix="₽" />
-        <KpiCard label="ФОТ" value="0" icon={Users} prefix="₽" />
-        <KpiCard label="Аренда" value="0" icon={CreditCard} prefix="₽" />
-        <KpiCard label="Маркетинг" value="0" icon={Zap} prefix="₽" />
-        <KpiCard label="Маржа" value="0" icon={Percent} suffix="%" />
+      {/* Сводка месяца и таблица по составу смены */}
+      {summary && (
+        <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-6 mb-6">
+          <div className="flex flex-wrap items-baseline justify-between gap-3 mb-5">
+            <h3 className="text-sm font-semibold uppercase tracking-widest text-gray-500 dark:text-zinc-400">
+              С начала месяца — {summary.period}
+            </h3>
+            <span className="text-xs text-gray-500 dark:text-zinc-500">
+              прошло {summary.days_passed} из {summary.days_in_month} дней · осталось {summary.days_left}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+            <SumCard
+              label="Заработано всего"
+              value={RUB(summary.fact.earned_total)}
+              note={
+                summary.plan.revenue_target > 0
+                  ? `${summary.plan.completion_pct}% плана · осталось ${RUB(summary.plan.remaining)}`
+                  : "план на месяц не задан"
+              }
+              accent
+            />
+            <SumCard
+              label="Выполнено записей"
+              value={String(summary.fact.services_count)}
+              note={`на ${RUB(summary.fact.services_amount)}`}
+            />
+            <SumCard
+              label="Продано косметики"
+              value={`${summary.fact.products_units} шт`}
+              note={`на ${RUB(summary.fact.products_amount)}`}
+            />
+            <SumCard
+              label="Нужно в день"
+              value={summary.plan.required_daily > 0 ? RUB(summary.plan.required_daily) : "—"}
+              note={
+                summary.plan.required_daily > 0
+                  ? `чтобы догнать план за ${summary.days_left} дн.`
+                  : "задайте план на месяц"
+              }
+            />
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm min-w-[560px]">
+              <thead>
+                <tr className="text-left text-[11px] uppercase tracking-wider text-gray-500 dark:text-zinc-500">
+                  <th className="pb-2 pr-4 font-semibold">Мастеров на смене</th>
+                  <th className="pb-2 px-4 font-semibold">Маржинальность</th>
+                  <th className="pb-2 px-4 font-semibold">План</th>
+                  <th className="pb-2 pl-4 font-semibold">Факт</th>
+                </tr>
+              </thead>
+              <tbody>
+                {summary.rows.map((row) => (
+                  <tr
+                    key={row.masters}
+                    className={
+                      row.is_today
+                        ? "bg-rubl-accent/10 border-l-2 border-rubl-accent"
+                        : "border-l-2 border-transparent"
+                    }
+                  >
+                    <td className="py-3 pr-4">
+                      <span className="font-semibold">{row.masters}</span>
+                      {row.is_today && (
+                        <span className="ml-2 text-[11px] text-rubl-accent uppercase tracking-wider">
+                          сегодня
+                        </span>
+                      )}
+                    </td>
+                    <td className="py-3 px-4">
+                      <div className="font-semibold">{RUB(row.break_even_daily)}</div>
+                      <div className="text-xs text-gray-500 dark:text-zinc-500">день в ноль</div>
+                    </td>
+                    <td className="py-3 px-4">
+                      {row.plan_daily_required > 0 ? (
+                        <>
+                          <div className="font-semibold">{RUB(row.plan_daily_required)}</div>
+                          <div className="text-xs text-gray-500 dark:text-zinc-500">
+                            по {RUB(row.plan_per_master)} на мастера
+                          </div>
+                        </>
+                      ) : (
+                        <span className="text-gray-400 dark:text-zinc-600">—</span>
+                      )}
+                    </td>
+                    <td className="py-3 pl-4">
+                      {row.fact_daily_avg !== null ? (
+                        <>
+                          <div
+                            className={`font-semibold ${
+                              row.fact_daily_avg >= row.break_even_daily
+                                ? "text-emerald-500"
+                                : "text-red-400"
+                            }`}
+                          >
+                            {RUB(row.fact_daily_avg)}
+                          </div>
+                          <div className="text-xs text-gray-500 dark:text-zinc-500">
+                            среднее за {row.fact_days} дн.
+                          </div>
+                        </>
+                      ) : (
+                        <span className="text-gray-400 dark:text-zinc-600">
+                          таких смен не было
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Chart 1: Hourly (Today) */}
+      <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-6 mb-6">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+          <h3 className="text-sm font-semibold uppercase tracking-widest text-gray-500 dark:text-zinc-400">
+            Сегодня — {todayStr}
+          </h3>
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 dark:text-zinc-400">
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-rubl-accent" /> Услуги выполн.</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-emerald-500" /> Товары</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm border border-rubl-accent/30 bg-rubl-accent/25" /> Запланировано</span>
+            <span className="flex items-center gap-1.5"><span className="w-0.5 h-4 bg-red-500 rounded-full" /> Безубыточность {FMT_RUB(breakEvenDaily)}</span>
+            {dailyPlan > 0 && <span className="flex items-center gap-1.5"><span className="w-0.5 h-4 bg-emerald-400 rounded-full" /> План дня {FMT_RUB(dailyPlan)}</span>}
+          </div>
+        </div>
+        <ResponsiveContainer width="100%" height={320}>
+          <ComposedChart data={hourlyCumulative} barGap={2}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+            <XAxis dataKey="hour" tick={{ fill: "#71717a", fontSize: 11 }} />
+            <YAxis tick={{ fill: "#71717a", fontSize: 11 }} tickFormatter={(v) => FMT(v)} />
+            <Tooltip
+              contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", borderRadius: "12px", fontSize: 12 }}
+              formatter={(value: any, name: any) => {
+                if (name === "services") return [FMT_RUB(value), "Услуги (накопл.)"];
+                if (name === "products") return [FMT_RUB(value), "Товары (накопл.)"];
+                if (name === "scheduled") return [FMT_RUB(value), "Запланировано (накопл.)"];
+                if (name === "break_even") return [FMT_RUB(value), "Мин. маржинальность"];
+                return [value, name];
+              }}
+            />
+            <Bar dataKey="services" stackId="rev" name="services" radius={[4, 4, 0, 0]} label={({ x, y, width, index, value }: any) => {
+              const entry = hourlyCumulative[index];
+              if (!entry || entry.hour !== nowHour) return null;
+              return (
+                <g>
+                  <text x={x + width / 2} y={y - 8} fill="#000" fontSize={12} fontWeight={700} textAnchor="middle" stroke="#000" strokeWidth={3} paintOrder="stroke">{FMT_RUB(value)}</text>
+                  <text x={x + width / 2} y={y - 8} fill="#f0c060" fontSize={12} fontWeight={700} textAnchor="middle">{FMT_RUB(value)}</text>
+                </g>
+              );
+            }}>
+              {hourlyCumulative.map((entry, i) => (
+                <Cell key={i} fill={GOLD} stroke={entry.hour === nowHour ? "#22d3ee" : "transparent"} strokeWidth={entry.hour === nowHour ? 2 : 0} />
+              ))}
+            </Bar>
+            <Bar dataKey="products" stackId="rev" fill="#22c55e" name="products" radius={[0, 0, 0, 0]} />
+            <Bar dataKey="scheduled" stackId="rev" name="scheduled" radius={[4, 4, 0, 0]} label={({ x, y, width, index }: any) => {
+              const entry = hourlyCumulative[index];
+              if (!entry || entry.hour !== nowHour) return null;
+              const total = entry.services + entry.products + entry.scheduled;
+              return <text x={x + width / 2} y={y - 8} fill="#f0c060" fontSize={11} fontWeight={700} textAnchor="middle">{FMT_RUB(total)}</text>;
+            }}>
+              {hourlyCumulative.map((entry, i) => (
+                <Cell key={i} fill={GOLD} fillOpacity={0.25} stroke={entry.hour === nowHour ? "#22d3ee" : GOLD} strokeWidth={entry.hour === nowHour ? 2 : 1} />
+              ))}
+            </Bar>
+            <Line dataKey="break_even" stroke="#ef4444" strokeWidth={2.5} dot={false} name="break_even" />
+            {dailyPlan > 0 && (
+              <Line dataKey={() => dailyPlan} stroke="#22c55e" strokeWidth={2.5} dot={false} name="daily_plan" />
+            )}
+          </ComposedChart>
+        </ResponsiveContainer>
       </div>
 
-      <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-6">
-        <h2 className="text-sm font-semibold uppercase tracking-widest text-gray-500 dark:text-zinc-500 mb-4">
-          P&L — Прибыли и убытки
-        </h2>
-        <div className="space-y-3">
-          <PLLine label="Выручка" value="0 ₽" />
-          <PLLine label="— Себестоимость" value="0 ₽" negative />
-          <PLLine label="Валовая прибыль" value="0 ₽" bold />
-          <div className="border-t border-gray-200 dark:border-zinc-800 my-2" />
-          <PLLine label="— ФОТ" value="0 ₽" negative />
-          <PLLine label="— Аренда" value="0 ₽" negative />
-          <PLLine label="— Маркетинг" value="0 ₽" negative />
-          <PLLine label="— Прочие расходы" value="0 ₽" negative />
-          <div className="border-t border-gray-200 dark:border-zinc-800 my-2" />
-          <PLLine label="Чистая прибыль" value="0 ₽" bold accent />
+      {/* Chart 2: Daily (current month) */}
+      <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-6 mb-6">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+          <h3 className="text-sm font-semibold uppercase tracking-widest text-gray-500 dark:text-zinc-400">
+            По дням — {currentPeriod}
+          </h3>
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 dark:text-zinc-400">
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-rubl-accent" /> Услуги выполн.</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-emerald-500" /> Товары</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm border border-rubl-accent/30 bg-rubl-accent/25" /> Запланировано</span>
+            <span className="flex items-center gap-1.5"><span className="w-0.5 h-4 bg-red-500 rounded-full" /> Мин. марж. (накоп.)</span>
+            {plan.revenue_target > 0 && <span className="flex items-center gap-1.5"><span className="w-0.5 h-4 bg-emerald-400 rounded-full" /> План (накоп.)</span>}
+          </div>
+        </div>
+        <ResponsiveContainer width="100%" height={340}>
+          <ComposedChart data={dailyCumulative} barGap={2}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+            <XAxis dataKey="date" tick={{ fill: "#71717a", fontSize: 11 }} tickFormatter={(d: string) => d.slice(5)} />
+            <YAxis tick={{ fill: "#71717a", fontSize: 11 }} tickFormatter={(v) => FMT(v)} />
+            <Tooltip
+              contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", borderRadius: "12px", fontSize: 12 }}
+              formatter={(value: any, name: any) => {
+                if (name === "services") return [FMT_RUB(value), "Услуги (накопл.)"];
+                if (name === "products") return [FMT_RUB(value), "Товары (накопл.)"];
+                if (name === "scheduled") return [FMT_RUB(value), "Запланировано (накопл.)"];
+                if (name === "break_even") return [FMT_RUB(value), "Мин. маржинальность"];
+                if (name === "daily_plan_cum") return [FMT_RUB(value), "План (накопл.)"];
+                return [value, name];
+              }}
+            />
+            <Bar dataKey="services" stackId="rev" name="services" radius={[6, 6, 0, 0]} label={({ x, y, width, index }: any) => {
+              const entry = dailyCumulative[index];
+              const delta = entry?.delta || 0;
+              if (delta <= 0) return null;
+              let color = "#ef4444";
+              if (delta >= dailyPlanRequired) color = "#22c55e";
+              else if (delta >= breakEvenDaily) color = "#0891b2";
+              return (
+                <g>
+                  <text x={x + width / 2} y={y - 6} fill="#000" fontSize={11} fontWeight={700} textAnchor="middle" stroke="#000" strokeWidth={3} paintOrder="stroke">{FMT_RUB(delta)}</text>
+                  <text x={x + width / 2} y={y - 6} fill={color} fontSize={11} fontWeight={700} textAnchor="middle">{FMT_RUB(delta)}</text>
+                </g>
+              );
+            }}>
+              {dailyCumulative.map((entry, i) => (
+                <Cell key={i} fill={GOLD} stroke={entry.date === todayStr ? "#22d3ee" : "transparent"} strokeWidth={entry.date === todayStr ? 2 : 0} />
+              ))}
+            </Bar>
+            <Bar dataKey="products" stackId="rev" fill="#22c55e" name="products" radius={[0, 0, 0, 0]} />
+            <Bar dataKey="scheduled" stackId="rev" name="scheduled" radius={[6, 6, 0, 0]} label={({ x, y, width, index }: any) => {
+              const entry = dailyCumulative[index];
+              if (!entry || entry.date !== todayStr) return null;
+              const actual = entry.services + entry.products;
+              if (actual <= 0) return null;
+              return <text x={x + width / 2} y={y - 8} fill="#22d3ee" fontSize={11} fontWeight={700} textAnchor="middle">{FMT_RUB(actual)}</text>;
+            }}>
+              {dailyCumulative.map((entry, i) => (
+                <Cell key={i} fill={GOLD} fillOpacity={0.25} stroke={entry.date === todayStr ? "#22d3ee" : GOLD} strokeWidth={entry.date === todayStr ? 2 : 1} />
+              ))}
+            </Bar>
+            <Line dataKey="break_even" stroke="#ef4444" strokeWidth={2.5} dot={false} name="break_even" />
+            {plan.revenue_target > 0 && (
+              <Line dataKey="daily_plan_cum" stroke="#22c55e" strokeWidth={2.5} dot={false} name="daily_plan_cum" />
+            )}
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* KPI mini-cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-xl p-4">
+          <div className="text-xs text-gray-500 dark:text-zinc-500">Выручка сегодня</div>
+          <div className="text-lg font-bold mt-1">{FMT_RUB(todayRevenue)}</div>
+        </div>
+        <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-xl p-4">
+          <div className="text-xs text-gray-500 dark:text-zinc-500">Мастеров на смене</div>
+          <div className="text-lg font-bold mt-1">{mastersToday}</div>
+        </div>
+        <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-xl p-4">
+          <div className="text-xs text-gray-500 dark:text-zinc-500">Точка безубыточности</div>
+          <div className="text-lg font-bold mt-1">{FMT_RUB(breakEvenDaily)}</div>
+        </div>
+        <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-xl p-4">
+          <div className="text-xs text-gray-500 dark:text-zinc-500">План на день</div>
+          <div className="text-lg font-bold mt-1">{dailyPlan > 0 ? FMT_RUB(dailyPlan) : "—"}</div>
         </div>
       </div>
     </div>
   );
 }
 
-function PLLine({
+/** Плитка сводки: крупное число и поясняющая строка под ним. */
+function SumCard({
   label,
   value,
-  negative,
-  bold,
+  note,
   accent,
 }: {
   label: string;
   value: string;
-  negative?: boolean;
-  bold?: boolean;
+  note: string;
   accent?: boolean;
 }) {
   return (
-    <div className={`flex justify-between py-2 ${bold ? "font-semibold" : ""}`}>
-      <span className={accent ? "text-rubl-accent" : "text-gray-600 dark:text-zinc-400"}>{label}</span>
-      <span className={negative ? "text-red-400" : accent ? "text-rubl-accent font-bold" : "text-gray-900 dark:text-white"}>
-        {value}
-      </span>
+    <div className="bg-gray-50 dark:bg-zinc-950/60 border border-gray-200 dark:border-zinc-800 rounded-xl p-4">
+      <div className="text-xs text-gray-500 dark:text-zinc-500">{label}</div>
+      <div className={`text-2xl font-bold mt-1 ${accent ? "text-rubl-accent" : ""}`}>{value}</div>
+      <div className="text-xs text-gray-500 dark:text-zinc-500 mt-1">{note}</div>
     </div>
   );
 }
@@ -681,7 +1126,7 @@ export default function App() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [role, setRole] = useState<"owner" | "operator">("operator");
-  const [page, setPage] = useState("dashboard");
+  const [page, setPage] = useState("planfact");
   const [theme, setTheme] = useState<"dark" | "light">(() => {
     if (typeof window !== "undefined") {
       return localStorage.getItem("rubl-theme") === "light" ? "light" : "dark";
@@ -800,7 +1245,7 @@ export default function App() {
           {role === "owner" && page === "masters" && <MastersPage data={data} />}
           {role === "owner" && page === "clients" && <ClientsPage />}
           {page === "clientbase" && <ClientBasePage />}
-          {role === "owner" && page === "finance" && <FinancePage />}
+          {role === "owner" && page === "planfact" && <PlanFactPage />}
           {role === "owner" && page === "ai" && <AIPage />}
         </div>
       </main>
