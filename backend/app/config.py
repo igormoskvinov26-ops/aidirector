@@ -93,7 +93,7 @@ class Settings(BaseSettings):
         {"staff_id": 5659614, "name": "Ксения", "service_rate": 0.4,
          "product_rate": 0.1, "guarantee": 4000},
         {"staff_id": 5659611, "name": "Арташ", "service_rate": 0.4,
-         "product_rate": 0.1, "guarantee": 5000},
+         "product_rate": 0.1, "guarantee": 4000},
         {"staff_id": 5659617, "name": "Дмитрий", "service_rate": 0.4,
          "product_rate": 0.1, "guarantee": 4000},
     ]
