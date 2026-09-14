@@ -72,9 +72,29 @@ interface CostSettings {
 }
 
 /** Ответ /api/finance/plan-fact — сводка месяца и разбивка по составу смены. */
+interface TodayMaster {
+  name: string;
+  services: number;
+  products: number;
+  payout: number;
+  on_guarantee: boolean;
+}
+
+interface TodayDetail {
+  masters: TodayMaster[];
+  revenue: number;
+  payout: number;
+  fixed: number;
+  variable: number;
+  margin: number;
+  break_even: number;
+  to_break_even: number;
+}
+
 interface PlanFactRow {
   masters: number;
   break_even_daily: number;
+  break_even_worst: number;
   plan_daily_required: number;
   plan_per_master: number;
   fact_daily_avg: number | null;
@@ -89,6 +109,7 @@ interface PlanFactSummary {
   days_passed: number;
   days_left: number;
   masters_today: number;
+  today_detail: TodayDetail;
   fact: {
     earned_total: number;
     services_amount: number;
@@ -350,6 +371,110 @@ function PlanFactPage() {
         </div>
       </div>
 
+      {/* Сегодня — по фактической выработке каждого мастера. Никаких
+          допущений: кто сколько сделал, уже известно. */}
+      {summary?.today_detail && (
+        <div
+          className={`bg-white dark:bg-zinc-900/80 border rounded-2xl p-6 mb-6 ${
+            summary.today_detail.margin >= 0
+              ? "border-emerald-600/50"
+              : "border-red-500/40"
+          }`}
+        >
+          <div className="flex flex-wrap items-baseline justify-between gap-3 mb-5">
+            <h3 className="text-sm font-semibold uppercase tracking-widest text-gray-500 dark:text-zinc-400">
+              Сегодня — {summary.today}
+            </h3>
+            <span
+              className={`text-sm font-semibold ${
+                summary.today_detail.margin >= 0 ? "text-emerald-500" : "text-red-400"
+              }`}
+            >
+              {summary.today_detail.margin >= 0
+                ? `В плюсе на ${RUB(summary.today_detail.margin)}`
+                : summary.today_detail.to_break_even > 0
+                  ? `До нуля не хватает ${RUB(summary.today_detail.to_break_even)} по услугам`
+                  : `Минус ${RUB(-summary.today_detail.margin)}`}
+            </span>
+          </div>
+
+          {summary.today_detail.masters.length === 0 ? (
+            <p className="text-sm text-gray-500 dark:text-zinc-500">
+              Выполненных записей сегодня пока нет.
+            </p>
+          ) : (
+            <div className="overflow-x-auto mb-5">
+              <table className="w-full text-sm min-w-[520px]">
+                <thead>
+                  <tr className="text-left text-[11px] uppercase tracking-wider text-gray-500 dark:text-zinc-500">
+                    <th className="pb-2 pr-4 font-semibold">Мастер</th>
+                    <th className="pb-2 px-4 font-semibold text-right">Услуги</th>
+                    <th className="pb-2 px-4 font-semibold text-right">Косметика</th>
+                    <th className="pb-2 pl-4 font-semibold text-right">К выплате</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {summary.today_detail.masters.map((m) => (
+                    <tr key={m.name} className="border-t border-gray-100 dark:border-zinc-800/60">
+                      <td className="py-2.5 pr-4">
+                        {m.name}
+                        {m.on_guarantee && (
+                          <span className="ml-2 text-[10px] uppercase tracking-wider text-amber-500 border border-amber-500/40 rounded px-1.5 py-0.5">
+                            гарант
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-2.5 px-4 text-right">{RUB(m.services)}</td>
+                      <td className="py-2.5 px-4 text-right text-gray-500 dark:text-zinc-500">
+                        {m.products > 0 ? RUB(m.products) : "—"}
+                      </td>
+                      <td className="py-2.5 pl-4 text-right font-semibold">{RUB(m.payout)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 text-sm">
+            <div>
+              <div className="text-xs text-gray-500 dark:text-zinc-500">Заработано</div>
+              <div className="font-semibold mt-1">{RUB(summary.today_detail.revenue)}</div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-500 dark:text-zinc-500">Мастерам</div>
+              <div className="font-semibold mt-1">− {RUB(summary.today_detail.payout)}</div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-500 dark:text-zinc-500">Постоянные</div>
+              <div className="font-semibold mt-1">− {RUB(summary.today_detail.fixed)}</div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-500 dark:text-zinc-500">Расходники</div>
+              <div className="font-semibold mt-1">− {RUB(summary.today_detail.variable)}</div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-500 dark:text-zinc-500">Итог дня</div>
+              <div
+                className={`font-semibold mt-1 ${
+                  summary.today_detail.margin >= 0 ? "text-emerald-500" : "text-red-400"
+                }`}
+              >
+                {summary.today_detail.margin >= 0 ? "+" : "−"}
+                {RUB(Math.abs(summary.today_detail.margin))}
+              </div>
+            </div>
+          </div>
+
+          <p className="text-xs text-gray-500 dark:text-zinc-500 mt-4 max-w-[80ch]">
+            Считается по фактической выработке каждого: гарант платится
+            персонально, поэтому две одинаковые общие суммы обходятся салону
+            по-разному. Порог сегодня при сложившемся распределении —{" "}
+            {RUB(summary.today_detail.break_even)} по услугам.
+          </p>
+        </div>
+      )}
+
       {/* Сводка месяца и таблица по составу смены */}
       {summary && (
         <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-6 mb-6">
@@ -433,8 +558,19 @@ function PlanFactPage() {
                       )}
                     </td>
                     <td className="py-3 px-4">
-                      <div className="font-semibold">{RUB(row.break_even_daily)}</div>
-                      <div className="text-xs text-gray-500 dark:text-zinc-500">день в ноль</div>
+                      <div className="font-semibold">
+                        {RUB(row.break_even_daily)}
+                        {row.break_even_worst > row.break_even_daily && (
+                          <span className="text-gray-500 dark:text-zinc-500 font-normal">
+                            {" … "}{RUB(row.break_even_worst)}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs text-gray-500 dark:text-zinc-500">
+                        {row.break_even_worst > row.break_even_daily
+                          ? "при равной загрузке … если работает один"
+                          : "день в ноль"}
+                      </div>
                     </td>
                     <td className="py-3 px-4">
                       {row.plan_daily_required > 0 ? (

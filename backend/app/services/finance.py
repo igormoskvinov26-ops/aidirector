@@ -10,7 +10,7 @@ from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models.models import CostModel, PlanTarget, Sale, SaleItem, Visit
+from app.models.models import CostModel, Employee, PlanTarget, Sale, SaleItem, Visit
 
 WORKING_HOURS = range(10, 22)
 DB_HOUR_SHIFT = 1
@@ -564,6 +564,100 @@ async def set_cost_settings(session: AsyncSession, values: dict) -> dict:
     return await get_cost_settings(session)
 
 
+async def _today_by_master(session: AsyncSession, day: date) -> list[dict]:
+    """Кто сколько сделал за день — поимённо.
+
+    Нужно, чтобы считать день по-настоящему: гарант платится персонально, и
+    два мастера с одинаковой общей выручкой обходятся салону по-разному в
+    зависимости от того, как она между ними легла.
+    """
+    day_expr = func.date(Visit.datetime)
+    service_rows = await session.execute(
+        select(
+            Employee.id,
+            Employee.name,
+            func.coalesce(func.sum(Visit.total_amount), 0).label("amount"),
+        )
+        .join(Visit, Visit.employee_id == Employee.id)
+        .where(day_expr == day, Visit.status.in_(COMPLETED_STATUSES))
+        .group_by(Employee.id, Employee.name)
+    )
+
+    sale_expr = func.date(Sale.datetime)
+    product_rows = await session.execute(
+        select(
+            Sale.employee_id,
+            func.coalesce(func.sum(Sale.total_amount), 0).label("amount"),
+        )
+        .where(sale_expr == day, Sale.employee_id.is_not(None))
+        .group_by(Sale.employee_id)
+    )
+    products = {int(r.employee_id): Decimal(str(r.amount or 0)) for r in product_rows}
+
+    masters = [
+        {
+            "employee_id": int(row.id),
+            "name": row.name,
+            "services": Decimal(str(row.amount or 0)),
+            "products": products.get(int(row.id), Decimal("0")),
+        }
+        for row in service_rows
+    ]
+    # Продавший косметику, но никого не постригший, тоже вышел на смену.
+    known = {m["employee_id"] for m in masters}
+    for employee_id, amount in products.items():
+        if employee_id not in known:
+            masters.append({
+                "employee_id": employee_id,
+                "name": "—",
+                "services": Decimal("0"),
+                "products": amount,
+            })
+
+    masters.sort(key=lambda m: m["services"] + m["products"], reverse=True)
+    return masters
+
+
+def _break_even_for_split(
+    shares: Sequence[Decimal],
+    costs: Costs,
+    product_revenue: Decimal = Decimal("0"),
+) -> Decimal:
+    """Выручка по услугам, нужная для нуля при заданном распределении.
+
+    Доли — то, как выручка ложится между мастерами. Порог от них зависит:
+    мастер, не добравший до гаранта, обходится салону дороже, чем тот же
+    рубль, заработанный его напарником сверх гаранта.
+    """
+    total_share = sum(shares, Decimal("0"))
+    if total_share <= 0:
+        shares = [Decimal("1")] * max(len(shares), 1)
+        total_share = Decimal(len(shares))
+    normalized = [s / total_share for s in shares]
+
+    def margin_at(revenue: Decimal) -> Decimal:
+        per_master = [
+            (revenue * part, product_revenue * part) for part in normalized
+        ]
+        payout = payout_by_master(per_master, costs)
+        return revenue + product_revenue - costs.fixed_daily - (
+            revenue + product_revenue
+        ) * costs.variable_pct - payout
+
+    low, high = Decimal("0"), max(costs.fixed_daily * 4, Decimal("10000"))
+    for _ in range(60):
+        if margin_at(high) >= 0:
+            break
+        high *= 2
+    while high - low > Decimal("0.01"):
+        middle = (low + high) / 2
+        if margin_at(middle) >= 0:
+            high = middle
+        else:
+            low = middle
+    return high.quantize(Decimal("0.01"))
+
+
 async def get_plan_fact(session: AsyncSession) -> dict:
     """Сводка текущего месяца для вкладки «План-факт».
 
@@ -599,10 +693,36 @@ async def get_plan_fact(session: AsyncSession) -> dict:
     fact_by_masters = await _fact_daily_average_by_masters(session, month_start, today)
     masters_today = await _get_masters_count(session, today)
 
+    # Сегодняшний день считается по факту: кто сколько сделал — известно,
+    # и допущений о распределении не требуется.
+    today_masters = await _today_by_master(session, today)
+    today_services = sum((m["services"] for m in today_masters), Decimal("0"))
+    today_products = sum((m["products"] for m in today_masters), Decimal("0"))
+    today_payout = payout_by_master(
+        [(m["services"], m["products"]) for m in today_masters], costs
+    ) if today_masters else Decimal("0")
+    today_margin = _day_costs(
+        today_services,
+        today_products,
+        len(today_masters) or 1,
+        costs,
+        per_master=[(m["services"], m["products"]) for m in today_masters] or None,
+    )
+    today_break_even = _break_even_for_split(
+        [m["services"] for m in today_masters] or [Decimal("1")],
+        costs,
+        today_products,
+    )
+
     rows = []
     for masters in (1, 2, 3):
         fact = fact_by_masters.get(masters)
         break_even = _break_even_revenue(masters, costs)
+        # Худший случай: один тянет всю выручку, остальные сидят на гаранте.
+        # Разница с равномерным делением и есть цена простоя.
+        break_even_worst = _break_even_for_split(
+            [Decimal("1")] + [Decimal("0")] * (masters - 1), costs
+        )
         # Вот здесь состав смены и начинает влиять: чтобы получить одну и ту же
         # прибыль, при трёх мастерах нужно заработать больше, чем при одном —
         # их гарант и процент вычитаются из той же выручки.
@@ -614,6 +734,7 @@ async def get_plan_fact(session: AsyncSession) -> dict:
         rows.append({
             "masters": masters,
             "break_even_daily": float(break_even),
+            "break_even_worst": float(break_even_worst),
             "plan_daily_required": float(required),
             "plan_per_master": float(
                 (required / masters).quantize(Decimal("0.01"))
@@ -630,6 +751,38 @@ async def get_plan_fact(session: AsyncSession) -> dict:
         "days_passed": today.day,
         "days_left": days_left,
         "masters_today": masters_today,
+        "today_detail": {
+            "masters": [
+                {
+                    "name": m["name"],
+                    "services": float(m["services"]),
+                    "products": float(m["products"]),
+                    "payout": float(
+                        _one_master_pay(
+                            m["services"],
+                            m["products"],
+                            costs.shift_guarantees(len(today_masters))[i],
+                            costs,
+                        )
+                    ),
+                    "on_guarantee": bool(
+                        m["services"] * costs.master_commission_pct
+                        + m["products"] * costs.product_commission_pct
+                        < costs.shift_guarantees(len(today_masters))[i]
+                    ),
+                }
+                for i, m in enumerate(today_masters)
+            ],
+            "revenue": float(today_services + today_products),
+            "payout": float(today_payout),
+            "fixed": float(costs.fixed_daily),
+            "variable": float(today_margin["costs"]["variable"]),
+            "margin": float(today_margin["margin_rub"]),
+            "break_even": float(today_break_even),
+            "to_break_even": float(
+                max(today_break_even - today_services, Decimal("0"))
+            ),
+        },
         "fact": {
             "earned_total": float(earned),
             "services_amount": float(services["amount"]),
