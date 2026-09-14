@@ -15,6 +15,7 @@ from app.services.finance import (
     _break_even_revenue,
     _compute_margin,
     _revenue_for_profit,
+    payout_by_master,
 )
 
 # Расходы для проверок, где важна не величина, а поведение формулы.
@@ -210,3 +211,71 @@ def test_costs_from_settings_change_the_threshold():
     pricey = Costs(Decimal("15000"), Decimal("0.035"), Decimal("0.40"),
                    Decimal("0.10"), (Decimal("4000"),))
     assert _break_even_revenue(2, pricey) > _break_even_revenue(2, cheap)
+
+
+# ── Фонд оплаты считается по выработке каждого ──────────────────────────────
+
+PAY = Costs(
+    fixed_daily=Decimal("15000"),
+    variable_pct=Decimal("0"),
+    master_commission_pct=Decimal("0.40"),
+    product_commission_pct=Decimal("0.10"),
+    guarantees=(Decimal("4000"), Decimal("4000"), Decimal("4000")),
+)
+
+
+def test_uneven_day_is_paid_per_master():
+    """Разбор владельца: один настриг 25 000, второй 5 000.
+
+    Первый берёт свои 10 000 процентом, второй проваливается под гарант и
+    получает 4 000. Вместе 14 000 — салон доплачивает за неотработанный
+    гарант напарника.
+    """
+    payout = payout_by_master(
+        [(Decimal("25000"), Decimal("0")), (Decimal("5000"), Decimal("0"))], PAY
+    )
+    assert payout == Decimal("14000")
+
+    day = _compute_margin(
+        Decimal("30000"),
+        Decimal("0"),
+        2,
+        PAY,
+        per_master=[(Decimal("25000"), Decimal("0")), (Decimal("5000"), Decimal("0"))],
+    )
+    assert day["costs"]["master_commission"] == Decimal("14000")
+    assert day["margin_rub"] == Decimal("1000")
+
+
+def test_even_split_understates_the_payroll():
+    """Деление поровну — самый благоприятный случай, не средний.
+
+    Пока расчёт делил общую выручку на число мастеров, он занижал фонд
+    оплаты и вместе с ним расходы дня. День выглядел прибыльнее, чем был.
+    """
+    uneven = [(Decimal("25000"), Decimal("0")), (Decimal("5000"), Decimal("0"))]
+    even = [(Decimal("15000"), Decimal("0")), (Decimal("15000"), Decimal("0"))]
+    assert payout_by_master(even, PAY) < payout_by_master(uneven, PAY)
+
+
+@pytest.mark.parametrize("share", ["0.5", "0.6", "0.7", "0.8", "0.9", "1.0"])
+def test_any_skew_costs_at_least_as_much_as_even(share):
+    """Перекос никогда не удешевляет смену — только удорожает."""
+    total = Decimal("30000")
+    first = total * Decimal(share)
+    skewed = [(first, Decimal("0")), (total - first, Decimal("0"))]
+    even = [(total / 2, Decimal("0")), (total / 2, Decimal("0"))]
+    assert payout_by_master(skewed, PAY) >= payout_by_master(even, PAY)
+
+
+def test_cosmetics_count_towards_the_guarantee():
+    """Продажа косметики помогает мастеру дотянуть до гаранта."""
+    only_services = payout_by_master([(Decimal("9000"), Decimal("0"))], PAY)
+    with_products = payout_by_master([(Decimal("9000"), Decimal("20000"))], PAY)
+    assert only_services == Decimal("4000")  # 40% от 9 000 меньше гаранта
+    assert with_products > Decimal("4000")  # 3 600 + 2 000 уже больше
+
+
+def test_idle_master_still_gets_the_guarantee():
+    """Мастер без выручки стоит салону полный гарант."""
+    assert payout_by_master([(Decimal("0"), Decimal("0"))], PAY) == Decimal("4000")

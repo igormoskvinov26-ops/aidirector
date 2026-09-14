@@ -1,6 +1,7 @@
 """Financial analysis: marginability, break-even, daily/monthly metrics."""
 
 import calendar
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
@@ -134,34 +135,67 @@ async def get_costs(session: AsyncSession, when: date | None = None) -> Costs:
     )
 
 
+def _one_master_pay(
+    services: Decimal,
+    products: Decimal,
+    guarantee: Decimal,
+    costs: Costs,
+) -> Decimal:
+    """Сколько получит один мастер за свою работу за день.
+
+    Процент со своих услуг плюс процент со своих продаж косметики, но не
+    меньше гаранта за смену.
+    """
+    earned = (
+        max(Decimal(str(services)), Decimal("0")) * costs.master_commission_pct
+        + max(Decimal(str(products)), Decimal("0")) * costs.product_commission_pct
+    )
+    return max(guarantee, earned)
+
+
+def payout_by_master(
+    per_master: Sequence[tuple[Decimal, Decimal]],
+    costs: Costs,
+) -> Decimal:
+    """Фонд оплаты за день по фактической выработке каждого.
+
+    Гарант платится персонально, поэтому складывать выручку всех и делить
+    поровну нельзя. Мастер, сделавший 25 000, получит свои 10 000 процентом, а
+    его напарник с пятью тысячами — 4 000 гарантом, и вместе это 14 000, а не
+    12 000, как выходит при равном делении. Разницу салон доплачивает из
+    прибыли, и она тем больше, чем сильнее перекос.
+    """
+    guarantees = costs.shift_guarantees(len(per_master))
+    return sum(
+        (
+            _one_master_pay(services, products, guarantee, costs)
+            # strict: длины обязаны совпасть — гаранты берутся по числу
+            # мастеров. Расхождение означало бы, что кому-то не досталось
+            # гаранта, и лучше узнать об этом сразу.
+            for (services, products), guarantee in zip(per_master, guarantees, strict=True)
+        ),
+        Decimal("0"),
+    )
+
+
 def _master_payout(
     service_revenue: Decimal,
     product_revenue: Decimal,
     num_masters: int,
     costs: Costs,
 ) -> Decimal:
-    """Сколько всего получат мастера за день.
+    """Оценка фонда оплаты, когда выработка каждого неизвестна.
 
-    Каждый берёт процент со своей доли услуг плюс процент с косметики, но не
-    меньше своего гаранта. Гаранты разные, поэтому считается по каждому, а не
-    умножением одного числа на количество: при одном работающем это разница
-    в тысячу рублей, при трёх — уже заметнее.
+    Выручка делится поровну — это самый благоприятный для салона случай:
+    при равном делении никто не проваливается под гарант, и фонд оплаты
+    минимален. Любой перекос его только увеличивает. Годится для прикидки
+    порога на будущее, где выработку знать неоткуда; за прошедшие дни надо
+    брать payout_by_master и настоящие цифры.
     """
     masters = max(num_masters, 1)
-    # Числа приходят из разных мест — из базы, из подбора, из тестов — и не
-    # всегда Decimal. Смешивать float с Decimal нельзя, приводим на входе.
-    services = max(Decimal(str(service_revenue)), Decimal("0"))
-    products = max(Decimal(str(product_revenue)), Decimal("0"))
-    per_master_services = services / masters
-    per_master_products = products / masters
-    earned_each = (
-        per_master_services * costs.master_commission_pct
-        + per_master_products * costs.product_commission_pct
-    )
-    return sum(
-        (max(guarantee, earned_each) for guarantee in costs.shift_guarantees(masters)),
-        Decimal("0"),
-    )
+    services = max(Decimal(str(service_revenue)), Decimal("0")) / masters
+    products = max(Decimal(str(product_revenue)), Decimal("0")) / masters
+    return payout_by_master([(services, products)] * masters, costs)
 
 
 def _day_costs(
@@ -169,6 +203,7 @@ def _day_costs(
     product_revenue: Decimal,
     num_masters: int,
     costs: Costs,
+    per_master: Sequence[tuple[Decimal, Decimal]] | None = None,
 ) -> dict:
     """Расходы и прибыль дня без порога безубыточности.
 
@@ -180,8 +215,12 @@ def _day_costs(
         Decimal(str(product_revenue)), Decimal("0")
     )
     variable_cost = revenue * costs.variable_pct
-    master_commission = _master_payout(
-        service_revenue, product_revenue, num_masters, costs
+    # Если известно, кто сколько наработал, считаем точно. Оценка поровну —
+    # только для дней, которых ещё не было.
+    master_commission = (
+        payout_by_master(per_master, costs)
+        if per_master
+        else _master_payout(service_revenue, product_revenue, num_masters, costs)
     )
     total_costs = costs.fixed_daily + variable_cost + master_commission
 
@@ -206,9 +245,10 @@ def _compute_margin(
     product_revenue: Decimal = Decimal("0"),
     num_masters: int = 1,
     costs: Costs = DEFAULT_COSTS,
+    per_master: Sequence[tuple[Decimal, Decimal]] | None = None,
 ) -> dict:
     """Прибыль дня. Услуги и косметика разведены: ставки по ним разные."""
-    result = _day_costs(service_revenue, product_revenue, num_masters, costs)
+    result = _day_costs(service_revenue, product_revenue, num_masters, costs, per_master)
     result["break_even"] = _break_even_revenue(num_masters, costs)
     return result
 
@@ -272,6 +312,71 @@ def _break_even_revenue(num_masters: int, costs: Costs = DEFAULT_COSTS) -> Decim
     return _revenue_for_profit(num_masters, Decimal("0"), costs)
 
 
+async def _daily_master_breakdown(
+    session: AsyncSession,
+    date_from: date,
+    date_to: date,
+) -> dict[str, list[tuple[Decimal, Decimal]]]:
+    """Выработка каждого мастера по дням: услуги и косметика отдельно.
+
+    Нужна, чтобы считать фонд оплаты по-настоящему: гарант платится
+    персонально, и при неравной выработке сумма выходит больше, чем при
+    делении общей выручки поровну.
+    """
+    day = func.date(Visit.datetime)
+    service_rows = await session.execute(
+        select(
+            day.label("day"),
+            Visit.employee_id,
+            func.coalesce(func.sum(Visit.total_amount), 0).label("amount"),
+        )
+        .where(
+            day >= date_from,
+            day <= date_to,
+            Visit.status.in_(COMPLETED_STATUSES),
+        )
+        .group_by(day, Visit.employee_id)
+    )
+
+    sale_day = func.date(Sale.datetime)
+    product_rows = await session.execute(
+        select(
+            sale_day.label("day"),
+            Sale.employee_id,
+            func.coalesce(func.sum(Sale.total_amount), 0).label("amount"),
+        )
+        .where(
+            sale_day >= date_from,
+            sale_day <= date_to,
+            Sale.employee_id.is_not(None),
+        )
+        .group_by(sale_day, Sale.employee_id)
+    )
+
+    by_day: dict[str, dict[int, list[Decimal]]] = {}
+    for row in service_rows:
+        bucket = by_day.setdefault(str(row.day), {})
+        entry = bucket.setdefault(int(row.employee_id), [Decimal("0"), Decimal("0")])
+        entry[0] += Decimal(str(row.amount or 0))
+    for row in product_rows:
+        bucket = by_day.setdefault(str(row.day), {})
+        entry = bucket.setdefault(int(row.employee_id), [Decimal("0"), Decimal("0")])
+        entry[1] += Decimal(str(row.amount or 0))
+
+    # Внутри дня сортируем по убыванию выработки: самым крупным гарантам
+    # достаются мастера, заработавшие больше всех, и при равных гарантах
+    # порядок ни на что не влияет.
+    return {
+        day_str: [
+            (services, products)
+            for services, products in sorted(
+                masters.values(), key=lambda pair: pair[0] + pair[1], reverse=True
+            )
+        ]
+        for day_str, masters in by_day.items()
+    }
+
+
 async def get_daily_finance(
     session: AsyncSession,
     date_from: date,
@@ -285,6 +390,7 @@ async def get_daily_finance(
     столбцами выручки.
     """
     costs = await get_costs(session, date_from)
+    breakdown = await _daily_master_breakdown(session, date_from, date_to)
     plan = await get_current_month_plan(session)
     profit_target = Decimal(str(plan["profit_target"]))
     daily_profit = Decimal("0")
@@ -344,7 +450,11 @@ async def get_daily_finance(
         num_masters = int(row.masters_count or 0)
         products = sales_by_day.get(day_str, Decimal("0"))
         # Услуги и косметика передаются раздельно: ставка мастера по ним разная.
-        margin = _compute_margin(completed, products, num_masters, costs)
+        # Разбивка по мастерам — чтобы гарант считался персонально, а не от
+        # выручки, поделённой поровну.
+        margin = _compute_margin(
+            completed, products, num_masters, costs, breakdown.get(day_str)
+        )
 
         result.append({
             "date": day_str,
