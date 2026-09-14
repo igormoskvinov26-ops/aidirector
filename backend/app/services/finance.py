@@ -1,56 +1,124 @@
 """Financial analysis: marginability, break-even, daily/monthly metrics."""
 
 import calendar
+from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
 
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.models import PlanTarget, Sale, SaleItem, Visit
+from app.models.models import CostModel, PlanTarget, Sale, SaleItem, Visit
 
 WORKING_HOURS = range(10, 22)
 DB_HOUR_SHIFT = 1
-FIXED_DAILY_COST = Decimal("11000.00")
-VARIABLE_COST_PCT = Decimal("0.035")
-MASTER_COMMISSION_PCT = Decimal("0.40")
-MASTER_MIN_SALARY = Decimal("4000.00")
 DEFAULT_MASTERS = 2
 
 COMPLETED_STATUSES = {"completed"}
 
 
-def _compute_margin(revenue: Decimal, num_masters: int) -> dict:
+@dataclass(frozen=True)
+class Costs:
+    """Экономика одного дня работы.
+
+    Постоянные расходы уже приведены к дню: аренда и оклады задаются суммой
+    в месяц и делятся на число дней в месяце. Переменные — доля от выручки.
+    Мастер получает процент, но не меньше гаранта за смену.
+    """
+
+    fixed_daily: Decimal
+    variable_pct: Decimal
+    master_commission_pct: Decimal
+    master_min_salary: Decimal
+
+
+# Из отчёта P&L за август 2026 — единственный полный месяц с данными.
+# Аренда 170 000, коммуналка 15 000 по оценке владельца, управляющий 41 500,
+# администратор 35 000, уборка 15 000. Итого 276 500 в месяц.
+# Расходники — 29 060 от 824 465 выручки по услугам, то есть 3,52%.
+# Процент мастера по отчёту не выводится: зарплата платится со сдвигом
+# относительно выручки, — оставлено прежнее значение до подтверждения.
+DEFAULT_COSTS = Costs(
+    fixed_daily=(Decimal("276500") / Decimal("30.4")).quantize(Decimal("0.01")),
+    variable_pct=Decimal("0.035"),
+    master_commission_pct=Decimal("0.40"),
+    master_min_salary=Decimal("4000.00"),
+)
+
+# Прежние имена — чтобы не переписывать всё, что на них опиралось.
+FIXED_DAILY_COST = DEFAULT_COSTS.fixed_daily
+VARIABLE_COST_PCT = DEFAULT_COSTS.variable_pct
+MASTER_COMMISSION_PCT = DEFAULT_COSTS.master_commission_pct
+MASTER_MIN_SALARY = DEFAULT_COSTS.master_min_salary
+
+
+async def get_costs(session: AsyncSession, when: date | None = None) -> Costs:
+    """Расходы из базы, приведённые к дню указанного месяца.
+
+    Если строка настроек ещё не заведена, возвращаются значения из отчёта за
+    август. Молча считать по нулям нельзя: порог безубыточности обнулится и
+    любой день покажется прибыльным.
+    """
+    row = await session.scalar(select(CostModel).order_by(CostModel.id).limit(1))
+    if row is None:
+        return DEFAULT_COSTS
+
+    when = when or date.today()
+    days = Decimal(_days_in_month(when.year, when.month))
+
+    monthly_fixed = (
+        row.rent_monthly
+        + row.utilities_monthly
+        + row.manager_monthly
+        + row.admin_monthly
+        + row.cleaning_monthly
+        + row.other_fixed_monthly
+    )
+    return Costs(
+        fixed_daily=(monthly_fixed / days).quantize(Decimal("0.01")),
+        variable_pct=(row.materials_pct + row.acquiring_pct) / Decimal("100"),
+        master_commission_pct=row.master_commission_pct / Decimal("100"),
+        master_min_salary=row.master_min_guarantee,
+    )
+
+
+def _compute_margin(
+    revenue: Decimal,
+    num_masters: int,
+    costs: Costs = DEFAULT_COSTS,
+) -> dict:
     actual_masters = max(num_masters, 1)
     if revenue <= 0:
         return {
             "margin_rub": Decimal("0"),
             "margin_pct": Decimal("0"),
-            "break_even": _break_even_revenue(num_masters),
+            "break_even": _break_even_revenue(num_masters, costs),
             "costs": {
-                "fixed": FIXED_DAILY_COST,
+                "fixed": costs.fixed_daily,
                 "variable": Decimal("0"),
                 "master_commission": Decimal("0"),
-                "total": FIXED_DAILY_COST,
+                "total": costs.fixed_daily,
             },
         }
 
-    variable_cost = revenue * VARIABLE_COST_PCT
+    variable_cost = revenue * costs.variable_pct
 
     revenue_per_master = revenue / actual_masters
-    master_commission_per = max(MASTER_MIN_SALARY, revenue_per_master * MASTER_COMMISSION_PCT)
+    master_commission_per = max(
+        costs.master_min_salary, revenue_per_master * costs.master_commission_pct
+    )
     master_commission = master_commission_per * actual_masters
 
-    total_costs = FIXED_DAILY_COST + variable_cost + master_commission
+    total_costs = costs.fixed_daily + variable_cost + master_commission
     margin_rub = revenue - total_costs
     margin_pct = (margin_rub / revenue * 100).quantize(Decimal("0.1"))
 
     return {
         "margin_rub": margin_rub,
         "margin_pct": margin_pct,
-        "break_even": _break_even_revenue(num_masters),
+        "break_even": _break_even_revenue(num_masters, costs),
         "costs": {
-            "fixed": FIXED_DAILY_COST,
+            "fixed": costs.fixed_daily,
             "variable": variable_cost,
             "master_commission": master_commission,
             "total": total_costs,
@@ -58,21 +126,44 @@ def _compute_margin(revenue: Decimal, num_masters: int) -> dict:
     }
 
 
-def _break_even_revenue(num_masters: int) -> Decimal:
-    if num_masters <= 0:
-        num_masters = 1
+def _revenue_for_profit(
+    num_masters: int,
+    profit: Decimal = Decimal("0"),
+    costs: Costs = DEFAULT_COSTS,
+) -> Decimal:
+    """Какая выручка за день нужна, чтобы получить заданную прибыль.
 
-    denom_high = Decimal("1") - VARIABLE_COST_PCT - MASTER_COMMISSION_PCT
-    rev_high = (FIXED_DAILY_COST / denom_high).quantize(Decimal("0.01"))
-    threshold = Decimal(10000 * num_masters)
+    Оплата мастера ломает зависимость надвое. Пока выручка на мастера мала,
+    он получает гарант — фиксированную сумму, и она входит в расходы как
+    постоянная. Выше точки переключения начинает действовать процент, и
+    расход растёт вместе с выручкой. Поэтому сначала проверяется режим
+    процента, и если полученная выручка в него не попадает — считается по
+    гаранту.
 
-    if rev_high >= threshold:
-        return rev_high
+    Прибыль, равная нулю, даёт точку безубыточности.
+    """
+    masters = max(num_masters, 1)
+    need = costs.fixed_daily + profit
 
-    min_total = MASTER_MIN_SALARY * num_masters
-    denom_low = Decimal("1") - VARIABLE_COST_PCT
-    rev_low = ((FIXED_DAILY_COST + min_total) / denom_low).quantize(Decimal("0.01"))
-    return rev_low
+    denom_high = Decimal("1") - costs.variable_pct - costs.master_commission_pct
+    if denom_high > 0 and costs.master_commission_pct > 0:
+        rev_high = need / denom_high
+        # Точка переключения: выручка на мастера, при которой процент
+        # сравнивается с гарантом. При 40% и гаранте 4 000 это 10 000 —
+        # прежде это число было записано в коде вручную и ломалось при
+        # любой смене ставки.
+        switch_per_master = costs.master_min_salary / costs.master_commission_pct
+        if rev_high / masters >= switch_per_master:
+            return rev_high.quantize(Decimal("0.01"))
+
+    denom_low = Decimal("1") - costs.variable_pct
+    rev_low = (need + costs.master_min_salary * masters) / denom_low
+    return rev_low.quantize(Decimal("0.01"))
+
+
+def _break_even_revenue(num_masters: int, costs: Costs = DEFAULT_COSTS) -> Decimal:
+    """Выручка, при которой день выходит ровно в ноль."""
+    return _revenue_for_profit(num_masters, Decimal("0"), costs)
 
 
 # Ориентир для интерфейса, пока данные не загружены. В ответы по дням не
@@ -85,6 +176,20 @@ async def get_daily_finance(
     date_from: date,
     date_to: date,
 ) -> list[dict]:
+    """Выручка и пороги по дням периода.
+
+    Кроме порога безубыточности отдаётся revenue_for_plan — выручка, нужная
+    в этот день для выполнения плана по прибыли. Обе величины считаются по
+    числу мастеров этого дня, поэтому на графике их можно класть рядом со
+    столбцами выручки.
+    """
+    costs = await get_costs(session, date_from)
+    plan = await get_current_month_plan(session)
+    profit_target = Decimal(str(plan["profit_target"]))
+    daily_profit = Decimal("0")
+    if profit_target > 0:
+        daily_profit = profit_target / Decimal(_days_in_month(date_from.year, date_from.month))
+
     day_label = func.date(Visit.datetime)
 
     rows = await session.execute(
@@ -134,7 +239,7 @@ async def get_daily_finance(
         completed = Decimal(str(row.completed_amount or 0))
         scheduled = Decimal(str(row.scheduled_amount or 0))
         num_masters = int(row.masters_count or 0)
-        margin = _compute_margin(completed, num_masters)
+        margin = _compute_margin(completed, num_masters, costs)
 
         result.append({
             "date": day_str,
@@ -150,6 +255,9 @@ async def get_daily_finance(
             # Порог по фактическому числу мастеров в этот день, а не константа:
             # смена из одного человека и смена из трёх окупаются по-разному.
             "break_even": float(margin["break_even"]),
+            "revenue_for_plan": float(
+                _revenue_for_profit(num_masters, daily_profit, costs)
+            ) if daily_profit > 0 else 0.0,
             "costs": {k: float(v) for k, v in margin["costs"].items()},
         })
 
@@ -172,12 +280,68 @@ async def get_daily_finance(
                 "masters_count": 0,
                 "margin_rub": 0,
                 "margin_pct": 0,
-                "break_even": float(_break_even_revenue(1)),
+                "break_even": float(_break_even_revenue(1, costs)),
+                "revenue_for_plan": float(
+                    _revenue_for_profit(1, daily_profit, costs)
+                ) if daily_profit > 0 else 0.0,
                 "costs": {"fixed": 0, "variable": 0, "master_commission": 0, "total": 0},
             })
         current += timedelta(days=1)
 
     return filled
+
+
+COST_FIELDS = (
+    "rent_monthly",
+    "utilities_monthly",
+    "manager_monthly",
+    "admin_monthly",
+    "cleaning_monthly",
+    "other_fixed_monthly",
+    "materials_pct",
+    "acquiring_pct",
+    "master_commission_pct",
+    "master_min_guarantee",
+)
+
+
+async def get_cost_settings(session: AsyncSession) -> dict:
+    """Расходы как их задаёт владелец — суммами в месяц и процентами."""
+    row = await session.scalar(select(CostModel).order_by(CostModel.id).limit(1))
+    today = date.today()
+    days = _days_in_month(today.year, today.month)
+
+    if row is None:
+        values = {f: 0.0 for f in COST_FIELDS}
+        monthly_fixed = 0.0
+    else:
+        values = {f: float(getattr(row, f)) for f in COST_FIELDS}
+        monthly_fixed = sum(
+            values[f] for f in COST_FIELDS if f.endswith("_monthly")
+        )
+
+    return {
+        **values,
+        "fixed_monthly_total": round(monthly_fixed, 2),
+        "fixed_daily": round(monthly_fixed / days, 2),
+        "days_in_month": days,
+        "is_default": row is None,
+    }
+
+
+async def set_cost_settings(session: AsyncSession, values: dict) -> dict:
+    """Сохранить расходы. Строка всегда одна, поэтому обновляем её же."""
+    row = await session.scalar(select(CostModel).order_by(CostModel.id).limit(1))
+    if row is None:
+        row = CostModel(id=1)
+        session.add(row)
+
+    for field in COST_FIELDS:
+        if field in values and values[field] is not None:
+            setattr(row, field, Decimal(str(values[field])))
+
+    await session.commit()
+    return await get_cost_settings(session)
 
 
 async def get_plan_fact(session: AsyncSession) -> dict:
@@ -194,21 +358,23 @@ async def get_plan_fact(session: AsyncSession) -> dict:
     month_start = today.replace(day=1)
     month_end = today.replace(day=days_in_month)
 
+    costs = await get_costs(session, today)
     services = await _month_services(session, month_start, month_end)
     products = await _month_products(session, month_start, month_end)
     plan = await get_current_month_plan(session)
 
     earned = services["amount"] + products["amount"]
-    target = Decimal(str(plan["revenue_target"]))
+    target = Decimal(str(plan["profit_target"]))
 
     # Догоняющий план: остаток делится на оставшиеся дни, включая сегодняшний.
     # Делить месячный план на все дни месяца нельзя — к середине месяца такая
     # цифра перестаёт отвечать на вопрос «сколько нужно сегодня».
     days_left = days_in_month - today.day + 1
-    remaining = max(target - earned, Decimal("0"))
-    required_daily = Decimal("0")
+    profit_so_far = await _profit_to_date(session, month_start, today, costs)
+    remaining = max(target - profit_so_far, Decimal("0"))
+    profit_needed_daily = Decimal("0")
     if target > 0:
-        required_daily = (remaining / days_left).quantize(Decimal("0.01"))
+        profit_needed_daily = (remaining / days_left).quantize(Decimal("0.01"))
 
     fact_by_masters = await _fact_daily_average_by_masters(session, month_start, today)
     masters_today = await _get_masters_count(session, today)
@@ -216,14 +382,22 @@ async def get_plan_fact(session: AsyncSession) -> dict:
     rows = []
     for masters in (1, 2, 3):
         fact = fact_by_masters.get(masters)
+        break_even = _break_even_revenue(masters, costs)
+        # Вот здесь состав смены и начинает влиять: чтобы получить одну и ту же
+        # прибыль, при трёх мастерах нужно заработать больше, чем при одном —
+        # их гарант и процент вычитаются из той же выручки.
+        required = (
+            _revenue_for_profit(masters, profit_needed_daily, costs)
+            if target > 0
+            else Decimal("0")
+        )
         rows.append({
             "masters": masters,
-            "break_even_daily": float(_break_even_revenue(masters)),
-            # Сумма для плана от состава смены не зависит: план один на месяц.
-            # Осмысленным в разрезе смены становится второе число — сколько
-            # при этом должен сделать каждый мастер.
-            "plan_daily_required": float(required_daily),
-            "plan_per_master": float((required_daily / masters).quantize(Decimal("0.01"))),
+            "break_even_daily": float(break_even),
+            "plan_daily_required": float(required),
+            "plan_per_master": float(
+                (required / masters).quantize(Decimal("0.01"))
+            ) if required > 0 else 0.0,
             "fact_daily_avg": float(fact["avg"]) if fact else None,
             "fact_days": fact["days"] if fact else 0,
             "is_today": masters == masters_today,
@@ -244,15 +418,38 @@ async def get_plan_fact(session: AsyncSession) -> dict:
             "products_units": products["units"],
         },
         "plan": {
-            "revenue_target": float(target),
+            "profit_target": float(target),
+            "profit_so_far": float(profit_so_far),
             "remaining": float(remaining),
-            "required_daily": float(required_daily),
+            "profit_needed_daily": float(profit_needed_daily),
             "completion_pct": float(
-                (earned / target * 100).quantize(Decimal("0.1"))
+                (profit_so_far / target * 100).quantize(Decimal("0.1"))
             ) if target > 0 else 0.0,
         },
         "rows": rows,
     }
+
+
+async def _profit_to_date(
+    session: AsyncSession,
+    date_from: date,
+    date_to: date,
+    costs: Costs,
+) -> Decimal:
+    """Прибыль, набранная с начала месяца.
+
+    Считается по дням, а не от месячных сумм: оплата мастера зависит от
+    выручки конкретного дня и от того, сколько человек было на смене, —
+    усреднение по месяцу даёт другое число.
+    """
+    days = await get_daily_finance(session, date_from, date_to)
+    total = Decimal("0")
+    for day in days:
+        earned = Decimal(str(day["completed"])) + Decimal(str(day["product_sales"]))
+        if earned <= 0:
+            continue
+        total += _compute_margin(earned, int(day["masters_count"] or 0), costs)["margin_rub"]
+    return total.quantize(Decimal("0.01"))
 
 
 async def _month_services(session: AsyncSession, date_from: date, date_to: date) -> dict:
@@ -378,7 +575,9 @@ async def get_monthly_finance(
         master_commission = _estimate_monthly_commission(revenue)
         total_costs = monthly_fixed + variable_cost + master_commission
         margin_rub = revenue - total_costs
-        margin_pct = (margin_rub / revenue * 100).quantize(Decimal("0.1")) if revenue > 0 else Decimal("0")
+        margin_pct = Decimal("0")
+        if revenue > 0:
+            margin_pct = (margin_rub / revenue * 100).quantize(Decimal("0.1"))
 
         break_even_monthly = (FIXED_DAILY_COST * days_in_month) / (
             Decimal("1") - VARIABLE_COST_PCT - MASTER_COMMISSION_PCT
@@ -416,13 +615,13 @@ async def get_current_month_plan(session: AsyncSession) -> dict:
     if row:
         return {
             "period": row.period,
-            "revenue_target": float(row.revenue_target),
+            "profit_target": float(row.profit_target),
             "margin_target_pct": float(row.margin_target_pct),
         }
 
     return {
         "period": period,
-        "revenue_target": 0,
+        "profit_target": 0,
         "margin_target_pct": 30.0,
     }
 
@@ -430,19 +629,19 @@ async def get_current_month_plan(session: AsyncSession) -> dict:
 async def set_monthly_plan(
     session: AsyncSession,
     period: str,
-    revenue_target: Decimal,
+    profit_target: Decimal,
     margin_target_pct: float = 30.0,
 ) -> dict:
     from sqlalchemy.dialects.postgresql import insert as pg_insert
 
     stmt = pg_insert(PlanTarget).values(
         period=period,
-        revenue_target=revenue_target,
+        profit_target=profit_target,
         margin_target_pct=margin_target_pct,
     ).on_conflict_do_update(
         index_elements=["period"],
         set_={
-            "revenue_target": revenue_target,
+            "profit_target": profit_target,
             "margin_target_pct": margin_target_pct,
             "updated_at": func.now(),
         },
@@ -453,7 +652,7 @@ async def set_monthly_plan(
 
     return {
         "period": period,
-        "revenue_target": float(revenue_target),
+        "profit_target": float(profit_target),
         "margin_target_pct": margin_target_pct,
     }
 
@@ -527,7 +726,8 @@ async def get_hourly_finance(
             hourly[hour]["scheduled"] += revenue
 
     masters_count = await _get_masters_count(session, target_date)
-    break_even = _break_even_revenue(masters_count)
+    costs = await get_costs(session, target_date)
+    break_even = _break_even_revenue(masters_count, costs)
 
     result = []
     for hour in WORKING_HOURS:

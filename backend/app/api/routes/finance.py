@@ -6,13 +6,15 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.schemas.schemas import PlanTargetRequest, PlanTargetResponse
+from app.schemas.schemas import CostSettingsRequest, PlanTargetRequest, PlanTargetResponse
 from app.services.finance import (
+    get_cost_settings,
     get_current_month_plan,
     get_daily_finance,
     get_hourly_finance,
     get_monthly_finance,
     get_plan_fact,
+    set_cost_settings,
     set_monthly_plan,
 )
 
@@ -47,6 +49,20 @@ async def monthly(
     return await get_monthly_finance(db, year)
 
 
+@router.get("/costs")
+async def costs(db: AsyncSession = Depends(get_db)) -> dict:
+    """Структура расходов: аренда, оклады, проценты."""
+    return await get_cost_settings(db)
+
+
+@router.post("/costs")
+async def save_costs(
+    request: CostSettingsRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    return await set_cost_settings(db, request.model_dump())
+
+
 @router.get("/plan-fact")
 async def plan_fact(
     db: AsyncSession = Depends(get_db),
@@ -70,7 +86,7 @@ async def set_plan(
     result = await set_monthly_plan(
         db,
         request.period,
-        request.revenue_target,
+        request.profit_target,
         request.margin_target_pct,
     )
     return result

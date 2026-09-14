@@ -98,13 +98,33 @@ interface DailyFinancePoint {
   margin_rub: number;
   margin_pct: number;
   break_even: number;
+  /** Выручка, нужная в этот день для выполнения плана по прибыли. */
+  revenue_for_plan: number;
   costs: { fixed: number; variable: number; master_commission: number; total: number };
 }
 
 interface PlanData {
   period: string;
-  revenue_target: number;
+  profit_target: number;
   margin_target_pct: number;
+}
+
+/** Ответ /api/finance/costs — структура расходов, задаётся владельцем. */
+interface CostSettings {
+  rent_monthly: number;
+  utilities_monthly: number;
+  manager_monthly: number;
+  admin_monthly: number;
+  cleaning_monthly: number;
+  other_fixed_monthly: number;
+  materials_pct: number;
+  acquiring_pct: number;
+  master_commission_pct: number;
+  master_min_guarantee: number;
+  fixed_monthly_total: number;
+  fixed_daily: number;
+  days_in_month: number;
+  is_default: boolean;
 }
 
 /** Ответ /api/finance/plan-fact — сводка месяца и разбивка по составу смены. */
@@ -133,9 +153,10 @@ interface PlanFactSummary {
     products_units: number;
   };
   plan: {
-    revenue_target: number;
+    profit_target: number;
+    profit_so_far: number;
     remaining: number;
-    required_daily: number;
+    profit_needed_daily: number;
     completion_pct: number;
   };
   rows: PlanFactRow[];
@@ -552,11 +573,29 @@ function SegmentCard({
   );
 }
 
+/** Поля структуры расходов: подпись, единица и ключ в ответе сервера. */
+const COST_FIELDS = [
+  { key: "rent_monthly", label: "Аренда", unit: "₽ / мес" },
+  { key: "utilities_monthly", label: "Коммуналка", unit: "₽ / мес" },
+  { key: "manager_monthly", label: "Управляющий", unit: "₽ / мес" },
+  { key: "admin_monthly", label: "Администратор", unit: "₽ / мес" },
+  { key: "cleaning_monthly", label: "Уборка", unit: "₽ / мес" },
+  { key: "other_fixed_monthly", label: "Прочие постоянные", unit: "₽ / мес" },
+  { key: "materials_pct", label: "Расходники", unit: "% выручки" },
+  { key: "acquiring_pct", label: "Эквайринг", unit: "% выручки" },
+  { key: "master_commission_pct", label: "Мастеру", unit: "% выручки" },
+  { key: "master_min_guarantee", label: "Гарант мастера", unit: "₽ / смена" },
+] as const;
+
 function PlanFactPage() {
   const [hourly, setHourly] = useState<any[]>([]);
   const [daily, setDaily] = useState<DailyFinancePoint[]>([]);
-  const [plan, setPlan] = useState<PlanData>({ period: "", revenue_target: 0, margin_target_pct: 30 });
+  const [plan, setPlan] = useState<PlanData>({ period: "", profit_target: 0, margin_target_pct: 30 });
   const [summary, setSummary] = useState<PlanFactSummary | null>(null);
+  const [costs, setCosts] = useState<CostSettings | null>(null);
+  const [costsOpen, setCostsOpen] = useState(false);
+  const [costsDraft, setCostsDraft] = useState<Record<string, string>>({});
+  const [costsError, setCostsError] = useState("");
   const [planInput, setPlanInput] = useState("");
   const [loading, setLoading] = useState(true);
 
@@ -570,18 +609,22 @@ function PlanFactPage() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [hRes, dRes, pRes, sRes] = await Promise.all([
+      const [hRes, dRes, pRes, sRes, cRes] = await Promise.all([
         fetch(`/api/finance/hourly?date=${todayStr}`),
         fetch(`/api/finance/daily?date_from=${monthStart}&date_to=${monthEnd}`),
         fetch("/api/finance/plan"),
         fetch("/api/finance/plan-fact"),
+        fetch("/api/finance/costs"),
       ]);
       setHourly(await hRes.json());
       setDaily(await dRes.json());
       const p = await pRes.json();
       setPlan(p);
-      setPlanInput(p.revenue_target > 0 ? String(Math.round(p.revenue_target)) : "");
+      setPlanInput(p.profit_target > 0 ? String(Math.round(p.profit_target)) : "");
       setSummary(await sRes.json());
+      const c: CostSettings = await cRes.json();
+      setCosts(c);
+      setCostsDraft(Object.fromEntries(COST_FIELDS.map((f) => [f.key, String(c[f.key])])));
     } catch (e) {
       console.error("Finance fetch error", e);
     }
@@ -601,17 +644,46 @@ function PlanFactPage() {
       await fetch("/api/finance/plan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ period: currentPeriod, revenue_target: val, margin_target_pct: plan.margin_target_pct }),
+        body: JSON.stringify({ period: currentPeriod, profit_target: val, margin_target_pct: plan.margin_target_pct }),
       });
-      setPlan({ ...plan, revenue_target: val });
+      setPlan({ ...plan, profit_target: val });
       await fetchData();
     } catch (e) {
       console.error("Plan save error", e);
     }
   };
 
-  const daysInMonth = new Date(year, now.getMonth() + 1, 0).getDate();
-  const dailyPlan = plan.revenue_target > 0 ? Math.round(plan.revenue_target / daysInMonth) : 0;
+  const saveCosts = async () => {
+    setCostsError("");
+    const body = Object.fromEntries(
+      COST_FIELDS.map((f) => [f.key, parseFloat(costsDraft[f.key] || "0") || 0]),
+    );
+    try {
+      const r = await fetch("/api/finance/costs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) {
+        // Сервер отвергает заведомо невозможную экономику — показываем его
+        // причину, а не общее «не сохранилось».
+        const detail = await r.json().catch(() => null);
+        setCostsError(
+          typeof detail?.detail === "string"
+            ? detail.detail
+            : "Не удалось сохранить: проверьте значения.",
+        );
+        return;
+      }
+      setCostsOpen(false);
+      await fetchData();
+    } catch (e) {
+      console.error("Costs save error", e);
+      setCostsError("Сервер не ответил.");
+    }
+  };
+
+  const dailyPlan = summary?.rows.find((r) => r.is_today)?.plan_daily_required ?? 0;
   const breakEvenDaily = hourly.length > 0 ? hourly[0].break_even : 19500;
   const todayRevenue = hourly.reduce((s: number, h: any) => s + h.completed + h.scheduled, 0);
   const mastersToday = hourly.length > 0 ? hourly[0].masters_count : 0;
@@ -640,7 +712,9 @@ function PlanFactPage() {
     });
   }, [hourly]);
 
-  const dailyPlanRequired = plan.revenue_target > 0 ? Math.round(plan.revenue_target / daysInMonth) : 0;
+  // Порог «сделал план» для подписи над столбцом: выручка сегодняшнего дня,
+  // нужная при текущем составе смены.
+  const dailyPlanRequired = summary?.rows.find((r) => r.is_today)?.plan_daily_required ?? 0;
 
   const dailyCumulative = useMemo(() => {
     let cumServices = 0;
@@ -653,7 +727,7 @@ function PlanFactPage() {
       cumProducts += (d.product_sales || 0);
       cumScheduled += d.scheduled;
       cumBE += d.break_even;
-      cumPlan += dailyPlanRequired;
+      cumPlan += d.revenue_for_plan || 0;
       const delta = d.completed + (d.product_sales || 0);
       return {
         ...d,
@@ -661,11 +735,11 @@ function PlanFactPage() {
         products: cumProducts,
         scheduled: cumScheduled,
         break_even: cumBE,
-        daily_plan_cum: dailyPlanRequired > 0 ? cumPlan : 0,
+        daily_plan_cum: cumPlan,
         delta,
       };
     });
-  }, [daily, dailyPlanRequired]);
+  }, [daily]);
 
   if (loading) return <Spinner />;
 
@@ -683,7 +757,7 @@ function PlanFactPage() {
                 число, и «500» вместо 500 000 молча превращалось в план
                 в пятьсот рублей. */}
             <label className="block text-[11px] uppercase tracking-wider text-gray-500 dark:text-zinc-500 mb-1">
-              План на месяц, ₽
+              План прибыли на месяц, ₽
             </label>
             <input
               type="number"
@@ -723,14 +797,20 @@ function PlanFactPage() {
             </span>
           </div>
 
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
             <SumCard
               label="Заработано всего"
               value={RUB(summary.fact.earned_total)}
+              note="выручка: услуги и косметика"
+              accent
+            />
+            <SumCard
+              label="Прибыль"
+              value={RUB(summary.plan.profit_so_far)}
               note={
-                summary.plan.revenue_target > 0
-                  ? `${summary.plan.completion_pct}% плана · осталось ${RUB(summary.plan.remaining)}`
-                  : "план на месяц не задан"
+                summary.plan.profit_target > 0
+                  ? `${summary.plan.completion_pct}% · ещё ${RUB(summary.plan.remaining)}`
+                  : "план прибыли не задан"
               }
               accent
             />
@@ -745,12 +825,16 @@ function PlanFactPage() {
               note={`на ${RUB(summary.fact.products_amount)}`}
             />
             <SumCard
-              label="Нужно в день"
-              value={summary.plan.required_daily > 0 ? RUB(summary.plan.required_daily) : "—"}
+              label="Нужно прибыли в день"
+              value={
+                summary.plan.profit_needed_daily > 0
+                  ? RUB(summary.plan.profit_needed_daily)
+                  : "—"
+              }
               note={
-                summary.plan.required_daily > 0
+                summary.plan.profit_needed_daily > 0
                   ? `чтобы догнать план за ${summary.days_left} дн.`
-                  : "задайте план на месяц"
+                  : "задайте план прибыли"
               }
             />
           </div>
@@ -761,7 +845,7 @@ function PlanFactPage() {
                 <tr className="text-left text-[11px] uppercase tracking-wider text-gray-500 dark:text-zinc-500">
                   <th className="pb-2 pr-4 font-semibold">Мастеров на смене</th>
                   <th className="pb-2 px-4 font-semibold">Маржинальность</th>
-                  <th className="pb-2 px-4 font-semibold">План</th>
+                  <th className="pb-2 px-4 font-semibold">План — нужна выручка</th>
                   <th className="pb-2 pl-4 font-semibold">Факт</th>
                 </tr>
               </thead>
@@ -826,6 +910,83 @@ function PlanFactPage() {
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      {/* Структура расходов — из неё считается порог безубыточности */}
+      {costs && (
+        <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-6 mb-6">
+          <button
+            onClick={() => setCostsOpen(!costsOpen)}
+            className="w-full flex flex-wrap items-baseline justify-between gap-3 text-left"
+          >
+            <h3 className="text-sm font-semibold uppercase tracking-widest text-gray-500 dark:text-zinc-400">
+              Расходы {costsOpen ? "▴" : "▾"}
+            </h3>
+            <span className="text-xs text-gray-500 dark:text-zinc-500">
+              постоянные {RUB(costs.fixed_monthly_total)} в месяц ·{" "}
+              <span className="text-gray-700 dark:text-zinc-300">
+                {RUB(costs.fixed_daily)} в день
+              </span>
+              {" · мастеру "}{costs.master_commission_pct}% с гарантом {RUB(costs.master_min_guarantee)}
+            </span>
+          </button>
+
+          {costsOpen && (
+            <>
+              <p className="text-xs text-gray-500 dark:text-zinc-500 mt-4 max-w-[70ch]">
+                Из этих чисел считается всё остальное: порог безубыточности,
+                выручка под план и прибыль за месяц. Постоянные расходы делятся
+                на {costs.days_in_month} дней текущего месяца.
+              </p>
+              <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mt-4">
+                {COST_FIELDS.map((f) => (
+                  <label key={f.key} className="block">
+                    <span className="block text-[11px] uppercase tracking-wider text-gray-500 dark:text-zinc-500 mb-1">
+                      {f.label}
+                    </span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={costsDraft[f.key] ?? ""}
+                      onChange={(e) =>
+                        setCostsDraft({ ...costsDraft, [f.key]: e.target.value })
+                      }
+                      className="w-full bg-gray-100 dark:bg-zinc-950 border border-gray-300 dark:border-zinc-700 rounded-lg px-3 py-2 text-sm text-right focus:outline-none focus:border-rubl-accent"
+                    />
+                    <span className="block text-[11px] text-gray-400 dark:text-zinc-600 mt-1">
+                      {f.unit}
+                    </span>
+                  </label>
+                ))}
+              </div>
+              {costsError && (
+                <p className="text-sm text-red-400 mt-4">{costsError}</p>
+              )}
+              <div className="flex items-center gap-3 mt-5">
+                <button
+                  onClick={saveCosts}
+                  className="flex items-center gap-1.5 bg-rubl-accent hover:bg-rubl-accent/90 text-black font-semibold px-4 py-2 rounded-lg text-sm transition-all"
+                >
+                  <Save size={14} />
+                  Сохранить расходы
+                </button>
+                <button
+                  onClick={() => {
+                    setCostsDraft(
+                      Object.fromEntries(
+                        COST_FIELDS.map((f) => [f.key, String(costs[f.key])]),
+                      ),
+                    );
+                    setCostsError("");
+                  }}
+                  className="text-sm text-gray-500 dark:text-zinc-500 hover:text-gray-800 dark:hover:text-zinc-300"
+                >
+                  Вернуть как было
+                </button>
+              </div>
+            </>
+          )}
         </div>
       )}
 
@@ -902,7 +1063,7 @@ function PlanFactPage() {
             <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-emerald-500" /> Товары</span>
             <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm border border-rubl-accent/30 bg-rubl-accent/25" /> Запланировано</span>
             <span className="flex items-center gap-1.5"><span className="w-0.5 h-4 bg-red-500 rounded-full" /> Мин. марж. (накоп.)</span>
-            {plan.revenue_target > 0 && <span className="flex items-center gap-1.5"><span className="w-0.5 h-4 bg-emerald-400 rounded-full" /> План (накоп.)</span>}
+            {plan.profit_target > 0 && <span className="flex items-center gap-1.5"><span className="w-0.5 h-4 bg-emerald-400 rounded-full" /> Выручка под план (накоп.)</span>}
           </div>
         </div>
         <ResponsiveContainer width="100%" height={340}>
@@ -917,7 +1078,7 @@ function PlanFactPage() {
                 if (name === "products") return [FMT_RUB(value), "Товары (накопл.)"];
                 if (name === "scheduled") return [FMT_RUB(value), "Запланировано (накопл.)"];
                 if (name === "break_even") return [FMT_RUB(value), "Мин. маржинальность"];
-                if (name === "daily_plan_cum") return [FMT_RUB(value), "План (накопл.)"];
+                if (name === "daily_plan_cum") return [FMT_RUB(value), "Выручка под план (накопл.)"];
                 return [value, name];
               }}
             />
@@ -952,7 +1113,7 @@ function PlanFactPage() {
               ))}
             </Bar>
             <Line dataKey="break_even" stroke="#ef4444" strokeWidth={2.5} dot={false} name="break_even" />
-            {plan.revenue_target > 0 && (
+            {plan.profit_target > 0 && (
               <Line dataKey="daily_plan_cum" stroke="#22c55e" strokeWidth={2.5} dot={false} name="daily_plan_cum" />
             )}
           </ComposedChart>

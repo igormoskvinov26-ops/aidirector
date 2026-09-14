@@ -3,7 +3,7 @@
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # ── Employee ──
@@ -183,13 +183,44 @@ class MonthlyFinancePoint(BaseModel):
     costs: dict
 
 
+class CostSettingsRequest(BaseModel):
+    """Структура расходов. Постоянные — суммой в месяц, переменные — в процентах.
+
+    Верхние границы стоят не для красоты: процент мастера вместе с расходниками
+    выше сотни означает, что каждый заработанный рубль приносит убыток, и порог
+    безубыточности перестаёт существовать.
+    """
+
+    rent_monthly: Decimal = Field(..., ge=0)
+    utilities_monthly: Decimal = Field(..., ge=0)
+    manager_monthly: Decimal = Field(..., ge=0)
+    admin_monthly: Decimal = Field(..., ge=0)
+    cleaning_monthly: Decimal = Field(..., ge=0)
+    other_fixed_monthly: Decimal = Field(default=0, ge=0)
+    materials_pct: Decimal = Field(..., ge=0, le=100)
+    acquiring_pct: Decimal = Field(default=0, ge=0, le=100)
+    master_commission_pct: Decimal = Field(..., ge=0, le=100)
+    master_min_guarantee: Decimal = Field(..., ge=0)
+
+    @model_validator(mode="after")
+    def _variable_share_must_leave_something(self) -> "CostSettingsRequest":
+        share = self.materials_pct + self.acquiring_pct + self.master_commission_pct
+        if share >= 100:
+            raise ValueError(
+                "Расходники, эквайринг и процент мастера вместе дают "
+                f"{share}% выручки. При таких условиях день не выйдет в плюс "
+                "ни при какой выручке."
+            )
+        return self
+
+
 class PlanTargetRequest(BaseModel):
     period: str = Field(..., pattern=r"^\d{4}-\d{2}$")
-    revenue_target: Decimal = Field(..., gt=0)
+    profit_target: Decimal = Field(..., gt=0)
     margin_target_pct: float = Field(default=30.0, ge=0, le=100)
 
 
 class PlanTargetResponse(BaseModel):
     period: str
-    revenue_target: float
+    profit_target: float
     margin_target_pct: float

@@ -233,15 +233,56 @@ class MonthlyMetrics(Base):
 
 
 class PlanTarget(Base):
+    """План на месяц — по прибыли, а не по выручке.
+
+    Выручка сама по себе ничего не говорит: при трёх мастерах на смене её
+    нужно заметно больше, чтобы получить ту же прибыль. Поэтому владелец
+    задаёт прибыль, а нужная выручка считается от состава смены.
+    """
+
     __tablename__ = "plan_targets"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     period: Mapped[str] = mapped_column(String(7), unique=True, index=True)
-    revenue_target: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
+    profit_target: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
     margin_target_pct: Mapped[Decimal] = mapped_column(Numeric(5, 1), default=30.0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class CostModel(Base):
+    """Структура расходов барбершопа — одна актуальная строка.
+
+    Раньше расходы были зашиты в исходник одним числом «11 000 ₽ в день».
+    Владелец не мог поправить аренду, не трогая код, и не видел, из чего
+    число складывается. Здесь оно разложено на составляющие: постоянные
+    задаются суммой в месяц, переменные — долей от выручки.
+    """
+
+    __tablename__ = "cost_model"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    # -- Постоянные расходы, рублей в месяц --
+    rent_monthly: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
+    utilities_monthly: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
+    manager_monthly: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
+    admin_monthly: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
+    cleaning_monthly: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
+    other_fixed_monthly: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
+
+    # -- Переменные расходы, доля от выручки в процентах --
+    materials_pct: Mapped[Decimal] = mapped_column(Numeric(5, 2), default=0)
+    acquiring_pct: Mapped[Decimal] = mapped_column(Numeric(5, 2), default=0)
+
+    # -- Оплата мастера: процент с выручки, но не ниже гаранта за смену --
+    master_commission_pct: Mapped[Decimal] = mapped_column(Numeric(5, 2), default=0)
+    master_min_guarantee: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
+
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
