@@ -17,8 +17,10 @@ BASE = {
     "yclients_company_id": 1,
     "yclients_user_token": "x",
     "postgres_password": "a-strong-db-password",
-    "admin_login": "igor",
-    "admin_password": "a-strong-admin-password",
+    "owner_login": "igor",
+    "owner_password": "a-strong-owner-password",
+    "operator_login": "admin",
+    "operator_password": "a-strong-operator-password",
 }
 
 
@@ -33,9 +35,10 @@ def blacklisted_password(monkeypatch) -> str:
     return value
 
 
-def test_rejects_blacklisted_admin_password(blacklisted_password):
+@pytest.mark.parametrize("field", ["owner_password", "operator_password"])
+def test_rejects_blacklisted_access_password(blacklisted_password, field):
     with pytest.raises(ValidationError):
-        Settings(**{**BASE, "admin_password": blacklisted_password}, _env_file=None)
+        Settings(**{**BASE, field: blacklisted_password}, _env_file=None)
 
 
 def test_rejects_blacklisted_db_password(blacklisted_password):
@@ -43,9 +46,23 @@ def test_rejects_blacklisted_db_password(blacklisted_password):
         Settings(**{**BASE, "postgres_password": blacklisted_password}, _env_file=None)
 
 
-def test_rejects_short_admin_password():
+@pytest.mark.parametrize("field", ["owner_password", "operator_password"])
+def test_rejects_short_access_password(field):
     with pytest.raises(ValidationError):
-        Settings(**{**BASE, "admin_password": "short"}, _env_file=None)
+        Settings(**{**BASE, field: "short"}, _env_file=None)
+
+
+def test_requires_both_accounts(monkeypatch):
+    """Забыть вторую учётную запись нельзя: приложение не стартует.
+
+    Переменные окружения убираются явно: conftest выставляет их для всех
+    остальных тестов, и без этого Settings подхватил бы их в обход аргументов.
+    """
+    monkeypatch.delenv("OPERATOR_LOGIN", raising=False)
+    monkeypatch.delenv("OPERATOR_PASSWORD", raising=False)
+    without_operator = {k: v for k, v in BASE.items() if not k.startswith("operator_")}
+    with pytest.raises(ValidationError):
+        Settings(**without_operator, _env_file=None)
 
 
 def test_rejects_empty_password():

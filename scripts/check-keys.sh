@@ -38,7 +38,7 @@ else warn "права $perms — выполни: chmod 600 $ENV_FILE"; fi
 echo ""
 echo "── Обязательные поля ─────────────────────────────"
 for k in YCLIENTS_PARTNER_TOKEN YCLIENTS_USER_TOKEN YCLIENTS_COMPANY_ID \
-         ADMIN_LOGIN ADMIN_PASSWORD POSTGRES_PASSWORD; do
+         OWNER_LOGIN OWNER_PASSWORD OPERATOR_LOGIN OPERATOR_PASSWORD POSTGRES_PASSWORD; do
     if [ -n "${!k:-}" ]; then green "$k заполнен"; else red "$k пустой"; fi
 done
 
@@ -47,7 +47,7 @@ echo "── Пароли ──────────────────
 # Сожжённые и типовые пароли сравниваются по отпечатку sha256:
 # сами значения лежали в публичном репозитории и здесь не повторяются.
 WEAK_HASHES="$(sed -n 's/^    "\([0-9a-f]\{64\}\)".*/\1/p' backend/app/config.py)"
-for k in ADMIN_PASSWORD POSTGRES_PASSWORD; do
+for k in OWNER_PASSWORD OPERATOR_PASSWORD POSTGRES_PASSWORD; do
     v="${!k:-}"
     h=$(printf '%s' "$v" | tr 'A-Z' 'a-z' | sha256sum | cut -d' ' -f1)
     if printf '%s\n' "$WEAK_HASHES" | grep -qx "$h"; then

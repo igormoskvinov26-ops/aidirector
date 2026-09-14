@@ -23,7 +23,7 @@ fi
 
 # Ключи, которые обязаны смениться после утечки
 SECRETS="YCLIENTS_PARTNER_TOKEN YCLIENTS_USER_TOKEN YCLIENTS_OLD_USER_TOKEN
-         POSTGRES_PASSWORD DEEPSEEK_API_KEY ADMIN_PASSWORD TELEGRAM_BOT_TOKEN"
+         POSTGRES_PASSWORD DEEPSEEK_API_KEY OWNER_PASSWORD OPERATOR_PASSWORD TELEGRAM_BOT_TOKEN"
 
 fp() {  # отпечаток значения, 8 символов
     local v="$1"
@@ -56,7 +56,7 @@ done
 
 echo ""
 # Несекретные поля — их менять не нужно, но полезно видеть, что не потерялись
-for key in YCLIENTS_COMPANY_ID YCLIENTS_OLD_COMPANY_ID POSTGRES_DB POSTGRES_USER ADMIN_LOGIN TELEGRAM_CHAT_ID; do
+for key in YCLIENTS_COMPANY_ID YCLIENTS_OLD_COMPANY_ID POSTGRES_DB POSTGRES_USER OWNER_LOGIN OPERATOR_LOGIN TELEGRAM_CHAT_ID; do
     o=$(val "$OLD" "$key"); n=$(val "$NEW" "$key")
     [ "$o" = "$n" ] && mark="=" || mark="изменено"
     printf "%-26s %s\n" "$key" "$mark"

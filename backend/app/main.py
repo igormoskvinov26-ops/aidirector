@@ -32,13 +32,40 @@ from app.database import check_db, init_db
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 PUBLIC_PATHS = {"/health"}
 
+ROLE_OWNER = "owner"
+ROLE_OPERATOR = "operator"
+
+# Что разрешено роли operator помимо статики страницы: только база обзвона.
+# Список из префиксов, а не из точных путей, потому что под /api/client-base
+# лежат и задачи, и результаты звонков, и они ещё будут добавляться.
+OPERATOR_API_PREFIXES = ("/api/client-base", "/api/me")
+
+
+def _resolve_role(login: str, password: str) -> str | None:
+    """Вернуть роль по паре логин-пароль либо None.
+
+    Все четыре сравнения выполняются всегда, до проверки результата: иначе по
+    времени ответа можно определить, существует ли такой логин.
+    """
+    owner_login_ok = secrets.compare_digest(login, settings.owner_login)
+    owner_password_ok = secrets.compare_digest(password, settings.owner_password)
+    operator_login_ok = secrets.compare_digest(login, settings.operator_login)
+    operator_password_ok = secrets.compare_digest(password, settings.operator_password)
+
+    if owner_login_ok and owner_password_ok:
+        return ROLE_OWNER
+    if operator_login_ok and operator_password_ok:
+        return ROLE_OPERATOR
+    return None
+
 
 class BasicAuthMiddleware(BaseHTTPMiddleware):
-    """HTTP Basic auth for everything except /health.
+    """HTTP Basic auth с двумя ролями, всё кроме /health закрыто.
 
-    Credentials come from .env with no fallback default, and both fields are
-    compared in constant time even when the login is wrong, so response timing
-    does not leak whether a username exists.
+    Логины и пароли берутся из .env без значений по умолчанию. Роль владельца
+    видит всё; роль оператора — только базу обзвона, остальные api-маршруты
+    получают 403. Разграничение живёт здесь, а не в отдельных проверках внутри
+    маршрутов: новый маршрут по умолчанию закрыт для оператора, а не открыт.
     """
 
     async def dispatch(self, request: Request, call_next):
@@ -54,12 +81,21 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
         except Exception:
             return self._challenge()
 
-        login_ok = secrets.compare_digest(login, settings.admin_login)
-        password_ok = secrets.compare_digest(password, settings.admin_password)
-        if not (login_ok and password_ok):
+        role = _resolve_role(login, password)
+        if role is None:
             logger.warning(f"failed auth from {request.client.host if request.client else '?'}")
             return self._challenge()
 
+        path = request.url.path
+        if role == ROLE_OPERATOR and path.startswith("/api/"):
+            if not path.startswith(OPERATOR_API_PREFIXES):
+                logger.warning(f"operator denied {path}")
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "Недостаточно прав для этого раздела"},
+                )
+
+        request.state.role = role
         return await call_next(request)
 
     @staticmethod
@@ -140,6 +176,12 @@ async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok", "version": "2.0.0", "database": await check_db()}
+
+
+@app.get("/api/me")
+async def me(request: Request) -> dict:
+    """Роль текущего пользователя — по ней интерфейс решает, что показывать."""
+    return {"role": getattr(request.state, "role", ROLE_OPERATOR)}
 
 
 @app.get("/api/info")

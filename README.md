@@ -20,7 +20,7 @@
 cp .env.example .env
 # Заполнить .env. Пароли сгенерировать, не придумывать:
 #   openssl rand -base64 24   → POSTGRES_PASSWORD
-#   openssl rand -base64 18   → ADMIN_PASSWORD
+#   openssl rand -base64 18   → OWNER_PASSWORD
 ./start.sh
 ```
 

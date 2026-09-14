@@ -71,9 +71,16 @@ class Settings(BaseSettings):
     # -- Cache --
     cache_ttl_seconds: int = 300
 
-    # -- Admin (required, must not be a known weak value) --
-    admin_login: str
-    admin_password: str
+    # -- Доступ (обязательно, без значений по умолчанию) --
+    # Две учётные записи с разным объёмом прав:
+    #   owner    — видит всё;
+    #   operator — только база обзвона, /api/client-base/*.
+    # Разделение не косметическое: на странице обзвона лежат имена и телефоны
+    # клиентов, и объём доступа к ним должен быть минимально необходимым.
+    owner_login: str
+    owner_password: str
+    operator_login: str
+    operator_password: str
 
     # -- Telegram --
     telegram_bot_token: str = ""
@@ -88,16 +95,17 @@ class Settings(BaseSettings):
     work_close_hour: int = 22
     slot_step_minutes: int = 30
 
-    @field_validator("admin_password")
+    @field_validator("owner_password", "operator_password")
     @classmethod
-    def _reject_weak_admin_password(cls, v: str) -> str:
+    def _reject_weak_access_password(cls, v: str, info) -> str:
+        env_name = info.field_name.upper()
         if _is_known_weak(v):
             raise ValueError(
-                "ADMIN_PASSWORD is a known weak/default value. "
+                f"{env_name} is a known weak/default value. "
                 "Set a unique password in .env before starting."
             )
         if len(v) < 12:
-            raise ValueError("ADMIN_PASSWORD must be at least 12 characters long.")
+            raise ValueError(f"{env_name} must be at least 12 characters long.")
         return v
 
     @field_validator("postgres_password")

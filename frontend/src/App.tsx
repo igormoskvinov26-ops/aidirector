@@ -87,6 +87,10 @@ const fmt = (n: string | number): string => {
 const GOLD = "#d4a853";
 
 // ── Navigation ──
+// Роль оператора видит единственный раздел. Ограничение продублировано на
+// сервере: прятать пункты меню — это удобство, а не защита.
+const OPERATOR_PAGES = ["clientbase"];
+
 const NAV = [
   { id: "dashboard", label: "Дашборд", icon: LayoutDashboard },
   { id: "masters", label: "Мастера", icon: Scissors },
@@ -676,6 +680,7 @@ function AIPage() {
 export default function App() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [role, setRole] = useState<"owner" | "operator">("operator");
   const [page, setPage] = useState("dashboard");
   const [theme, setTheme] = useState<"dark" | "light">(() => {
     if (typeof window !== "undefined") {
@@ -690,12 +695,34 @@ export default function App() {
   }, [theme]);
 
   useEffect(() => {
-    const now = new Date();
-    const { from, to } = monthRange(now.getFullYear(), now.getMonth() + 1);
-    fetch(`/api/dashboard/range?date_from=${from}&date_to=${to}`)
-      .then((r) => r.json())
-      .then(setData)
-      .catch((err) => {
+    // Роль выясняем до всего остального: от неё зависит и меню, и то, какие
+    // запросы вообще имеет смысл делать. Оператору дашборд не запрашиваем —
+    // сервер на него ответит 403.
+    (async () => {
+      let resolved: "owner" | "operator" = "operator";
+      try {
+        const r = await fetch("/api/me");
+        if (r.ok) {
+          const body = await r.json();
+          resolved = body.role === "owner" ? "owner" : "operator";
+        }
+      } catch (err) {
+        console.error("Не удалось определить роль:", err);
+      }
+      setRole(resolved);
+
+      if (resolved !== "owner") {
+        setPage("clientbase");
+        setLoading(false);
+        return;
+      }
+
+      const now = new Date();
+      const { from, to } = monthRange(now.getFullYear(), now.getMonth() + 1);
+      try {
+        const r = await fetch(`/api/dashboard/range?date_from=${from}&date_to=${to}`);
+        setData(await r.json());
+      } catch (err) {
         console.error("API не доступен:", err);
         setData({
           period: "API не доступен",
@@ -704,8 +731,10 @@ export default function App() {
           top_masters: [],
           cancellation_rate: 0,
         });
-      })
-      .finally(() => setLoading(false));
+      } finally {
+        setLoading(false);
+      }
+    })();
   }, []);
 
   if (loading) return <Spinner />;
@@ -726,7 +755,9 @@ export default function App() {
           </div>
 
           <nav className="space-y-1">
-            {NAV.map((item) => {
+            {NAV.filter(
+              (item) => role === "owner" || OPERATOR_PAGES.includes(item.id),
+            ).map((item) => {
               const Icon = item.icon;
               const active = page === item.id;
               return (
@@ -765,12 +796,12 @@ export default function App() {
       {/* Main */}
       <main className="flex-1 ml-60 p-8 min-h-screen">
         <div className="max-w-[1280px] mx-auto">
-          {page === "dashboard" && <DashboardPage data={data} />}
-          {page === "masters" && <MastersPage data={data} />}
-          {page === "clients" && <ClientsPage />}
+          {role === "owner" && page === "dashboard" && <DashboardPage data={data} />}
+          {role === "owner" && page === "masters" && <MastersPage data={data} />}
+          {role === "owner" && page === "clients" && <ClientsPage />}
           {page === "clientbase" && <ClientBasePage />}
-          {page === "finance" && <FinancePage />}
-          {page === "ai" && <AIPage />}
+          {role === "owner" && page === "finance" && <FinancePage />}
+          {role === "owner" && page === "ai" && <AIPage />}
         </div>
       </main>
     </div>

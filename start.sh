@@ -9,7 +9,8 @@ if [ ! -f .env ]; then
     echo "Нет .env. Скопируй .env.example в .env и заполни:"
     echo "  cp .env.example .env"
     echo "  POSTGRES_PASSWORD:  openssl rand -base64 24"
-    echo "  ADMIN_PASSWORD:     openssl rand -base64 18"
+    echo "  OWNER_PASSWORD:     openssl rand -base64 18"
+    echo "  OPERATOR_PASSWORD:  фраза из нескольких слов, минимум 12 символов"
     exit 1
 fi
 
