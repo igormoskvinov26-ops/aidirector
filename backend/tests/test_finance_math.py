@@ -10,10 +10,7 @@ from decimal import Decimal
 import pytest
 
 from app.services.finance import (
-    DEFAULT_COSTS,
     FIXED_DAILY_COST,
-    MASTER_COMMISSION_PCT,
-    VARIABLE_COST_PCT,
     Costs,
     _break_even_revenue,
     _compute_margin,

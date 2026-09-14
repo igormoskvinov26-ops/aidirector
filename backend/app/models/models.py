@@ -318,7 +318,9 @@ class ContactTask(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint("client_id", "group_code", "due_date", name="uq_contact_task_client_group_date"),
+        UniqueConstraint(
+            "client_id", "group_code", "due_date", name="uq_contact_task_client_group_date"
+        ),
     )
 
 
