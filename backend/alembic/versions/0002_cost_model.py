@@ -115,7 +115,7 @@ def _seed_defaults() -> None:
             "INSERT INTO cost_model ("
             "id, fixed_monthly, materials_pct, acquiring_pct,"
             " master_commission_pct, product_commission_pct) VALUES ("
-            "1, 403149, 3.5, 0, 40, 10)"
+            "1, 372117, 3.5, 0, 40, 10)"
         ))
         return
 

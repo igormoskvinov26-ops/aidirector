@@ -23,7 +23,7 @@ from app.services.finance import (
 )
 
 SAMPLE = {
-    "fixed_monthly": 403149,
+    "fixed_monthly": 372117,
     "materials_pct": 3.5,
     "acquiring_pct": 0,
     "master_commission_pct": 40,
@@ -56,12 +56,12 @@ async def test_empty_table_falls_back_to_report_values(session):
 @pytest.mark.asyncio
 async def test_saved_values_come_back(session):
     saved = await set_cost_settings(session, SAMPLE)
-    assert saved["fixed_monthly"] == 403149
+    assert saved["fixed_monthly"] == 372117
     assert saved["master_commission_pct"] == 40
     assert saved["is_default"] is False
 
     again = await get_cost_settings(session)
-    assert again["fixed_monthly"] == 403149
+    assert again["fixed_monthly"] == 372117
 
 
 @pytest.mark.asyncio
@@ -71,7 +71,7 @@ async def test_monthly_sum_is_spread_over_the_month(session):
     settings = await get_cost_settings(session)
     costs = await get_costs(session)
 
-    expected = Decimal("403149") / Decimal(settings["days_in_month"])
+    expected = Decimal("372117") / Decimal(settings["days_in_month"])
     assert abs(costs.fixed_daily - expected) < Decimal("0.02")
     assert settings["fixed_daily"] == float(round(expected, 2))
 
@@ -105,18 +105,44 @@ async def test_master_pay_is_not_part_of_the_fixed_sum(session):
     assert (await get_costs(session)).fixed_daily == base
 
 
-@pytest.mark.asyncio
-async def test_collapsing_the_breakdown_did_not_move_the_threshold(session):
-    """Свёртка статей в одно число не должна была сдвинуть экономику.
+def test_the_default_is_the_august_figures():
+    """Число собрано по выгрузке за август, а не придумано.
 
-    Раньше сумма складывалась из шести статей плюс администратор за смены:
-    296 000 + 4 000 x 15,5 + 45 149. Теперь она задаётся одним числом, и оно
-    обязано быть тем же.
+    Аренда, уборка, прочие и бизнес-расходы взяты из кассы; управляющий,
+    сменный администратор и налоги — со слов владельца, потому что в выгрузке
+    они лежат одной статьёй вместе с оплатой мастеров.
     """
-    assert DEFAULT_FIXED_MONTHLY == (
-        Decimal("296000") + Decimal("4000") * Decimal("15.5") + Decimal("45149")
+    из_кассы = (
+        Decimal("170000")  # аренда
+        + Decimal("15000")  # уборка
+        + Decimal("17137")  # прочие расходы
+        + Decimal("11980")  # бизнес-расходы
     )
+    от_владельца = (
+        Decimal("90000")  # управляющий
+        + Decimal("62000")  # сменный администратор, 4 000 x 15,5
+        + Decimal("6000")  # налоги
+    )
+    assert DEFAULT_FIXED_MONTHLY == из_кассы + от_владельца
 
+
+def test_master_pay_and_materials_stay_out_of_the_default():
+    """Проверка от двойного счёта — самой дорогой ошибки в этой модели.
+
+    В августе мастерам и на расходники ушло столько, что попади это в
+    постоянную сумму, порог безубыточности вырос бы почти вдвое, и прибыльные
+    дни красились бы красным.
+    """
+    расходники = Decimal("29060")
+    зарплата_одной_статьёй = Decimal("257200")
+
+    # Если бы сложили всё подряд, как лежит в кассе:
+    наивно = DEFAULT_FIXED_MONTHLY + расходники + зарплата_одной_статьёй
+    assert наивно > DEFAULT_FIXED_MONTHLY * Decimal("1.7")
+
+
+@pytest.mark.asyncio
+async def test_default_costs_stay_usable(session):
     await set_cost_settings(session, SAMPLE)
     assert (await get_costs(session)).fixed_daily > 0
 
