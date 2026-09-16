@@ -23,7 +23,7 @@ from app.services.finance import (
 )
 
 SAMPLE = {
-    "fixed_monthly": 372117,
+    "fixed_monthly": 389117,
     "materials_pct": 3.5,
     "acquiring_pct": 0,
     "master_commission_pct": 40,
@@ -56,12 +56,12 @@ async def test_empty_table_falls_back_to_report_values(session):
 @pytest.mark.asyncio
 async def test_saved_values_come_back(session):
     saved = await set_cost_settings(session, SAMPLE)
-    assert saved["fixed_monthly"] == 372117
+    assert saved["fixed_monthly"] == 389117
     assert saved["master_commission_pct"] == 40
     assert saved["is_default"] is False
 
     again = await get_cost_settings(session)
-    assert again["fixed_monthly"] == 372117
+    assert again["fixed_monthly"] == 389117
 
 
 @pytest.mark.asyncio
@@ -71,7 +71,7 @@ async def test_monthly_sum_is_spread_over_the_month(session):
     settings = await get_cost_settings(session)
     costs = await get_costs(session)
 
-    expected = Decimal("372117") / Decimal(settings["days_in_month"])
+    expected = Decimal("389117") / Decimal(settings["days_in_month"])
     assert abs(costs.fixed_daily - expected) < Decimal("0.02")
     assert settings["fixed_daily"] == float(round(expected, 2))
 
@@ -120,8 +120,9 @@ def test_the_default_is_the_august_figures():
     )
     от_владельца = (
         Decimal("90000")  # управляющий
-        + Decimal("62000")  # сменный администратор, 4 000 x 15,5
+        + Decimal("64000")  # сменный администратор, 4 000 x 16 смен
         + Decimal("6000")  # налоги
+        + Decimal("15000")  # коммуналка
     )
     assert DEFAULT_FIXED_MONTHLY == из_кассы + от_владельца
 

@@ -66,7 +66,7 @@ def upgrade() -> None:
 
     # Строка расходов могла остаться пустой — тогда порог обнулится, и любой
     # день покажется прибыльным. Это опаснее, чем отсутствие настроек.
-    op.execute("UPDATE cost_model SET fixed_monthly = 372117 WHERE fixed_monthly <= 0")
+    op.execute("UPDATE cost_model SET fixed_monthly = 389117 WHERE fixed_monthly <= 0")
 
     with op.batch_alter_table("cost_model") as batch:
         for column in СТАРЫЕ_КОЛОНКИ:
