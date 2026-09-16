@@ -87,6 +87,8 @@ echo ""
 if [ -n "$DRY" ]; then
     echo "Это была примерка. Без --dry-run изменения применятся."
 else
-    echo "Готово. Проверить: https://$BUCKET.website.yandexcloud.net"
+    echo "Готово. Проверить: https://$BUCKET"
+    echo "Технический адрес, минуя домен: https://$BUCKET.website.yandexcloud.net"
+    echo "У страниц кеш 300 секунд — правки появятся в течение пяти минут."
     echo "И обязательно — с мобильного интернета российского оператора, без VPN."
 fi
