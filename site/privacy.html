@@ -18,7 +18,27 @@
 <link rel="stylesheet" href="fonts/fonts.css">
 
 <style>
+/* Кнопки и поля ввода не наследуют шрифт от родителя — такое правило у
+   браузера. Без этой строки кнопка мобильного меню набиралась Arial. */
+button,input,select,textarea{font-family:inherit;}
 :root{
+  --font:'Manrope',system-ui,sans-serif;
+  /* Шкала размеров. Иерархия строится только ею и весом шрифта —
+     новых значений не добавлять, иначе снова наберётся тридцать два.
+       --fs-1  подписи разрядкой, знак рубля, мелкие капсы
+       --fs-2  служебное: коды услуг, сноски, списки, подвал
+       --fs-3  плотный текст: прейскурант, биографии, карточки
+       --fs-4  основной текст, кнопки, вводные абзацы
+       --fs-5  акцентные вводные, крупные значения контактов
+       --fs-6  имена мастеров, логотип
+       --fs-7  числа в блоке «коротко о нас»
+       --fs-h2 заголовки разделов
+       --fs-h1 главный заголовок на первом экране */
+  --fs-1:11px; --fs-2:13px; --fs-3:15px; --fs-4:17px;
+  --fs-5:21px; --fs-6:27px; --fs-7:34px;
+  --fs-h2:clamp(32px,5vw,56px);
+  --fs-h1:clamp(52px,9.6vw,96px);
+
   --ink:#0e0d0c;
   --panel:#151311;
   --line:#2b2621;
@@ -33,8 +53,8 @@ html{scroll-behavior:smooth;}
 body{
   background:var(--ink);
   color:var(--cream);
-  font-family:'Manrope',system-ui,sans-serif;
-  font-size:16px;
+  font-family:var(--font);
+  font-size:var(--fs-4);
   line-height:1.6;
   -webkit-font-smoothing:antialiased;
 }
@@ -53,19 +73,19 @@ header{
 .logo{display:flex;align-items:center;gap:12px;}
 .logo-mark{height:42px;width:auto;display:block;}
 .logo-text{
-  font-family:'Cormorant',serif;font-size:24px;font-weight:600;letter-spacing:.05em;
+  font-family:var(--font);font-size:var(--fs-6);font-weight:600;letter-spacing:.05em;
   color:var(--gold);line-height:1;
 }
 .logo-text small{
-  display:block;font-family:'Manrope',sans-serif;font-size:11px;font-weight:400;
+  display:block;font-family:var(--font);font-size:var(--fs-1);font-weight:400;
   letter-spacing:.08em;color:var(--muted);margin-top:4px;
 }
 .head-right{display:flex;align-items:center;gap:22px;}
-.head-back{font-size:14px;color:var(--cream);border-bottom:1px solid var(--gold-dim);padding-bottom:2px;}
+.head-back{font-size:var(--fs-3);color:var(--cream);border-bottom:1px solid var(--gold-dim);padding-bottom:2px;}
 .head-back:hover{color:var(--gold);}
 .head-tel{
-  font-family:'JetBrains Mono',monospace;
-  font-size:17px;font-weight:500;letter-spacing:.01em;
+  font-family:var(--font);
+  font-size:var(--fs-4);font-weight:500;letter-spacing:.01em;
   color:var(--cream);white-space:nowrap;
 }
 @media (max-width:600px){
@@ -84,23 +104,23 @@ header{
 main{padding:56px 0 24px;}
 .doc{max-width:74ch;}
 .eyebrow{
-  font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.18em;
+  font-family:var(--font);font-size:var(--fs-1);letter-spacing:.18em;
   text-transform:uppercase;color:var(--gold-dim);margin-bottom:14px;
 }
 h1{
-  font-family:'Cormorant',serif;font-weight:600;
-  font-size:clamp(32px,5.4vw,46px);line-height:1.08;letter-spacing:-.01em;
+  font-family:var(--font);font-weight:600;
+  font-size:var(--fs-h2);line-height:1.08;letter-spacing:-.01em;
   color:var(--cream);margin-bottom:16px;text-wrap:balance;
 }
-.lead{color:var(--muted);font-size:17px;margin-bottom:8px;}
+.lead{color:var(--muted);font-size:var(--fs-4);margin-bottom:8px;}
 
 h2{
-  font-family:'Cormorant',serif;font-weight:600;
-  font-size:clamp(22px,3.2vw,28px);line-height:1.2;
+  font-family:var(--font);font-weight:600;
+  font-size:var(--fs-6);line-height:1.2;
   color:var(--gold);margin:44px 0 6px;text-wrap:balance;
 }
 h2 .num{
-  display:block;font-family:'JetBrains Mono',monospace;font-size:11px;
+  display:block;font-family:var(--font);font-size:var(--fs-1);
   letter-spacing:.16em;color:var(--gold-dim);margin-bottom:8px;font-weight:400;
 }
 p{margin:0 0 13px;}
@@ -109,10 +129,10 @@ li{margin-bottom:8px;}
 strong{color:#fff;font-weight:600;}
 
 .tablewrap{overflow-x:auto;margin:18px 0 22px;border:1px solid var(--line);}
-table{border-collapse:collapse;width:100%;min-width:520px;font-size:14.5px;}
+table{border-collapse:collapse;width:100%;min-width:520px;font-size:var(--fs-3);}
 th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line);vertical-align:top;}
 thead th{
-  font-family:'JetBrains Mono',monospace;font-size:10.5px;letter-spacing:.1em;
+  font-family:var(--font);font-size:var(--fs-1);letter-spacing:.1em;
   text-transform:uppercase;color:var(--gold-dim);background:var(--panel);font-weight:500;
 }
 tbody tr:last-child td{border-bottom:none;}
@@ -124,7 +144,7 @@ tbody td{color:var(--muted);}
   padding:22px 24px;margin:40px 0 8px;
 }
 .req dt{
-  font-family:'JetBrains Mono',monospace;font-size:10.5px;letter-spacing:.1em;
+  font-family:var(--font);font-size:var(--fs-1);letter-spacing:.1em;
   text-transform:uppercase;color:var(--gold-dim);margin-bottom:4px;
 }
 .req dd{margin:0 0 14px;color:var(--cream);}
@@ -132,7 +152,7 @@ tbody td{color:var(--muted);}
 .req a{border-bottom:1px solid var(--gold-dim);}
 
 /* ---------- Подвал ---------- */
-footer{padding:38px 0 46px;font-size:13px;color:var(--muted);border-top:1px solid var(--line);margin-top:56px;}
+footer{padding:38px 0 46px;font-size:var(--fs-2);color:var(--muted);border-top:1px solid var(--line);margin-top:56px;}
 .foot-mark{text-align:center;padding-bottom:24px;}
 .foot-in{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;align-items:center;}
 .foot-in a{border-bottom:1px solid var(--gold-dim);padding-bottom:2px;}

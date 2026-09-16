@@ -15,7 +15,27 @@
 <link rel="stylesheet" href="/fonts/fonts.css">
 
 <style>
+/* Кнопки и поля ввода не наследуют шрифт от родителя — такое правило у
+   браузера. Без этой строки кнопка мобильного меню набиралась Arial. */
+button,input,select,textarea{font-family:inherit;}
 :root{
+  --font:'Manrope',system-ui,sans-serif;
+  /* Шкала размеров. Иерархия строится только ею и весом шрифта —
+     новых значений не добавлять, иначе снова наберётся тридцать два.
+       --fs-1  подписи разрядкой, знак рубля, мелкие капсы
+       --fs-2  служебное: коды услуг, сноски, списки, подвал
+       --fs-3  плотный текст: прейскурант, биографии, карточки
+       --fs-4  основной текст, кнопки, вводные абзацы
+       --fs-5  акцентные вводные, крупные значения контактов
+       --fs-6  имена мастеров, логотип
+       --fs-7  числа в блоке «коротко о нас»
+       --fs-h2 заголовки разделов
+       --fs-h1 главный заголовок на первом экране */
+  --fs-1:11px; --fs-2:13px; --fs-3:15px; --fs-4:17px;
+  --fs-5:21px; --fs-6:27px; --fs-7:34px;
+  --fs-h2:clamp(32px,5vw,56px);
+  --fs-h1:clamp(52px,9.6vw,96px);
+
   --ink:#0e0d0c; --line:#2b2621;
   --gold:#c9a15a; --gold-dim:#8a713f;
   --cream:#efe6d8; --muted:#968a79;
@@ -23,7 +43,7 @@
 *{box-sizing:border-box;margin:0;padding:0;}
 body{
   background:var(--ink); color:var(--cream);
-  font-family:'Manrope',system-ui,sans-serif; font-size:16px; line-height:1.6;
+  font-family:var(--font); font-size:var(--fs-4); line-height:1.6;
   min-height:100vh; display:flex; flex-direction:column;
   -webkit-font-smoothing:antialiased;
 }
@@ -36,7 +56,7 @@ header{border-bottom:1px solid var(--line);}
 .logo{display:flex;align-items:center;gap:12px;}
 .logo-mark{height:42px;width:auto;}
 .logo-text{
-  font-family:'Cormorant',serif;font-size:24px;font-weight:600;
+  font-family:var(--font);font-size:var(--fs-6);font-weight:600;
   letter-spacing:.05em;color:var(--gold);line-height:1;
 }
 
@@ -48,18 +68,18 @@ header{border-bottom:1px solid var(--line);}
 
 main{flex:1;display:flex;align-items:center;padding:64px 0;}
 .code{
-  font-family:'JetBrains Mono',monospace;font-size:13px;letter-spacing:.2em;
+  font-family:var(--font);font-size:var(--fs-2);letter-spacing:.2em;
   color:var(--gold-dim);margin-bottom:18px;
 }
 h1{
-  font-family:'Cormorant',serif;font-weight:600;
-  font-size:clamp(34px,6vw,54px);line-height:1.06;
+  font-family:var(--font);font-weight:600;
+  font-size:var(--fs-h2);line-height:1.06;
   margin-bottom:18px;text-wrap:balance;max-width:16ch;
 }
 p{color:var(--muted);max-width:46ch;margin-bottom:32px;}
 .actions{display:flex;gap:14px;flex-wrap:wrap;}
 .btn{
-  display:inline-block;padding:14px 30px;font-size:15px;font-weight:600;
+  display:inline-block;padding:14px 30px;font-size:var(--fs-3);font-weight:600;
   border:1px solid var(--gold-dim);color:var(--cream);
 }
 .btn:hover{border-color:var(--gold);color:var(--gold);}
@@ -67,7 +87,7 @@ p{color:var(--muted);max-width:46ch;margin-bottom:32px;}
 .btn--solid:hover{background:var(--cream);border-color:var(--cream);color:#14110c;}
 
 footer{
-  padding:30px 0 40px;font-size:13px;color:var(--muted);
+  padding:30px 0 40px;font-size:var(--fs-2);color:var(--muted);
   border-top:1px solid var(--line);
 }
 .foot-in{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;}

@@ -136,7 +136,27 @@
 <link rel="stylesheet" href="fonts/fonts.css">
 
 <style>
+/* Кнопки и поля ввода не наследуют шрифт от родителя — такое правило у
+   браузера. Без этой строки кнопка мобильного меню набиралась Arial. */
+button,input,select,textarea{font-family:inherit;}
 :root{
+  --font:'Manrope',system-ui,sans-serif;
+  /* Шкала размеров. Иерархия строится только ею и весом шрифта —
+     новых значений не добавлять, иначе снова наберётся тридцать два.
+       --fs-1  подписи разрядкой, знак рубля, мелкие капсы
+       --fs-2  служебное: коды услуг, сноски, списки, подвал
+       --fs-3  плотный текст: прейскурант, биографии, карточки
+       --fs-4  основной текст, кнопки, вводные абзацы
+       --fs-5  акцентные вводные, крупные значения контактов
+       --fs-6  имена мастеров, логотип
+       --fs-7  числа в блоке «коротко о нас»
+       --fs-h2 заголовки разделов
+       --fs-h1 главный заголовок на первом экране */
+  --fs-1:11px; --fs-2:13px; --fs-3:15px; --fs-4:17px;
+  --fs-5:21px; --fs-6:27px; --fs-7:34px;
+  --fs-h2:clamp(32px,5vw,56px);
+  --fs-h1:clamp(52px,9.6vw,96px);
+
   --ink:#0e0d0c;
   --panel:#151311;
   --line:#2b2621;
@@ -161,8 +181,8 @@ html{scroll-behavior:smooth;scroll-padding-top:86px;}
 body{
   background:var(--ink);
   color:var(--cream);
-  font-family:'Manrope',system-ui,sans-serif;
-  font-size:16px;
+  font-family:var(--font);
+  font-size:var(--fs-4);
   line-height:1.6;
   -webkit-font-smoothing:antialiased;
 }
@@ -192,20 +212,20 @@ header{
 }
 .head-in{display:flex;align-items:center;justify-content:space-between;gap:20px;height:68px;}
 .logo{
-  font-family:'Cormorant',serif;font-size:27px;font-weight:600;letter-spacing:.06em;
-  color:var(--gold);line-height:1;
+  font-family:var(--font);font-size:var(--fs-6);font-weight:600;letter-spacing:.06em;
+  color:var(--gold);line-height:1.12;
 }
 .logo small{
-  display:block;font-family:'Manrope';font-size:8.5px;font-weight:600;
+  display:block;font-family:var(--font);font-size:var(--fs-1);font-weight:600;
   letter-spacing:.34em;color:var(--muted);margin-top:3px;text-transform:uppercase;
 }
 nav{display:flex;gap:28px;align-items:center;}
-nav a{font-size:14px;color:var(--muted);transition:color .2s;}
+nav a{font-size:var(--fs-3);color:var(--muted);transition:color .2s;}
 nav a:hover,nav a:focus-visible{color:var(--cream);}
 .btn{
   position:relative;overflow:hidden;isolation:isolate;
   display:inline-block;padding:12px 24px;
-  font-size:14px;font-weight:700;letter-spacing:.03em;
+  font-size:var(--fs-3);font-weight:700;letter-spacing:.03em;
   border:1px solid var(--gold);color:var(--gold);
   background:transparent;cursor:pointer;
   transition:background .24s ease, color .24s ease,
@@ -234,30 +254,22 @@ nav a:hover,nav a:focus-visible{color:var(--cream);}
    Единственное место, где кнопка ведёт себя как акцент, а не как
    рядовой элемент. */
 .btn--book{
-  font-size:17px;padding:17px 46px;letter-spacing:.09em;
+  font-size:var(--fs-4);padding:17px 46px;letter-spacing:.09em;
   box-shadow:0 10px 30px -14px rgba(183,147,92,.75);
 }
 
-/* ----------------------------------------------------------------
-   ВАРИАНТ НА ВЫБОР: заголовочный шрифт на главной кнопке записи.
-   Cormorant — тот же шрифт, что в названии «РублЪ» в hero, поэтому
-   кнопка звучит как продолжение знака. Минус: антиква на кнопке
-   читается мягче и чуть менее «нажимаемо», чем гротеск.
-   Чтобы включить — снимите комментарий с блока ниже.
+.nav-toggle{display:none;background:none;border:0;color:var(--cream);font-size:var(--fs-6);cursor:pointer;padding:6px;}
 
-.btn--book{
-  font-family:'Cormorant',serif;
-  font-size:23px;font-weight:600;letter-spacing:.11em;
-  padding:14px 46px;
-}
-   ---------------------------------------------------------------- */
-.nav-toggle{display:none;background:none;border:0;color:var(--cream);font-size:24px;cursor:pointer;padding:6px;}
+/* Цифры в столбцах: прейскурант, числа «коротко о нас», контакты.
+   Без этого пропорциональные цифры разной ширины ломают выравнивание —
+   моноширинный шрифт давал это бесплатно, Manrope нужно попросить. */
+.brd .pr,.brd .tk,.trust-num,.c-value,.head-tel,.price{font-variant-numeric:tabular-nums;}
 
 /* ---------- HEADER LOGO ---------- */
 .logo{display:flex;align-items:center;gap:11px;}
 .head-tel{
-  font-family:'JetBrains Mono',monospace;
-  font-size:17px;font-weight:500;letter-spacing:.01em;
+  font-family:var(--font);
+  font-size:var(--fs-4);font-weight:500;letter-spacing:.01em;
   color:var(--cream) !important;white-space:nowrap;
 }
 .head-tel:hover{color:var(--gold) !important;}
@@ -291,7 +303,7 @@ nav a:hover,nav a:focus-visible{color:var(--cream);}
 .head-tg:hover svg path{fill:var(--cream);}
 */
 @media (max-width:860px){
-  .head-tel{font-size:19px;}
+  .head-tel{font-size:var(--fs-5);}
   .head-tg{width:44px;height:44px;margin-top:14px;}
   .head-tg svg{width:19px;height:19px;}
 }
@@ -302,11 +314,11 @@ nav a:hover,nav a:focus-visible{color:var(--cream);}
   filter:drop-shadow(0 2px 8px rgba(0,0,0,.6));
 }
 .logo-text{
-  font-family:'Cormorant',serif;font-size:24px;font-weight:600;letter-spacing:.05em;
-  color:var(--gold);line-height:1;
+  font-family:var(--font);font-size:var(--fs-6);font-weight:600;letter-spacing:.05em;
+  color:var(--gold);line-height:1.12;
 }
 .logo-text small{
-  display:block;font-family:'Manrope';font-size:8px;font-weight:600;
+  display:block;font-family:var(--font);font-size:var(--fs-1);font-weight:600;
   letter-spacing:.24em;color:var(--muted);margin-top:4px;text-transform:uppercase;
 }
 
@@ -339,12 +351,12 @@ nav a:hover,nav a:focus-visible{color:var(--cream);}
   filter:drop-shadow(0 6px 26px rgba(0,0,0,.5));
 }
 .hero-badge{
-  font-size:14px;font-weight:700;letter-spacing:.36em;text-transform:uppercase;
+  font-size:var(--fs-3);font-weight:700;letter-spacing:.36em;text-transform:uppercase;
   color:var(--muted);margin-top:32px;
 }
 .hero-name{
-  font-family:'Cormorant',serif;
-  font-size:clamp(58px,10.5vw,108px);font-weight:500;letter-spacing:.06em;
+  font-family:var(--font);
+  font-size:var(--fs-h1);font-weight:500;letter-spacing:.06em;
   margin-top:10px;color:var(--cream);
 }
 .sr-only{
@@ -356,17 +368,17 @@ nav a:hover,nav a:focus-visible{color:var(--cream);}
   margin-top:36px;
 }
 .hero-tag span{
-  font-size:clamp(18px,2.4vw,24px);font-weight:600;letter-spacing:.16em;text-transform:uppercase;
+  font-size:var(--fs-5);font-weight:600;letter-spacing:.16em;text-transform:uppercase;
   color:var(--gold);
 }
 .hero-tag .dot{width:7px;height:7px;border-radius:50%;background:var(--gold-dim);}
 .hero-line{
-  max-width:580px;margin:30px auto 0;color:var(--muted);font-size:19px;line-height:1.65;
+  max-width:580px;margin:30px auto 0;color:var(--muted);font-size:var(--fs-5);line-height:1.65;
 }
 .hero-cta{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-top:34px;}
 .hero-facts{
   display:flex;gap:34px;justify-content:center;flex-wrap:wrap;margin-top:46px;
-  font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--muted);letter-spacing:.04em;
+  font-family:var(--font);font-size:var(--fs-2);color:var(--muted);letter-spacing:.04em;
 }
 .hero-facts b{color:var(--gold);font-weight:500;}
 
@@ -398,8 +410,8 @@ section[id]{scroll-margin-top:72px;}
   /* Заголовочный блок здесь тише, чем в других секциях: он съедал
      почти 200 px, которых не хватало карточкам. */
   #komanda{padding:26px 0 30px;}
-  #komanda h2{font-size:clamp(30px,3vw,40px);}
-  #komanda .lede{font-size:15.5px;max-width:560px;}
+  #komanda h2{font-size:var(--fs-h2);}
+  #komanda .lede{font-size:var(--fs-3);max-width:560px;}
   .team-grid{margin-top:24px;}
   .team-photo-wrap{padding-top:88%;}
 }
@@ -417,33 +429,33 @@ section[id]{scroll-margin-top:72px;}
   /* Совсем низкие окна: прячем и вводный абзац — он повторяет то,
      что и так понятно из карточек. */
   #komanda .lede{display:none;}
-  #komanda h2{font-size:34px;}
+  #komanda h2{font-size:var(--fs-7);}
   .team-photo-wrap{padding-top:78%;}
   .team-bio{margin-top:10px;}
 }
 .eyebrow{
-  font-size:11px;font-weight:700;letter-spacing:.3em;text-transform:uppercase;
+  font-size:var(--fs-1);font-weight:700;letter-spacing:.3em;text-transform:uppercase;
   color:var(--gold-dim);margin-bottom:14px;
 }
 h2{
-  font-family:'Cormorant',serif;font-weight:500;
-  font-size:clamp(32px,4.6vw,50px);line-height:1.06;letter-spacing:.01em;
+  font-family:var(--font);font-weight:500;
+  font-size:var(--fs-h2);line-height:1.06;letter-spacing:.01em;
   margin-bottom:16px;
 }
-.lede{color:var(--muted);max-width:600px;font-size:16.5px;}
+.lede{color:var(--muted);max-width:600px;font-size:var(--fs-4);}
 .lede--gold{
-  font-family:'Cormorant',serif;font-size:22px;font-style:italic;font-weight:500;
+  font-family:var(--font);font-size:var(--fs-5);font-style:italic;font-weight:500;
   color:var(--gold);margin-top:10px;
 }
 
 /* ---------- PRICES ---------- */
 .price-groups{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:52px;margin-top:52px;}
 .pg-title{
-  font-family:'Cormorant',serif;font-size:25px;font-weight:600;color:var(--gold);
+  font-family:var(--font);font-size:var(--fs-6);font-weight:600;color:var(--gold);
   padding-bottom:12px;border-bottom:1px solid var(--line);margin-bottom:10px;letter-spacing:.02em;
 }
 .pg-kicker{
-  font-size:12.5px;font-style:italic;color:var(--muted);margin-bottom:16px;
+  font-size:var(--fs-2);font-style:italic;color:var(--muted);margin-bottom:16px;
 }
 .price-row{
   display:flex;align-items:baseline;gap:12px;
@@ -452,10 +464,10 @@ h2{
 .price-row span:first-child{flex:0 1 auto;}
 .dots{flex:1 1 auto;border-bottom:1px dotted var(--line);transform:translateY(-4px);min-width:16px;}
 .price{
-  font-family:'JetBrains Mono',monospace;font-size:14.5px;color:var(--cream);white-space:nowrap;
+  font-family:var(--font);font-size:var(--fs-3);color:var(--cream);white-space:nowrap;
 }
-.price em{font-style:normal;color:var(--muted);font-size:12px;margin-right:3px;}
-.price-note{margin-top:26px;font-size:13px;color:var(--muted);}
+.price em{font-style:normal;color:var(--muted);font-size:var(--fs-2);margin-right:3px;}
+.price-note{margin-top:26px;font-size:var(--fs-2);color:var(--muted);}
 
 /* ---------- TEAM ---------- */
 .team-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:22px;margin-top:34px;}
@@ -474,15 +486,15 @@ h2{
 }
 .team-photo{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;object-position:center 18%;display:block;}
 .team-body{padding:20px 20px 22px;display:flex;flex-direction:column;flex:1;}
-.team-name{font-family:'Cormorant',serif;font-size:27px;font-weight:600;color:var(--cream);line-height:1;letter-spacing:.02em;}
+.team-name{font-family:var(--font);font-size:var(--fs-6);font-weight:600;color:var(--cream);line-height:1.12;letter-spacing:.02em;}
 .team-lede{
-  font-family:'Cormorant',serif;font-size:17.5px;font-style:italic;
+  font-family:var(--font);font-size:var(--fs-4);font-style:italic;
   color:var(--gold);margin-top:7px;line-height:1.28;
 }
-.team-bio{font-size:13.6px;color:var(--muted);line-height:1.58;margin-top:12px;}
+.team-bio{font-size:var(--fs-2);color:var(--muted);line-height:1.58;margin-top:12px;}
 .team-list{list-style:none;margin-top:12px;}
 .team-list li{
-  font-size:13px;color:var(--muted);line-height:1.45;
+  font-size:var(--fs-2);color:var(--muted);line-height:1.45;
   padding-left:16px;position:relative;margin-bottom:5px;
 }
 .team-list li::before{
@@ -492,11 +504,11 @@ h2{
 .team-quote{margin-top:auto;padding-top:16px;}
 .team-quote .milled{margin-bottom:16px;}
 .quote-label{
-  font-size:10px;font-weight:700;letter-spacing:.24em;text-transform:uppercase;
+  font-size:var(--fs-1);font-weight:700;letter-spacing:.24em;text-transform:uppercase;
   color:var(--gold-dim);margin-bottom:9px;
 }
 .quote-text{
-  font-family:'Cormorant',serif;font-size:19.5px;font-style:italic;
+  font-family:var(--font);font-size:var(--fs-5);font-style:italic;
   line-height:1.4;color:var(--cream);
 }
 .team-btn{width:100%;text-align:center;margin-top:16px;padding:11px 20px;}
@@ -514,11 +526,11 @@ h2{
 .care-card h3{margin:0 0 14px;}
 .care-logo{display:flex;align-items:center;justify-content:center;min-height:46px;}
 .care-logo-img{height:38px;width:auto;max-width:180px;object-fit:contain;}
-.care-card p{font-size:14.5px;color:var(--muted);line-height:1.6;}
+.care-card p{font-size:var(--fs-3);color:var(--muted);line-height:1.6;}
 .care-closer{margin-top:44px;max-width:560px;}
 .care-closer .milled{margin-bottom:18px;}
 .care-closer p{
-  font-family:'Cormorant',serif;font-size:23px;font-style:italic;
+  font-family:var(--font);font-size:var(--fs-6);font-style:italic;
   line-height:1.35;color:var(--gold);
 }
 
@@ -529,7 +541,7 @@ h2{
   background:#fff;display:block;
 }
 .booking-fallback{
-  margin-top:14px;font-size:13.5px;color:var(--muted);
+  margin-top:14px;font-size:var(--fs-2);color:var(--muted);
 }
 .booking-fallback a{color:var(--gold);border-bottom:1px solid var(--gold-dim);}
 .booking-fallback a:hover{color:var(--cream);border-color:var(--cream);}
@@ -541,21 +553,21 @@ h2{
 .contacts{background:var(--panel);border-top:1px solid var(--line);}
 .contact-grid{display:grid;grid-template-columns:1fr 1fr;gap:56px;margin-top:44px;}
 .c-item{margin-bottom:30px;}
-.c-label{font-size:11px;font-weight:700;letter-spacing:.22em;text-transform:uppercase;color:var(--gold-dim);margin-bottom:8px;}
-.c-value{font-size:19px;font-family:'Cormorant',serif;letter-spacing:.02em;}
+.c-label{font-size:var(--fs-1);font-weight:700;letter-spacing:.22em;text-transform:uppercase;color:var(--gold-dim);margin-bottom:8px;}
+.c-value{font-size:var(--fs-5);font-family:var(--font);letter-spacing:.02em;}
 .c-value a:hover{color:var(--gold);}
-.c-sub{font-size:14px;color:var(--muted);margin-top:4px;}
+.c-sub{font-size:var(--fs-3);color:var(--muted);margin-top:4px;}
 .map-slot{
   position:relative;width:100%;aspect-ratio:4/3;min-height:300px;
   border:1px solid var(--line);background:var(--panel);overflow:hidden;
 }
 .map-slot iframe{position:absolute;inset:0;width:100%;height:100%;border:0;filter:grayscale(.25) brightness(.92);}
-.map-note{margin-top:14px;font-size:14px;}
+.map-note{margin-top:14px;font-size:var(--fs-3);}
 .map-note a{color:var(--gold);border-bottom:1px solid var(--gold-dim);}
 .map-note a:hover{color:var(--cream);border-color:var(--cream);}
 .socials{display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;}
 .socials a{
-  border:1px solid var(--line);padding:9px 18px;font-size:13px;color:var(--muted);
+  border:1px solid var(--line);padding:9px 18px;font-size:var(--fs-2);color:var(--muted);
   transition:border-color .2s,color .2s;
 }
 .socials a:hover,.socials a:focus-visible{border-color:var(--gold);color:var(--gold);}
@@ -590,7 +602,7 @@ h2{
 .contact-grid > *{min-width:0;}
 
 /* ---------- FOOTER ---------- */
-footer{padding:38px 0 46px;font-size:13px;color:var(--muted);}
+footer{padding:38px 0 46px;font-size:var(--fs-2);color:var(--muted);}
 .foot-in{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;align-items:center;}
 
 /* ---------- MOTION ---------- */
@@ -716,7 +728,7 @@ footer{padding:38px 0 46px;font-size:13px;color:var(--muted);}
   display:flex;align-items:center;justify-content:center;text-align:center;
   min-height:150px;padding:18px;
   border-style:dashed;border-color:var(--gold-dim);
-  color:var(--muted);font-size:13px;letter-spacing:.04em;
+  color:var(--muted);font-size:var(--fs-2);letter-spacing:.04em;
 }
 @media (max-width:860px){
   .shots{grid-template-columns:repeat(2,1fr);gap:10px;}
@@ -724,13 +736,13 @@ footer{padding:38px 0 46px;font-size:13px;color:var(--muted);}
 }
 
 .says{margin-top:52px;padding-top:34px;border-top:1px solid var(--line);}
-.says-empty{color:var(--muted);font-size:16px;line-height:1.7;max-width:640px;}
+.says-empty{color:var(--muted);font-size:var(--fs-4);line-height:1.7;max-width:640px;}
 .says-empty a{color:var(--gold);border-bottom:1px solid var(--gold-dim);}
 .says-empty a:hover{color:var(--cream);border-color:var(--cream);}
 .says-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:20px;margin-top:22px;}
 .say{margin:0;padding:22px 24px;border:1px solid var(--line);background:var(--panel);}
-.say p{color:var(--cream);font-size:15.5px;line-height:1.65;}
-.say cite{display:block;margin-top:12px;font-style:normal;font-size:13px;color:var(--muted);}
+.say p{color:var(--cream);font-size:var(--fs-3);line-height:1.65;}
+.say cite{display:block;margin-top:12px;font-style:normal;font-size:var(--fs-2);color:var(--muted);}
 @media (max-width:760px){ .says-grid{grid-template-columns:1fr;} }
 
 /* Монета в подвале */
@@ -750,12 +762,12 @@ footer{padding:38px 0 46px;font-size:13px;color:var(--muted);}
 }
 .trust-item{background:var(--panel);padding:30px 20px;text-align:center;}
 .trust-num{
-  font-family:'JetBrains Mono',monospace;
-  font-size:clamp(26px,3.4vw,38px);font-weight:500;
-  color:var(--gold);line-height:1;
+  font-family:var(--font);
+  font-size:var(--fs-7);font-weight:500;
+  color:var(--gold);line-height:1.12;
 }
 .trust-cap{
-  margin-top:10px;color:var(--muted);font-size:13px;line-height:1.5;
+  margin-top:10px;color:var(--muted);font-size:var(--fs-2);line-height:1.5;
   letter-spacing:.02em;
 }
 @media (max-width:760px){ .trust-grid{grid-template-columns:repeat(2,1fr);} }
@@ -780,8 +792,8 @@ footer{padding:38px 0 46px;font-size:13px;color:var(--muted);}
   border:1px solid var(--line);background:var(--panel);
   padding:clamp(30px,5vw,54px) 24px;text-align:center;
 }
-.booking-lead{color:var(--muted);font-size:17px;line-height:1.6;margin-bottom:26px;}
-.btn--book{font-size:17px;padding:16px 42px;}
+.booking-lead{color:var(--muted);font-size:var(--fs-4);line-height:1.6;margin-bottom:26px;}
+.btn--book{font-size:var(--fs-4);padding:16px 42px;}
 
 /* ================================================================
    Запись через Telegram — второстепенный путь.
@@ -793,7 +805,7 @@ footer{padding:38px 0 46px;font-size:13px;color:var(--muted);}
   display:flex;flex-wrap:wrap;align-items:center;justify-content:center;
   gap:14px 18px;text-align:center;
 }
-.booking-alt-label{color:var(--muted);font-size:15px;}
+.booking-alt-label{color:var(--muted);font-size:var(--fs-3);}
 .btn--tg{
   display:inline-flex;align-items:center;gap:9px;
   border-color:var(--gold-dim);color:var(--gold);
@@ -821,7 +833,7 @@ footer{padding:38px 0 46px;font-size:13px;color:var(--muted);}
   pointer-events:none;
 }
 .sticky-cta.show{transform:translateY(0);pointer-events:auto;}
-.sticky-cta .btn{display:block;width:100%;text-align:center;padding:15px 20px;font-size:16px;}
+.sticky-cta .btn{display:block;width:100%;text-align:center;padding:15px 20px;font-size:var(--fs-4);}
 body.has-sticky{padding-bottom:var(--sticky-h,76px);}
 /* На широком экране — компактная кнопка в правом нижнем углу.
    Раньше здесь стояло display:none, потому что запись дублировалась
@@ -834,7 +846,7 @@ body.has-sticky{padding-bottom:var(--sticky-h,76px);}
     padding:0;background:none;
   }
   .sticky-cta .btn{
-    width:auto;padding:15px 32px;font-size:15px;
+    width:auto;padding:15px 32px;font-size:var(--fs-3);
     box-shadow:0 16px 38px -14px rgba(0,0,0,.85);
   }
   body.has-sticky{padding-bottom:0;}
@@ -843,25 +855,25 @@ body.has-sticky{padding-bottom:var(--sticky-h,76px);}
 
 /* ===== Блок «Курс Рубля» (прайс), изолирован под #uslugi ===== */
 #uslugi .head{position:relative;border-bottom:1px solid var(--line);padding-bottom:26px;margin-bottom:34px;}
-#uslugi .eyebrow{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.26em;color:var(--gold);text-transform:uppercase;font-weight:500;}
-#uslugi h2{font-family:'Cormorant',serif;font-weight:600;font-size:clamp(46px,8vw,80px);line-height:.94;color:var(--gold);margin:14px 0 12px;}
-#uslugi .sub{font-size:16px;color:var(--muted);max-width:560px;}
-#uslugi .seal{position:absolute;top:0;right:0;width:104px;height:104px;border:1px solid var(--gold-dim);border-radius:50%;display:flex;align-items:center;justify-content:center;}
-#uslugi .seal-in{width:82px;height:82px;border:1px solid var(--gold-dim);border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;}
-#uslugi .seal .s1,#uslugi .seal .s2{font-family:'JetBrains Mono',monospace;font-weight:700;font-size:15px;letter-spacing:.14em;color:var(--gold);line-height:1.15;}
-#uslugi .seal .s3{font-family:'JetBrains Mono',monospace;font-size:7px;letter-spacing:.1em;color:var(--muted);margin-top:5px;text-transform:uppercase;}
+#uslugi .eyebrow{font-family:var(--font);font-size:var(--fs-1);letter-spacing:.26em;color:var(--gold);text-transform:uppercase;font-weight:500;}
+#uslugi h2{font-family:var(--font);font-weight:700;font-size:var(--fs-h2);line-height:1.08;letter-spacing:-.02em;color:var(--gold);margin:14px 0 12px;}
+#uslugi .sub{font-size:var(--fs-4);color:var(--muted);max-width:560px;}
+#uslugi .seal{position:absolute;top:0;right:0;width:132px;height:132px;border:1px solid var(--gold-dim);border-radius:50%;display:flex;align-items:center;justify-content:center;}
+#uslugi .seal-in{width:108px;height:108px;border:1px solid var(--gold-dim);border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;}
+#uslugi .seal .s1,#uslugi .seal .s2{font-family:var(--font);font-weight:700;font-size:var(--fs-3);letter-spacing:.14em;color:var(--gold);line-height:1.15;}
+#uslugi .seal .s3{font-family:var(--font);font-size:var(--fs-1);letter-spacing:.02em;white-space:nowrap;color:var(--muted);margin-top:5px;text-transform:uppercase;}
 #uslugi .board{column-count:2;column-gap:56px;}
 #uslugi .cat{break-inside:avoid;margin-bottom:30px;}
 #uslugi .cat-h{display:flex;align-items:center;gap:14px;margin-bottom:12px;}
-#uslugi .cat-h span{font-family:'JetBrains Mono',monospace;font-weight:500;font-size:13px;letter-spacing:.2em;color:var(--gold);white-space:nowrap;}
+#uslugi .cat-h span{font-family:var(--font);font-weight:500;font-size:var(--fs-2);letter-spacing:.2em;color:var(--gold);white-space:nowrap;}
 #uslugi .cat-h i{flex:1;height:1px;background:var(--line);}
 #uslugi .brd{width:100%;border-collapse:collapse;}
 #uslugi .brd td{padding:9px 0;border-bottom:1px solid rgba(150,138,121,.14);vertical-align:baseline;}
-#uslugi .tk{font-family:'JetBrains Mono',monospace;font-weight:700;font-size:13px;color:var(--gold);width:52px;letter-spacing:.03em;}
-#uslugi .nm{font-size:15px;color:var(--cream);padding-right:16px;}
-#uslugi .pr{font-family:'JetBrains Mono',monospace;font-weight:500;font-size:15px;color:var(--cream);text-align:right;white-space:nowrap;}
-#uslugi .pr .r{font-size:11px;color:var(--gold-dim);}
-#uslugi .foot{margin-top:14px;border-top:1px solid var(--line);padding-top:16px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.05em;color:var(--muted);}
+#uslugi .tk{font-family:var(--font);font-weight:700;font-size:var(--fs-2);color:var(--gold);width:52px;letter-spacing:.03em;}
+#uslugi .nm{font-size:var(--fs-3);color:var(--cream);padding-right:16px;}
+#uslugi .pr{font-family:var(--font);font-weight:500;font-size:var(--fs-3);color:var(--cream);text-align:right;white-space:nowrap;}
+#uslugi .pr .r{font-size:var(--fs-1);color:var(--gold-dim);}
+#uslugi .foot{margin-top:14px;border-top:1px solid var(--line);padding-top:16px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;font-family:var(--font);font-size:var(--fs-1);letter-spacing:.05em;color:var(--muted);}
 #uslugi .foot .r-note{color:var(--gold-dim);}
 @media(max-width:720px){#uslugi .board{column-count:1;}#uslugi .seal{position:static;margin-bottom:18px;}}
 </style>
