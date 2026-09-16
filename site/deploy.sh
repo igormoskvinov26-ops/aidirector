@@ -5,19 +5,23 @@
 #     ./deploy.sh            — выложить
 #     ./deploy.sh --dry-run  — показать, что изменится, ничего не трогая
 #
-#  Требуется s3cmd и файл ~/.s3cfg с ключами сервисного аккаунта.
-#  Настройка ключей — в README.md рядом.
+#  Требуется aws (AWS CLI) и настроенный профиль — см. ./setup-keys.sh
 # ==========================================================================
 set -euo pipefail
 cd "$(dirname "$0")"
 
 BUCKET="${BUCKET:-rublbarber.ru}"
+PROFILE="${AWS_PROFILE_NAME:-rubl}"
+ENDPOINT="https://storage.yandexcloud.net"
 S3="s3://$BUCKET"
-DRY=""
-[ "${1:-}" = "--dry-run" ] && DRY="--dry-run"
 
-command -v s3cmd >/dev/null || { echo "Нет s3cmd. Установить: pip install s3cmd"; exit 1; }
-[ -f ~/.s3cfg ] || { echo "Нет ~/.s3cfg с ключами. См. README.md"; exit 1; }
+DRY=""
+[ "${1:-}" = "--dry-run" ] && DRY="--dryrun"
+
+aws_() { aws --profile "$PROFILE" --endpoint-url "$ENDPOINT" "$@"; }
+
+command -v aws >/dev/null || {
+    echo "Нет команды aws. Установить: uv tool install awscli"; exit 1; }
 
 # Проверки перед выкладкой: лучше упасть здесь, чем выложить сломанное.
 echo "── Проверки ──────────────────────────────────────"
@@ -37,31 +41,33 @@ echo "  ✓ внешних зависимостей нет"
 [ -f img/og-cover.jpg ] || { echo "  ✗ нет img/og-cover.jpg — превью ссылок будет пустым"; exit 1; }
 echo "  ✓ превью для мессенджеров на месте"
 
+if ! aws_ s3 ls "$S3" >/dev/null 2>&1; then
+    echo "  ✗ нет доступа к $S3. Настройте ключи: ./setup-keys.sh"
+    exit 1
+fi
+echo "  ✓ доступ к бакету есть"
+
 echo ""
 echo "── Выкладка в $S3 ──────────────────"
 
+# В бакет уезжает только перечисленное. Список разрешённого, а не
+# запрещённого: при перечислении исключений любой новый файл рядом уехал бы
+# на витрину по умолчанию — так едва не уехал скрипт с настройкой ключей.
+STATIC=(--exclude "*" --include "img/*" --include "fonts/*")
+PAGES=(--exclude "*" --include "*.html" --include "*.xml" --include "*.txt")
+
 # Картинки, видео и шрифты меняются редко: держим в кеше долго.
-s3cmd sync $DRY --acl-public --no-mime-magic --guess-mime-type \
-    --add-header="Cache-Control:public, max-age=31536000, immutable" \
-    --exclude="*" --include="img/*" --include="fonts/*" \
-    ./ "$S3/"
+aws_ s3 sync ./ "$S3/" $DRY "${STATIC[@]}" \
+    --cache-control "public, max-age=31536000, immutable"
 
 # HTML и служебные файлы: короткий кеш, иначе правки не дойдут до людей.
-s3cmd sync $DRY --acl-public --no-mime-magic --guess-mime-type \
-    --add-header="Cache-Control:public, max-age=300, must-revalidate" \
-    --exclude="*" --include="*.html" --include="*.xml" --include="*.txt" \
-    ./ "$S3/"
+aws_ s3 sync ./ "$S3/" $DRY "${PAGES[@]}" \
+    --cache-control "public, max-age=300, must-revalidate"
 
 # Удалить из бакета то, чего больше нет локально.
-#
-# Список разрешённого, а не запрещённого: при перечислении исключений любой
-# новый файл рядом уезжает в публичный бакет по умолчанию. Так и вышло бы с
-# setup-s3cfg.sh — служебный скрипт открылся бы по адресу сайта.
-s3cmd sync $DRY --acl-public --delete-removed \
-    --exclude="*" \
-    --include="img/*" --include="fonts/*" \
-    --include="*.html" --include="*.xml" --include="*.txt" \
-    ./ "$S3/"
+aws_ s3 sync ./ "$S3/" $DRY --delete \
+    --exclude "*" --include "img/*" --include "fonts/*" \
+    --include "*.html" --include "*.xml" --include "*.txt"
 
 echo ""
 if [ -n "$DRY" ]; then
