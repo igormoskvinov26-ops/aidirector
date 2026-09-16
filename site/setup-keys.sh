@@ -62,7 +62,7 @@ aws configure set region                ru-central1  --profile "$PROFILE"
 aws configure set s3.addressing_style   path         --profile "$PROFILE"
 
 echo ""
-echo "✓ Профиль «$PROFILE» записан"
+echo "✓ Профиль $PROFILE записан"
 echo "  Проверка доступа к s3://$BUCKET:"
 
 if aws --profile "$PROFILE" --endpoint-url "$ENDPOINT" s3 ls "s3://$BUCKET" >/dev/null 2>&1; then
