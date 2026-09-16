@@ -53,8 +53,14 @@ s3cmd sync $DRY --acl-public --no-mime-magic --guess-mime-type \
     ./ "$S3/"
 
 # Удалить из бакета то, чего больше нет локально.
+#
+# Список разрешённого, а не запрещённого: при перечислении исключений любой
+# новый файл рядом уезжает в публичный бакет по умолчанию. Так и вышло бы с
+# setup-s3cfg.sh — служебный скрипт открылся бы по адресу сайта.
 s3cmd sync $DRY --acl-public --delete-removed \
-    --exclude=".git/*" --exclude="deploy.sh" --exclude="README.md" \
+    --exclude="*" \
+    --include="img/*" --include="fonts/*" \
+    --include="*.html" --include="*.xml" --include="*.txt" \
     ./ "$S3/"
 
 echo ""
