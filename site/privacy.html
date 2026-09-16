@@ -404,12 +404,14 @@ footer{padding:38px 0 46px;font-size:13px;color:var(--muted);border-top:1px soli
 
       <h2><span class="num">Раздел 10</span>Файлы cookie и веб-аналитика</h2>
 
-      <p>10.1. Сам сайт не устанавливает файлы cookie и не ведёт учёт посетителей. Файлы cookie
-      могут устанавливаться сторонними сервисами, подключёнными на страницах сайта: виджетом
-      системы онлайн-записи и сервисом веб-аналитики.</p>
+      <p>10.1. Сам сайт не устанавливает файлы cookie. Учёт посещений ведётся сторонним
+      сервисом веб-аналитики Яндекс.Метрика, подключённым на страницах сайта; файлы cookie
+      устанавливает он, а также виджет системы онлайн-записи.</p>
 
-      <p>10.2. Сервис веб-аналитики собирает обезличенные данные о посещениях и обрабатывает их
-      на условиях, установленных его владельцем.</p>
+      <p>10.2. Сервис веб-аналитики собирает обезличенные данные о посещениях и ведёт запись
+      действий посетителя на странице — перемещения указателя, прокрутку, нажатия — без сбора
+      вводимых данных, поскольку полей ввода на сайте нет. Обработка выполняется на условиях,
+      установленных владельцем сервиса.</p>
 
       <p>10.3. Посетитель вправе отключить использование файлов cookie в настройках своего
       браузера. Отключение может повлиять на доступность отдельных функций сайта.</p>
@@ -457,6 +459,29 @@ footer{padding:38px 0 46px;font-size:13px;color:var(--muted);border-top:1px soli
     <a href="https://n2387007.yclients.com" target="_blank" rel="noopener" class="ms_booking">Записаться</a>
   </div>
 </footer>
+
+<!-- ================================================================
+     Яндекс.Метрика, счётчик 112701574.
+     Код Яндекса не переписан — только поставлен перед </body>, а не в
+     <head>: tag.js грузится асинхронно и первую отрисовку не задерживает
+     ни там, ни там, но из головы он всё равно занимает очередь загрузки,
+     а нам важнее шрифты и первый экран.
+     Домен mc.yandex.ru — российский, правило про зарубежные не нарушает.
+     Вебвизор включён, и это отражено в политике, раздел 10.
+     ================================================================ -->
+<!-- Yandex.Metrika counter -->
+<script type="text/javascript">
+    (function(m,e,t,r,i,k,a){
+        m[i]=m[i]||function(){(m[i].a=m[i].a||[]).push(arguments)};
+        m[i].l=1*new Date();
+        for (var j = 0; j < document.scripts.length; j++) {if (document.scripts[j].src === r) { return; }}
+        k=e.createElement(t),a=e.getElementsByTagName(t)[0],k.async=1,k.src=r,a.parentNode.insertBefore(k,a)
+    })(window, document,'script','https://mc.yandex.ru/metrika/tag.js?id=112701574', 'ym');
+
+    ym(112701574, 'init', {ssr:true, webvisor:true, clickmap:true, ecommerce:"dataLayer", referrer: document.referrer, url: location.href, accurateTrackBounce:true, trackLinks:true});
+</script>
+<noscript><div><img src="https://mc.yandex.ru/watch/112701574" style="position:absolute; left:-9999px;" alt="" /></div></noscript>
+<!-- /Yandex.Metrika counter -->
 
 </body>
 </html>

@@ -115,5 +115,28 @@ footer{
   </div>
 </footer>
 
+<!-- ================================================================
+     Яндекс.Метрика, счётчик 112701574.
+     Код Яндекса не переписан — только поставлен перед </body>, а не в
+     <head>: tag.js грузится асинхронно и первую отрисовку не задерживает
+     ни там, ни там, но из головы он всё равно занимает очередь загрузки,
+     а нам важнее шрифты и первый экран.
+     Домен mc.yandex.ru — российский, правило про зарубежные не нарушает.
+     Вебвизор включён, и это отражено в политике, раздел 10.
+     ================================================================ -->
+<!-- Yandex.Metrika counter -->
+<script type="text/javascript">
+    (function(m,e,t,r,i,k,a){
+        m[i]=m[i]||function(){(m[i].a=m[i].a||[]).push(arguments)};
+        m[i].l=1*new Date();
+        for (var j = 0; j < document.scripts.length; j++) {if (document.scripts[j].src === r) { return; }}
+        k=e.createElement(t),a=e.getElementsByTagName(t)[0],k.async=1,k.src=r,a.parentNode.insertBefore(k,a)
+    })(window, document,'script','https://mc.yandex.ru/metrika/tag.js?id=112701574', 'ym');
+
+    ym(112701574, 'init', {ssr:true, webvisor:true, clickmap:true, ecommerce:"dataLayer", referrer: document.referrer, url: location.href, accurateTrackBounce:true, trackLinks:true});
+</script>
+<noscript><div><img src="https://mc.yandex.ru/watch/112701574" style="position:absolute; left:-9999px;" alt="" /></div></noscript>
+<!-- /Yandex.Metrika counter -->
+
 </body>
 </html>

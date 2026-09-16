@@ -31,12 +31,26 @@ for f in index.html privacy.html 404.html sitemap.xml robots.txt; do
 done
 echo "  ✓ все страницы на месте"
 
-if grep -qE "fonts\.googleapis|fonts\.gstatic|cdn\.jsdelivr|unpkg\.com" index.html privacy.html 404.html; then
-    echo "  ✗ на страницах есть внешние ресурсы — сайт не откроется из России"
-    grep -nE "fonts\.googleapis|fonts\.gstatic|cdn\.jsdelivr|unpkg\.com" index.html privacy.html 404.html
+# Правило: страницы не обращаются к зарубежным доменам. Сайт переехал из
+# Амстердама именно потому, что перестал открываться из России, и один
+# сторонний CDN возвращает эту беду целиком.
+#
+# Проверяется именно правило, а не список известных нарушителей: раньше здесь
+# перечислялись четыре имени, и любой пятый прошёл бы насквозь. Теперь
+# наоборот — перечислено разрешённое, всё прочее останавливает выкладку.
+# Совпадение проверяется по хвосту имени, поэтому поддомены покрыты:
+# mc.yandex.ru и n2387007.yclients.com пройдут, а mc.yandex.ru.evil.com — нет.
+ALLOWED="yclients\.com|yandex\.ru|yandex\.net|yandexcloud\.net|rublbarber\.ru|schema\.org|t\.me|www\.w3\.org"
+FOREIGN=$(grep -ohE 'https?://[A-Za-z0-9._-]+' index.html privacy.html 404.html \
+          | sed -E 's|https?://||' | sort -u | grep -vE "(^|\.)($ALLOWED)$" || true)
+if [ -n "$FOREIGN" ]; then
+    echo "  ✗ на страницах есть обращения к посторонним доменам:"
+    printf '%s\n' "$FOREIGN" | sed 's/^/      /'
+    echo "    Из России такой сайт может не открыться. Если домен нужен —"
+    echo "    внесите его в ALLOWED в этом скрипте, осознанно."
     exit 1
 fi
-echo "  ✓ внешних зависимостей нет"
+echo "  ✓ посторонних доменов нет"
 
 [ -f img/og-cover.jpg ] || { echo "  ✗ нет img/og-cover.jpg — превью ссылок будет пустым"; exit 1; }
 echo "  ✓ превью для мессенджеров на месте"
