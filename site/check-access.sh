@@ -24,8 +24,11 @@ echo "  на компьютере: $(date -u '+%a, %d %b %Y %H:%M:%S GMT')"
 if [ -n "$SERVER_DATE" ]; then
     echo "  у Яндекса:     $SERVER_DATE"
     LOCAL_S=$(date -u +%s)
-    if SERVER_S=$(date -j -f "%a, %d %b %Y %H:%M:%S GMT" "$SERVER_DATE" +%s 2>/dev/null) \
-       || SERVER_S=$(date -d "$SERVER_DATE" +%s 2>/dev/null); then
+    # -u обязателен: без него BSD-шный date на макоси читает строку как
+    # местное время и молча игнорирует GMT в формате. В Москве это давало
+    # ровно три часа мнимого расхождения и обвиняло исправные часы.
+    if SERVER_S=$(date -j -u -f "%a, %d %b %Y %H:%M:%S GMT" "$SERVER_DATE" +%s 2>/dev/null) \
+       || SERVER_S=$(date -u -d "$SERVER_DATE" +%s 2>/dev/null); then
         DIFF=$(( LOCAL_S - SERVER_S )); [ "$DIFF" -lt 0 ] && DIFF=$(( -DIFF ))
         echo "  расхождение:   $DIFF с"
         if [ "$DIFF" -gt 300 ]; then
