@@ -113,3 +113,42 @@ async def test_real_client_is_closed_after_the_test(client):
     """Хвост: клиент httpx закрывается, иначе тесты сыплют предупреждениями."""
     assert isinstance(client._client, httpx.AsyncClient)
     await client.close()
+
+
+# --------------------------------------------------------------------------- #
+# Итог выгрузки должен попадать в журнал всегда
+#
+# На живой установке клиентов приехало ровно 4000 — слишком круглое число,
+# чтобы принимать его на веру, а сверить было нечем: строка с итогом
+# печаталась раз в десять страниц и до конца могла не дойти.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_итог_печатается_даже_при_пустой_первой_странице(monkeypatch, caplog):
+    """Прежде здесь падало с UnboundLocalError: переменная итога объявлялась
+    внутри цикла, а цикл обрывался до присваивания."""
+    клиент = YClientsClient()
+    вызовы = [_страница(1, 0, всего=0)]
+
+    async def подделка(path, params=None):
+        return ПоддельныйОтвет(вызовы.pop(0))
+
+    monkeypatch.setattr(клиент, "_request", подделка)
+    результат = await клиент._get_paginated("/clients/1")
+    assert результат == []
+    await клиент.close()
+
+
+@pytest.mark.asyncio
+async def test_итог_печатается_при_простом_списке(monkeypatch):
+    """Некоторые адреса отдают массив вместо объекта с data."""
+    клиент = YClientsClient()
+
+    async def подделка(path, params=None):
+        return ПоддельныйОтвет([{"id": 1}, {"id": 2}])
+
+    monkeypatch.setattr(клиент, "_request", подделка)
+    результат = await клиент._get_paginated("/что-то")
+    assert len(результат) == 2
+    await клиент.close()

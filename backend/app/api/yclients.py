@@ -98,6 +98,9 @@ class YClientsClient:
         query["page_size"] = page_size
         max_pages = 200
         предыдущая_метка: object = None
+        # Объявлено до цикла: итоговая строка в журнале печатается и тогда,
+        # когда цикл оборвался на первой же странице и присвоить было негде.
+        total = 0
 
         while page <= max_pages:
             query["page"] = page
@@ -137,6 +140,20 @@ class YClientsClient:
 
         if page > max_pages:
             logger.warning(f"{path}: hit max_pages={max_pages}, result may be truncated")
+
+        # Итог печатается всегда, а не раз в десять страниц. По нему видно,
+        # столько ли забрали, сколько YCLIENTS обещал: на живой установке
+        # клиентов приехало ровно 4000 — слишком круглое число, чтобы верить
+        # ему без сверки, а сверять было нечем.
+        #
+        # total == 0 означает, что адрес не присылает total_count, — так ведёт
+        # себя /transactions/. Тогда судить о полноте можно только по тому, что
+        # последняя страница пришла пустой.
+        logger.info(
+            f"  выгружено {path}: {len(all_data)}"
+            + (f" из {total}" if total else " (сколько всего — не сообщает)")
+            + f", страниц {page - 1}"
+        )
 
         return all_data
 

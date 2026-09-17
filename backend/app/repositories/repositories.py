@@ -4,6 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
+from loguru import logger
 from sqlalchemy import and_, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -228,10 +229,26 @@ class VisitRepository:
         service_map: dict[int, int],
     ) -> int:
         count = 0
+        # Пропуски считаем и сообщаем. Молчаливое отбрасывание — то, на чём
+        # этот проект уже спотыкался дважды: выгрузка обрывалась на первой
+        # странице, а визиты не сохранялись из-за ссылки на услугу — и в обоих
+        # случаях в журнале не было ни строчки. Разница между «приехало» и
+        # «сохранено» должна быть объяснима, а не угадываема.
+        без_клиента = 0
+        без_мастера = 0
+        без_времени = 0
+
         for item in data:
             client_db_id = client_map.get(item.get("client", {}).get("id", 0))
             employee_db_id = employee_map.get(item.get("staff_id", 0))
-            if not client_db_id or not employee_db_id:
+            if not client_db_id:
+                # Законно для заблокированного времени в журнале записи: там
+                # клиента нет вовсе. Но так же выглядит и клиент, которого не
+                # довезла выгрузка клиентской базы, — а это уже потеря.
+                без_клиента += 1
+                continue
+            if not employee_db_id:
+                без_мастера += 1
                 continue
 
             total_amount = Decimal("0")
@@ -243,6 +260,7 @@ class VisitRepository:
             visit_datetime = _parse_datetime(item.get("datetime"))
 
             if visit_datetime is None:
+                без_времени += 1
                 continue
 
             stmt = pg_insert(Visit).values(
@@ -289,6 +307,15 @@ class VisitRepository:
                 await session.execute(svc_stmt)
 
             count += 1
+
+        пропущено = без_клиента + без_мастера + без_времени
+        if пропущено:
+            logger.warning(
+                f"визиты: приехало {len(data)}, сохранено {count}, "
+                f"пропущено {пропущено} "
+                f"(без клиента {без_клиента}, без мастера {без_мастера}, "
+                f"без даты {без_времени})"
+            )
 
         await session.commit()
         return count
