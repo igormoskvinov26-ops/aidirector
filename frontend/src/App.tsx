@@ -26,6 +26,7 @@ import { useDark, палитраГрафика } from "./тема";
 import ClientBasePage from "./ClientBasePage";
 import BarberMonthPage from "./BarberMonthPage";
 import logo from "./assets/logo.png";
+import { Аватар } from "./мастера";
 
 // ── Types ──
 type Role = "owner" | "operator" | "master";
@@ -1167,16 +1168,18 @@ const РУБ = (n: number | null): string =>
 
 const ШТ = (n: number | null): string => (n === null ? "—" : String(n));
 
-/** Дашборд месяца: мастера в строках, выполненное и будущее — двумя блоками.
+/** Дашборд месяца: мастера в строках, три блока столбцов.
  *
- *  Прежде здесь лежал список всех предстоящих записей по дням с разбивкой по
- *  мастерам. Владелец 17.09.2026: это видно в самом YCLIENTS, а от Директора
- *  нужна сводка — сколько каждый мастер сделал, сколько у него впереди и
- *  сколько выйдет за месяц.
+ *  Блоки разделены не только подписью, но и фоном — сплошной полосой на всю
+ *  высоту таблицы. Сделано через colgroup: фон на <col> красит столбец
+ *  целиком, и полоса не рвётся между строками, как это вышло бы при заливке
+ *  каждой клетки по отдельности.
  *
- *  Столбцы разделены на блоки рамкой, а не только подписью: без неё «сумма»
- *  слева и «сумма» справа читаются как один ряд однотипных чисел, хотя одно —
- *  уже полученные деньги, а другое — ожидаемые.
+ *  Акцент двухуровневый, по просьбе владельца:
+ *    первый  — заработанные деньги и прогноз: крупнее, полужирным, золотом;
+ *    второй  — количество и сумма будущих записей: приглушённое золото.
+ *  Остальные числа набраны обычным текстом. Если выделить всё, не выделено
+ *  ничего.
  */
 function BookingsPage() {
   const [data, setData] = useState<MonthReport | null>(null);
@@ -1212,44 +1215,65 @@ function BookingsPage() {
     );
   }
 
-  const строки = data.masters;
   const итог = data.totals;
 
-  // Классы вынесены: разделители блоков должны совпадать в заголовке и в
-  // каждой строке, иначе рамка расходится по вертикали.
-  const блокСлева = "border-l border-milk-line dark:border-line";
-  const число = "px-3 py-2.5 text-right whitespace-nowrap";
-  // По центру блока, а не вправо: прижатая подпись читается как заголовок
-  // последнего столбца, а не как название группы из трёх.
-  const подпись = "px-3 py-2 text-center text-[11px] font-medium uppercase tracking-wide";
+  // Классы собраны в одном месте: разделители и отступы блоков должны
+  // совпадать в шапке и в каждой строке, иначе полосы разъезжаются.
+  const клетка = "px-4 py-3.5 text-right whitespace-nowrap align-middle";
+  const межблок = "border-l border-milk-line dark:border-line";
+  // Акцент первого уровня: деньги, которые уже заработаны или ожидаются.
+  const первый = "text-[15px] font-semibold text-bronze dark:text-gold";
+  // Он же, но для итоговой суммы прогноза: это то число, ради которого
+  // владелец открывает страницу, и оно должно быть заметно крупнее соседних.
+  const главный = "text-[17px] font-bold text-bronze dark:text-gold";
+  // Второго: будущие записи. Тише денег, но громче служебных чисел.
+  const второй = "text-sm font-medium text-bronze-ink dark:text-gold-2";
+  const обычный = "text-sm text-ink-soft dark:text-cream";
 
   const Строка = ({ row, итоговая }: { row: MonthRow; итоговая?: boolean }) => (
     <tr
       className={
         итоговая
-          ? "border-t-2 border-milk-line dark:border-line font-semibold"
-          : "border-t border-milk-line dark:border-line/70"
+          ? "border-t-2 border-bronze/40 dark:border-gold/40"
+          : "border-t border-milk-line/70 dark:border-line/70"
       }
     >
-      <td className="px-3 py-2.5 whitespace-nowrap">{итоговая ? "Всего" : row.name}</td>
+      <td className="px-4 py-3 align-middle">
+        {итоговая ? (
+          <span className="font-semibold text-ink-soft dark:text-cream">
+            Всего по салону
+          </span>
+        ) : (
+          <span className="flex items-center gap-3">
+            <Аватар staffId={row.staff_id} name={row.name} />
+            <span className="font-semibold text-ink-soft dark:text-cream">{row.name}</span>
+          </span>
+        )}
+      </td>
 
-      <td className={`${число} ${блокСлева}`}>{ШТ(row.completed_count)}</td>
-      <td className={число}>{РУБ(row.completed_revenue)}</td>
-      <td className={число}>{РУБ(row.product_sales)}</td>
+      <td className={`${клетка} ${межблок} ${обычный}`}>{ШТ(row.completed_count)}</td>
+      <td className={`${клетка} ${первый}`}>{РУБ(row.completed_revenue)}</td>
+      <td className={`${клетка} ${обычный}`}>{РУБ(row.product_sales)}</td>
 
-      <td className={`${число} ${блокСлева}`}>{ШТ(row.future_count)}</td>
-      <td className={число}>{РУБ(row.future_revenue)}</td>
+      <td className={`${клетка} ${межблок} ${второй}`}>{ШТ(row.future_count)}</td>
+      <td className={`${клетка} ${второй}`}>{РУБ(row.future_revenue)}</td>
 
-      <td className={`${число} ${блокСлева}`}>{ШТ(row.expected_count)}</td>
-      <td className={число}>{РУБ(row.expected_services)}</td>
-      <td className={`${число} text-bronze dark:text-gold`}>{РУБ(row.expected_revenue)}</td>
+      <td className={`${клетка} ${межблок} ${обычный}`}>{ШТ(row.expected_count)}</td>
+      <td className={`${клетка} ${первый}`}>{РУБ(row.expected_services)}</td>
+      <td className={`${клетка} ${главный}`}>{РУБ(row.expected_revenue)}</td>
     </tr>
   );
+
+  const подписьБлока =
+    "px-4 pt-4 pb-1 text-center text-[10px] font-semibold uppercase tracking-[0.14em]";
+  const подписьСтолбца = "px-4 pb-3 text-right text-[11px] font-normal";
 
   return (
     <div className="animate-in">
       <div className="mb-6">
-        <h1 className="text-2xl font-bold tracking-tight mb-1">Записи за месяц</h1>
+        <h1 className="text-2xl font-bold tracking-tight mb-1 text-ink-soft dark:text-cream">
+          Записи за месяц
+        </h1>
         <p className="text-muted-light dark:text-muted text-sm">
           {периодМесяца(data.month_start, data.month_end)}. Выполненное — с первого
           числа по сейчас, будущее — до конца месяца. Отменённые и неявки не
@@ -1267,43 +1291,55 @@ function BookingsPage() {
         </div>
       ))}
 
-      <div className="bg-milk-card dark:bg-panel/80 border border-milk-line dark:border-line rounded-2xl overflow-x-auto">
-        <table className="w-full text-sm min-w-[960px]">
+      <div className="bg-milk-card dark:bg-panel border border-milk-line dark:border-line rounded-2xl overflow-x-auto">
+        <table className="w-full min-w-[1000px] border-collapse">
+          {/* Фон блоков — на столбцах. Полоса идёт на всю высоту таблицы и не
+              рвётся между строками. Клетки фона не имеют, иначе они закрасят
+              полосу собой. */}
+          <colgroup>
+            {/* Ширина первого столбца задана: иначе имя с фотографией
+                растягивает его на четверть таблицы, а числа сжимаются. */}
+            <col className="w-[210px]" />
+            <col span={3} />
+            <col span={2} className="bg-milk-deep dark:bg-panel-deep" />
+            <col span={3} className="bg-bronze/[0.07] dark:bg-gold/[0.08]" />
+          </colgroup>
+
           <thead>
-            {/* Первый ряд — названия блоков. Рамка слева отделяет блок от блока. */}
-            <tr className="text-muted-light dark:text-muted">
-              <th className="px-3 pt-4 pb-1" />
-              <th className={`${подпись} pt-4 ${блокСлева}`} colSpan={3}>
+            <tr>
+              <th />
+              <th className={`${подписьБлока} ${межблок} text-muted-light dark:text-muted`} colSpan={3}>
                 Выполнено
               </th>
-              <th className={`${подпись} pt-4 ${блокСлева}`} colSpan={2}>
+              <th className={`${подписьБлока} ${межблок} text-muted-light dark:text-muted`} colSpan={2}>
                 Впереди
               </th>
-              <th className={`${подпись} pt-4 ${блокСлева} text-bronze dark:text-gold`} colSpan={3}>
+              <th className={`${подписьБлока} ${межблок} text-bronze dark:text-gold`} colSpan={3}>
                 Прогноз на месяц
               </th>
             </tr>
-            <tr className="text-muted-light dark:text-muted text-xs">
-              <th className="px-3 pb-3 text-left font-medium">Мастер</th>
+            <tr className="text-muted-light dark:text-muted">
+              <th className="px-4 pb-3 text-left text-[11px] font-normal">Мастер</th>
 
-              <th className={`px-3 pb-3 text-right font-normal ${блокСлева}`}>записей</th>
-              <th className="px-3 pb-3 text-right font-normal">услуги</th>
-              <th className="px-3 pb-3 text-right font-normal">косметика</th>
+              <th className={`${подписьСтолбца} ${межблок}`}>записей</th>
+              <th className={подписьСтолбца}>услуги</th>
+              <th className={подписьСтолбца}>косметика</th>
 
-              <th className={`px-3 pb-3 text-right font-normal ${блокСлева}`}>записей</th>
-              <th className="px-3 pb-3 text-right font-normal">сумма</th>
+              <th className={`${подписьСтолбца} ${межблок}`}>записей</th>
+              <th className={подписьСтолбца}>сумма</th>
 
-              <th className={`px-3 pb-3 text-right font-normal ${блокСлева}`}>записей</th>
-              <th className="px-3 pb-3 text-right font-normal">услуги</th>
-              <th className="px-3 pb-3 text-right font-normal">с косметикой</th>
+              <th className={`${подписьСтолбца} ${межблок}`}>записей</th>
+              <th className={подписьСтолбца}>услуги</th>
+              <th className={подписьСтолбца}>с косметикой</th>
             </tr>
           </thead>
+
           <tbody>
-            {строки.map((row) => (
+            {data.masters.map((row) => (
               <Строка key={row.staff_id} row={row} />
             ))}
-            {/* Итог показываем и одному мастеру: он должен совпасть с его
-                строкой, и по этому видно, что ничего не потерялось. */}
+            {/* Итог показываем и когда строка одна: он обязан с ней совпасть,
+                и по этому видно, что ничего не потерялось. */}
             <Строка row={итог} итоговая />
           </tbody>
         </table>

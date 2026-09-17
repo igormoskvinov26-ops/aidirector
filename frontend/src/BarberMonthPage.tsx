@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Аватар } from './мастера';
 type Money = number | string | null;
 type Day = {date: string; completed_count: number; completed_revenue: Money; product_sales: Money; commission: Money; guarantee: Money; salary: Money; forecast: Money; provisional: boolean; working: boolean | null};
 type Master = {staff_id: number; name: string; completed_count: number; completed_revenue: Money; future_count: number; future_revenue: Money; product_sales: Money; earned?: Money; forecast?: Money; days?: Day[]; rule?: {guarantee: number}};
@@ -53,7 +54,12 @@ export default function BarberMonthPage({payroll = false}: {payroll?: boolean}) 
     {payroll && data?.scope === 'own' && <p className="text-sm text-muted-light dark:text-muted">Показан расчёт по вам. Суммы других мастеров недоступны.</p>}
 
     <div className="grid gap-4 xl:grid-cols-3">{data?.masters.map(m => <article key={m.staff_id} className={box}>
-      <h2 className="mb-5 text-xl font-semibold">{m.name}</h2>
+      {/* Фотография рядом с именем: на этой странице речь о людях и их
+          деньгах, и лицо находится глазом быстрее, чем строка текста. */}
+      <div className="mb-5 flex items-center gap-3">
+        <Аватар staffId={m.staff_id} name={m.name} размер="крупный" />
+        <h2 className="text-xl font-semibold">{m.name}</h2>
+      </div>
       {payroll ? <dl className="space-y-5">
         <div><dt className="text-sm text-muted-light dark:text-muted">Начислено, включая сегодня*</dt><dd className="mt-1 text-2xl font-semibold text-bronze dark:text-gold">{rub(m.earned)}</dd></div>
         <div><dt className="text-sm text-muted-light dark:text-muted">Прогноз за весь месяц</dt><dd className="mt-1 text-xl">{rub(m.forecast)}</dd></div>
@@ -67,7 +73,10 @@ export default function BarberMonthPage({payroll = false}: {payroll?: boolean}) 
       </dl>}
     </article>)}</div>
     {payroll && data?.masters.map(m => <details key={m.staff_id} className={box}>
-      <summary className="cursor-pointer font-semibold">{m.name} · расчёт по дням</summary>
+      <summary className="flex cursor-pointer items-center gap-2.5 font-semibold">
+        <Аватар staffId={m.staff_id} name={m.name} />
+        {m.name} · расчёт по дням
+      </summary>
       <div className="overflow-x-auto mt-4"><table className="w-full text-sm whitespace-nowrap text-right">
         <thead><tr className="text-muted-light dark:text-muted">{['День', 'Смена', 'Услуги выполнено', 'Косметика', 'Проценты', 'Гарант', 'Начислено*', 'Прогноз дня'].map(h => <th key={h} className="p-3 font-medium">{h}</th>)}</tr></thead>
         <tbody>{m.days?.map(d => <tr key={d.date} className="border-t border-milk-line dark:border-line">
