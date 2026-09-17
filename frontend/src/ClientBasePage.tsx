@@ -28,6 +28,7 @@ import {
   Upload,
   Download,
 } from "lucide-react";
+import { useDark, палитраГрафика, шкалаСегментов } from "./тема";
 
 // ── Types ──
 type Period = "day" | "week" | "month" | "quarter" | "year";
@@ -106,13 +107,8 @@ const PERIODS: { id: Period; label: string }[] = [
   { id: "year", label: "Год" },
 ];
 
-const SEGMENT_COLORS: Record<string, string> = {
-  active: "#22c55e",
-  due: "#d4a853",
-  risk: "#e8bd69",
-  late: "#f97316",
-  lost: "#ef4444",
-};
+// Шкала сегментов живёт в тема.ts: она зависит от темы, и подбирать её
+// пришлось расчётом. Причины и числа — там же.
 
 const GROUP_LABELS: Record<string, string> = {
   due: "Пора записываться",
@@ -129,18 +125,18 @@ export default function ClientBasePage({ role }: { role: "owner" | "operator" | 
       <div className="mb-6 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight mb-1">Клиентская база</h1>
-          <p className="text-gray-500 dark:text-zinc-500 text-sm">Здоровье базы, сегменты и рабочая очередь</p>
+          <p className="text-muted-light dark:text-muted text-sm">Здоровье базы, сегменты и рабочая очередь</p>
         </div>
-        <div className="flex items-center gap-1 bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-xl p-1">
+        <div className="flex items-center gap-1 bg-milk-card dark:bg-panel/80 border border-milk-line dark:border-line rounded-xl p-1">
           <button
             onClick={() => setMode("manager")}
-            className={`px-4 py-2 rounded-lg text-sm transition-all ${mode === "manager" ? "bg-gray-200 dark:bg-zinc-800 text-gray-900 dark:text-white font-medium" : "text-gray-500 dark:text-zinc-500 hover:text-gray-700 dark:hover:text-zinc-300"}`}
+            className={`px-4 py-2 rounded-lg text-sm transition-all ${mode === "manager" ? "bg-milk-deep dark:bg-panel-deep text-ink-soft dark:text-cream font-medium" : "text-muted-light dark:text-muted hover:text-ink-soft dark:hover:text-cream"}`}
           >
             Управляющий
           </button>
           <button
             onClick={() => setMode("admin")}
-            className={`px-4 py-2 rounded-lg text-sm transition-all ${mode === "admin" ? "bg-gray-200 dark:bg-zinc-800 text-gray-900 dark:text-white font-medium" : "text-gray-500 dark:text-zinc-500 hover:text-gray-700 dark:hover:text-zinc-300"}`}
+            className={`px-4 py-2 rounded-lg text-sm transition-all ${mode === "admin" ? "bg-milk-deep dark:bg-panel-deep text-ink-soft dark:text-cream font-medium" : "text-muted-light dark:text-muted hover:text-ink-soft dark:hover:text-cream"}`}
           >
             Администратор
           </button>
@@ -153,6 +149,9 @@ export default function ClientBasePage({ role }: { role: "owner" | "operator" | 
 }
 
 function ManagerView() {
+  const тёмная = useDark();
+  const цвета = палитраГрафика(тёмная);
+  const шкала = шкалаСегментов(тёмная);
   const [period, setPeriod] = useState<Period>("month");
   const [data, setData] = useState<DashboardData | null>(null);
   const [timeseries, setTimeseries] = useState<TimePoint[]>([]);
@@ -216,24 +215,40 @@ function ManagerView() {
   const flow = data?.flow;
   const total = m?.total ?? 0;
 
+  // Цвет плиток — статусный, а не «шесть разных оттенков ради различимости».
+  //
+  // Прежде здесь стояли зелёный, золотой, голубой, песочный, красный и
+  // салатовый: голубой и салатовый вне палитры бренда, а шесть равноправных
+  // цветов заставляли владельца запоминать, какой что значит.
+  //
+  // У сегментов есть смысл, и он трёхчастный: хорошо, тревожно, плохо. Его и
+  // показываем. Что именно за сегмент, говорят иконка и подпись рядом —
+  // различать плитки цветом не требуется, они не марки на одном графике.
   const cards = [
-    { label: "Активная база", value: m?.active_base ?? 0, icon: Users, color: "#22c55e" },
-    { label: "Новые", value: m?.new ?? 0, icon: UserPlus, color: "#d4a853" },
-    { label: "Стали постоянными", value: m?.became_regular ?? 0, icon: ShieldCheck, color: "#38bdf8" },
-    { label: "В зоне риска", value: m?.at_risk ?? 0, icon: AlertTriangle, color: "#e8bd69" },
-    { label: "Потеряны", value: m?.lost ?? 0, icon: UserMinus, color: "#ef4444" },
-    { label: "Вернули", value: m?.returned ?? 0, icon: RotateCcw, color: "#a3e635" },
-  ];
+    { label: "Активная база", value: m?.active_base ?? 0, icon: Users, тон: "профит" },
+    { label: "Новые", value: m?.new ?? 0, icon: UserPlus, тон: "акцент" },
+    { label: "Стали постоянными", value: m?.became_regular ?? 0, icon: ShieldCheck, тон: "профит" },
+    { label: "В зоне риска", value: m?.at_risk ?? 0, icon: AlertTriangle, тон: "внимание" },
+    { label: "Потеряны", value: m?.lost ?? 0, icon: UserMinus, тон: "убыток" },
+    { label: "Вернули", value: m?.returned ?? 0, icon: RotateCcw, тон: "профит" },
+  ] as const;
+
+  const ТОН: Record<string, string> = {
+    профит: "text-profit",
+    акцент: "text-bronze dark:text-gold",
+    внимание: "text-caution",
+    убыток: "text-loss",
+  };
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-1 bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-xl p-1">
+        <div className="flex items-center gap-1 bg-milk-card dark:bg-panel/80 border border-milk-line dark:border-line rounded-xl p-1">
           {PERIODS.map((p) => (
             <button
               key={p.id}
               onClick={() => setPeriod(p.id)}
-              className={`px-3 py-1.5 rounded-lg text-xs transition-all ${period === p.id ? "bg-gray-200 dark:bg-zinc-800 text-gray-900 dark:text-white font-medium" : "text-gray-500 dark:text-zinc-500 hover:text-gray-700 dark:hover:text-zinc-300"}`}
+              className={`px-3 py-1.5 rounded-lg text-xs transition-all ${period === p.id ? "bg-milk-deep dark:bg-panel-deep text-ink-soft dark:text-cream font-medium" : "text-muted-light dark:text-muted hover:text-ink-soft dark:hover:text-cream"}`}
             >
               {p.label}
             </button>
@@ -241,7 +256,7 @@ function ManagerView() {
         </div>
         <button
           onClick={runSync}
-          className="flex items-center gap-2 text-xs text-gray-600 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-white px-3 py-2 rounded-lg border border-gray-200 dark:border-zinc-800 hover:border-rubl-accent transition-all"
+          className="flex items-center gap-2 text-xs text-muted-light dark:text-muted hover:text-ink-soft dark:hover:text-cream px-3 py-2 rounded-lg border border-milk-line dark:border-line hover:border-bronze dark:hover:border-gold transition-all"
         >
           <RefreshCw size={14} />
           Синхронизировать
@@ -250,10 +265,10 @@ function ManagerView() {
 
       <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
         {cards.map((c) => (
-          <div key={c.label} className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-4">
+          <div key={c.label} className="bg-milk-card dark:bg-panel/80 border border-milk-line dark:border-line rounded-2xl p-4">
             <div className="flex items-center gap-2 mb-3">
-              <c.icon size={16} style={{ color: c.color }} />
-              <span className="text-gray-500 dark:text-zinc-500 text-[11px] font-medium uppercase tracking-widest">{c.label}</span>
+              <c.icon size={16} className={ТОН[c.тон]} />
+              <span className="text-muted-light dark:text-muted text-[11px] font-medium uppercase tracking-widest">{c.label}</span>
             </div>
             <div className="text-2xl font-bold tabular-nums">{c.value}</div>
           </div>
@@ -261,40 +276,41 @@ function ManagerView() {
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[1.6fr_0.8fr]">
-        <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-6">
+        <div className="bg-milk-card dark:bg-panel/80 border border-milk-line dark:border-line rounded-2xl p-6">
           <div className="flex items-center gap-2 mb-4">
-            <Activity size={16} className="text-emerald-500" />
-            <h2 className="text-sm font-semibold uppercase tracking-widest text-gray-500 dark:text-zinc-400">Пульс базы</h2>
+            <Activity size={16} className="text-profit" />
+            <h2 className="text-sm font-semibold uppercase tracking-widest text-muted-light dark:text-muted">Пульс базы</h2>
           </div>
           <ResponsiveContainer width="100%" height={260}>
             <AreaChart data={timeseries} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
               <defs>
                 <linearGradient id="pulseFill" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#22c55e" stopOpacity={0.28} />
-                  <stop offset="100%" stopColor="#22c55e" stopOpacity={0.02} />
+                  <stop offset="0%" stopColor={цвета.прибыль} stopOpacity={0.28} />
+                  <stop offset="100%" stopColor={цвета.прибыль} stopOpacity={0.02} />
                 </linearGradient>
               </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#d4d4d4" vertical={false} className="dark:hidden" />
-              <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} className="hidden dark:block" />
-              <XAxis dataKey="date" tick={{ fontSize: 11, fill: "#999" }} tickLine={false} axisLine={false} tickFormatter={(d) => d.slice(5)} minTickGap={24} />
-              <YAxis tick={{ fontSize: 11, fill: "#999" }} tickLine={false} axisLine={false} />
-              <Tooltip contentStyle={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: "12px", fontSize: 12 }} />
-              <Area type="monotone" dataKey="active_base" name="Активная база" stroke="#22c55e" strokeWidth={2.5} fill="url(#pulseFill)" />
+              {/* Одна сетка вместо двух, спрятанных друг за другом классами:
+                  цвет теперь приходит по теме, и прятать нечего. */}
+              <CartesianGrid strokeDasharray="3 3" stroke={цвета.сетка} vertical={false} />
+              <XAxis dataKey="date" tick={{ fontSize: 11, fill: цвета.ось }} tickLine={false} axisLine={false} tickFormatter={(d) => d.slice(5)} minTickGap={24} />
+              <YAxis tick={{ fontSize: 11, fill: цвета.ось }} tickLine={false} axisLine={false} />
+              <Tooltip contentStyle={{ background: цвета.подсказкаФон, border: `1px solid ${цвета.подсказкаРамка}`, borderRadius: "12px", fontSize: 12 }} />
+              <Area type="monotone" dataKey="active_base" name="Активная база" stroke={цвета.прибыль} strokeWidth={2.5} fill="url(#pulseFill)" />
             </AreaChart>
           </ResponsiveContainer>
         </div>
 
-        <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-6">
-          <h2 className="text-sm font-semibold uppercase tracking-widest text-gray-500 dark:text-zinc-400 mb-4">Баланс движения</h2>
-          <div className="flex items-end justify-between gap-4 border-b border-gray-200 dark:border-zinc-800 pb-4">
+        <div className="bg-milk-card dark:bg-panel/80 border border-milk-line dark:border-line rounded-2xl p-6">
+          <h2 className="text-sm font-semibold uppercase tracking-widest text-muted-light dark:text-muted mb-4">Баланс движения</h2>
+          <div className="flex items-end justify-between gap-4 border-b border-milk-line dark:border-line pb-4">
             <div>
-              <div className="text-xs text-gray-500 dark:text-zinc-500">Вошли</div>
-              <div className="text-3xl font-bold text-emerald-500">+{flow?.inflow ?? 0}</div>
+              <div className="text-xs text-muted-light dark:text-muted">Вошли</div>
+              <div className="text-3xl font-bold text-profit">+{flow?.inflow ?? 0}</div>
             </div>
-            <ArrowRight size={18} className="mb-1 text-gray-300 dark:text-zinc-600" />
+            <ArrowRight size={18} className="mb-1 text-muted-light dark:text-muted" />
             <div className="text-right">
-              <div className="text-xs text-gray-500 dark:text-zinc-500">Вышли</div>
-              <div className="text-3xl font-bold text-amber-500">−{flow?.outflow ?? 0}</div>
+              <div className="text-xs text-muted-light dark:text-muted">Вышли</div>
+              <div className="text-3xl font-bold text-caution">−{flow?.outflow ?? 0}</div>
             </div>
           </div>
           <div className="mt-4 space-y-2 text-sm">
@@ -303,21 +319,21 @@ function ManagerView() {
             <FlowRow label="Перешли в риск" value={`−${flow?.became_risk ?? 0}`} />
             <FlowRow label="Стали потерянными" value={`−${flow?.became_lost ?? 0}`} />
           </div>
-          <div className="mt-4 rounded-xl bg-gray-100 dark:bg-zinc-800/60 px-4 py-3">
-            <div className="text-[11px] uppercase tracking-widest text-gray-500 dark:text-zinc-500">Чистый прирост</div>
-            <div className={`text-2xl font-bold ${(flow?.net ?? 0) >= 0 ? "text-emerald-500" : "text-red-500"}`}>
+          <div className="mt-4 rounded-xl bg-milk-deep dark:bg-panel-deep/60 px-4 py-3">
+            <div className="text-[11px] uppercase tracking-widest text-muted-light dark:text-muted">Чистый прирост</div>
+            <div className={`text-2xl font-bold ${(flow?.net ?? 0) >= 0 ? "text-profit" : "text-loss"}`}>
               {(flow?.net ?? 0) >= 0 ? "+" : ""}{flow?.net ?? 0}
             </div>
           </div>
         </div>
       </div>
 
-      <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-6">
-        <h2 className="text-sm font-semibold uppercase tracking-widest text-gray-500 dark:text-zinc-400 mb-4">Карта сегментов на сегодня</h2>
+      <div className="bg-milk-card dark:bg-panel/80 border border-milk-line dark:border-line rounded-2xl p-6">
+        <h2 className="text-sm font-semibold uppercase tracking-widest text-muted-light dark:text-muted mb-4">Карта сегментов на сегодня</h2>
 
-        <div className="flex h-3 overflow-hidden rounded-full bg-gray-100 dark:bg-zinc-800">
+        <div className="flex h-3 overflow-hidden rounded-full bg-milk-deep dark:bg-panel-deep">
           {(data?.segments ?? []).map((s) => (
-            <span key={s.code} style={{ width: `${total ? (s.count / total) * 100 : 0}%`, background: SEGMENT_COLORS[s.code] }} />
+            <span key={s.code} style={{ width: `${total ? (s.count / total) * 100 : 0}%`, background: шкала[s.code] }} />
           ))}
         </div>
 
@@ -326,32 +342,32 @@ function ManagerView() {
             <button
               key={s.code}
               onClick={() => openSegment(s.code)}
-              className={`bg-gray-50 dark:bg-zinc-900/60 border rounded-xl p-4 text-left transition-all ${selectedSegment === s.code ? "border-rubl-accent" : "border-gray-200 dark:border-zinc-800 hover:border-gray-300 dark:hover:border-zinc-600"}`}
+              className={`bg-milk dark:bg-panel/60 border rounded-xl p-4 text-left transition-all ${selectedSegment === s.code ? "border-bronze dark:border-gold" : "border-milk-line dark:border-line hover:border-milk-line dark:hover:border-line"}`}
             >
               <div className="flex items-center gap-2">
-                <span className="size-2 rounded-full" style={{ background: SEGMENT_COLORS[s.code] }} />
-                <p className="text-sm font-medium text-gray-700 dark:text-zinc-300">{s.label}</p>
+                <span className="size-2 rounded-full" style={{ background: шкала[s.code] }} />
+                <p className="text-sm font-medium text-ink-soft dark:text-cream">{s.label}</p>
               </div>
               <p className="mt-3 text-2xl font-semibold tabular-nums">{s.count}</p>
-              <p className="mt-1 text-xs text-gray-400 dark:text-zinc-600">{total ? Math.round((s.count / total) * 100) : 0}% базы</p>
+              <p className="mt-1 text-xs text-muted-light dark:text-muted">{total ? Math.round((s.count / total) * 100) : 0}% базы</p>
             </button>
           ))}
         </div>
 
-        <p className="mt-4 text-xs text-gray-400 dark:text-zinc-600">
-          Всего в базе <span className="font-semibold text-gray-700 dark:text-zinc-300">{total}</span> клиентов · нажмите на сегмент, чтобы увидеть список
+        <p className="mt-4 text-xs text-muted-light dark:text-muted">
+          Всего в базе <span className="font-semibold text-ink-soft dark:text-cream">{total}</span> клиентов · нажмите на сегмент, чтобы увидеть список
         </p>
       </div>
 
       {selectedSegment && (
-        <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-6">
+        <div className="bg-milk-card dark:bg-panel/80 border border-milk-line dark:border-line rounded-2xl p-6">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
-              <button onClick={() => setSelectedSegment(null)} className="text-gray-500 dark:text-zinc-500 hover:text-gray-900 dark:hover:text-white">
+              <button onClick={() => setSelectedSegment(null)} className="text-muted-light dark:text-muted hover:text-ink-soft dark:hover:text-cream">
                 <ChevronLeft size={18} />
               </button>
-              <h2 className="text-sm font-semibold uppercase tracking-widest text-gray-500 dark:text-zinc-400">
-                {SEGMENT_COLORS[selectedSegment] && <span className="mr-2 size-2 rounded-full inline-block" style={{ background: SEGMENT_COLORS[selectedSegment] }} />}
+              <h2 className="text-sm font-semibold uppercase tracking-widest text-muted-light dark:text-muted">
+                {шкала[selectedSegment] && <span className="mr-2 size-2 rounded-full inline-block" style={{ background: шкала[selectedSegment] }} />}
                 {GROUP_LABELS[selectedSegment] || selectedSegment} · {clients.length}
               </h2>
             </div>
@@ -359,14 +375,14 @@ function ManagerView() {
           {clientsLoading ? (
             <Spinner />
           ) : clients.length === 0 ? (
-            <div className="text-gray-500 dark:text-zinc-500 text-center py-8">Клиентов в этом сегменте нет</div>
+            <div className="text-muted-light dark:text-muted text-center py-8">Клиентов в этом сегменте нет</div>
           ) : (
             <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
               {clients.map((c) => (
-                <div key={c.client_id} className="bg-gray-50 dark:bg-zinc-900/60 border border-gray-200 dark:border-zinc-800 rounded-xl p-4">
+                <div key={c.client_id} className="bg-milk dark:bg-panel/60 border border-milk-line dark:border-line rounded-xl p-4">
                   <div className="font-medium">{c.name || "—"}</div>
-                  <div className="text-sm text-gray-500 dark:text-zinc-500">{c.phone || "—"}</div>
-                  <div className="mt-2 flex items-center gap-3 text-xs text-gray-500 dark:text-zinc-500">
+                  <div className="text-sm text-muted-light dark:text-muted">{c.phone || "—"}</div>
+                  <div className="mt-2 flex items-center gap-3 text-xs text-muted-light dark:text-muted">
                     <span>{c.days_since} дн. назад</span>
                     {c.stable && c.interval_days && <span>· цикл {c.interval_days} дн.</span>}
                     <span>· визитов {c.visits}</span>
@@ -379,8 +395,8 @@ function ManagerView() {
       )}
 
       {syncState && (
-        <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-zinc-500">
-          <span className={`size-1.5 rounded-full ${syncState.is_stale ? "bg-red-500" : "bg-emerald-500"}`} />
+        <div className="flex items-center gap-2 text-xs text-muted-light dark:text-muted">
+          <span className={`size-1.5 rounded-full ${syncState.is_stale ? "bg-loss" : "bg-profit"}`} />
           {syncState.last_snapshot_at
             ? `Снимок сегментов: ${syncState.last_snapshot_at}${syncState.is_stale ? " (устарел)" : ""}`
             : "Снимков ещё нет"}
@@ -393,8 +409,8 @@ function ManagerView() {
 function FlowRow({ label, value, positive }: { label: string; value: string; positive?: boolean }) {
   return (
     <div className="flex items-center justify-between gap-3">
-      <span className="text-gray-500 dark:text-zinc-400">{label}</span>
-      <span className={`font-semibold tabular-nums ${positive ? "text-emerald-500" : "text-amber-500"}`}>{value}</span>
+      <span className="text-muted-light dark:text-muted">{label}</span>
+      <span className={`font-semibold tabular-nums ${positive ? "text-profit" : "text-caution"}`}>{value}</span>
     </div>
   );
 }
@@ -445,10 +461,10 @@ function AdminView({ role }: { role: "owner" | "operator" | "master" }) {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center gap-1 bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-xl p-1 w-fit">
+      <div className="flex flex-wrap items-center gap-1 bg-milk-card dark:bg-panel/80 border border-milk-line dark:border-line rounded-xl p-1 w-fit">
         <button
           onClick={() => setFilter("all")}
-          className={`px-3 py-1.5 rounded-lg text-xs transition-all ${filter === "all" ? "bg-gray-200 dark:bg-zinc-800 text-gray-900 dark:text-white" : "text-gray-500 dark:text-zinc-500"}`}
+          className={`px-3 py-1.5 rounded-lg text-xs transition-all ${filter === "all" ? "bg-milk-deep dark:bg-panel-deep text-ink-soft dark:text-cream" : "text-muted-light dark:text-muted"}`}
         >
           Все ({tasks.length})
         </button>
@@ -456,14 +472,14 @@ function AdminView({ role }: { role: "owner" | "operator" | "master" }) {
           <button
             key={g}
             onClick={() => setFilter(g)}
-            className={`px-3 py-1.5 rounded-lg text-xs transition-all ${filter === g ? "bg-gray-200 dark:bg-zinc-800 text-gray-900 dark:text-white" : "text-gray-500 dark:text-zinc-500"}`}
+            className={`px-3 py-1.5 rounded-lg text-xs transition-all ${filter === g ? "bg-milk-deep dark:bg-panel-deep text-ink-soft dark:text-cream" : "text-muted-light dark:text-muted"}`}
           >
             {GROUP_LABELS[g]} ({counts[g] || 0})
           </button>
         ))}
       </div>
 
-      <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-zinc-400">
+      <div className="flex items-center gap-2 text-sm text-muted-light dark:text-muted">
         <ClipboardList size={16} />
         <span>{filtered.length} клиентов требуют действия</span>
       </div>
@@ -471,7 +487,7 @@ function AdminView({ role }: { role: "owner" | "operator" | "master" }) {
       <CallJournal role={role} refreshKey={journalKey} />
 
       {filtered.length === 0 ? (
-        <div className="bg-gray-50 dark:bg-zinc-900/60 border border-gray-200 dark:border-zinc-800 rounded-2xl p-10 text-center text-gray-500 dark:text-zinc-500">
+        <div className="bg-milk dark:bg-panel/60 border border-milk-line dark:border-line rounded-2xl p-10 text-center text-muted-light dark:text-muted">
           Все задачи обработаны. Так держать!
         </div>
       ) : (
@@ -494,42 +510,45 @@ function TaskCard({
   busy: boolean;
   onOutcome: (outcome: string, channel: string) => void;
 }) {
-  const color = SEGMENT_COLORS[task.group_code] || "#71717a";
+  const тёмная = useDark();
+  // Цвет точки — шаг шкалы сегментов. Незнакомый сегмент получает цвет
+  // подписей: он ничего не утверждает, а выдумывать шестой шаг нельзя.
+  const color = шкалаСегментов(тёмная)[task.group_code] || палитраГрафика(тёмная).ось;
   return (
-    <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-5 hover:border-rubl-accent/40 transition-all">
+    <div className="bg-milk-card dark:bg-panel/80 border border-milk-line dark:border-line rounded-2xl p-5 hover:border-bronze/40 dark:hover:border-gold/40 transition-all">
       <div className="flex items-start justify-between gap-4">
         <div className="flex items-center gap-3">
           <span className="size-2.5 rounded-full shrink-0 mt-1" style={{ background: color }} />
           <div>
             <div className="font-semibold text-lg">{task.client_name}</div>
-            <div className="text-sm text-gray-500 dark:text-zinc-500">{task.phone || "—"}</div>
-            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-gray-500 dark:text-zinc-500">
+            <div className="text-sm text-muted-light dark:text-muted">{task.phone || "—"}</div>
+            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-light dark:text-muted">
               <span>{task.visits_count} визит{plural(task.visits_count)}</span>
               {task.last_visit && <span>· {formatDate(task.last_visit)}</span>}
               {task.last_service && <span>· {task.last_service}</span>}
             </div>
           </div>
         </div>
-        <span className="text-xs text-gray-500 dark:text-zinc-500 bg-gray-100 dark:bg-zinc-800/80 rounded-full px-3 py-1">{GROUP_LABELS[task.group_code]}</span>
+        <span className="text-xs text-muted-light dark:text-muted bg-milk-deep dark:bg-panel-deep/80 rounded-full px-3 py-1">{GROUP_LABELS[task.group_code]}</span>
       </div>
 
-      <div className="mt-4 text-sm text-gray-600 dark:text-zinc-400">
-        <span className="text-gray-400 dark:text-zinc-600 uppercase text-[11px] tracking-widest">Цель: </span>
+      <div className="mt-4 text-sm text-muted-light dark:text-muted">
+        <span className="text-muted-light dark:text-muted uppercase text-[11px] tracking-widest">Цель: </span>
         {task.goal}
       </div>
 
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
-        <div className="bg-gray-50 dark:bg-zinc-900/60 border border-gray-200 dark:border-zinc-800 rounded-xl p-3">
-          <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-widest text-gray-400 dark:text-zinc-600 mb-1.5">
+        <div className="bg-milk dark:bg-panel/60 border border-milk-line dark:border-line rounded-xl p-3">
+          <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-widest text-muted-light dark:text-muted mb-1.5">
             <Phone size={12} /> Скрипт звонка
           </div>
-          <p className="text-sm text-gray-700 dark:text-zinc-300 leading-relaxed">{task.phone_script}</p>
+          <p className="text-sm text-ink-soft dark:text-cream leading-relaxed">{task.phone_script}</p>
         </div>
-        <div className="bg-gray-50 dark:bg-zinc-900/60 border border-gray-200 dark:border-zinc-800 rounded-xl p-3">
-          <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-widest text-gray-400 dark:text-zinc-600 mb-1.5">
+        <div className="bg-milk dark:bg-panel/60 border border-milk-line dark:border-line rounded-xl p-3">
+          <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-widest text-muted-light dark:text-muted mb-1.5">
             <MessageSquare size={12} /> Вариант сообщения
           </div>
-          <p className="text-sm text-gray-700 dark:text-zinc-300 leading-relaxed">{task.message_script}</p>
+          <p className="text-sm text-ink-soft dark:text-cream leading-relaxed">{task.message_script}</p>
         </div>
       </div>
 
@@ -537,21 +556,21 @@ function TaskCard({
         <button
           disabled={busy}
           onClick={() => onOutcome("booked", "phone")}
-          className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium px-3 py-2 rounded-lg transition-all disabled:opacity-50"
+          className="flex items-center gap-1.5 bg-profit hover:bg-profit text-milk-card text-sm font-medium px-3 py-2 rounded-lg transition-all disabled:opacity-50"
         >
           <Check size={14} /> Записан
         </button>
         <button
           disabled={busy}
           onClick={() => onOutcome("no_booking", "phone")}
-          className="flex items-center gap-1.5 bg-gray-300 dark:bg-zinc-700 hover:bg-gray-400 dark:hover:bg-zinc-600 text-gray-900 dark:text-white text-sm font-medium px-3 py-2 rounded-lg transition-all disabled:opacity-50"
+          className="flex items-center gap-1.5 bg-milk-line dark:bg-line hover:bg-milk-line dark:hover:bg-line text-ink-soft dark:text-cream text-sm font-medium px-3 py-2 rounded-lg transition-all disabled:opacity-50"
         >
           <X size={14} /> Без записи
         </button>
         <button
           disabled={busy}
           onClick={() => onOutcome("no_answer", "phone")}
-          className="flex items-center gap-1.5 bg-gray-200 dark:bg-zinc-800 hover:bg-gray-300 dark:hover:bg-zinc-700 text-gray-700 dark:text-zinc-300 text-sm font-medium px-3 py-2 rounded-lg transition-all disabled:opacity-50"
+          className="flex items-center gap-1.5 bg-milk-deep dark:bg-panel-deep hover:bg-milk-line dark:hover:bg-line text-ink-soft dark:text-cream text-sm font-medium px-3 py-2 rounded-lg transition-all disabled:opacity-50"
         >
           <Phone size={14} /> Не дозвонились
         </button>
@@ -564,8 +583,8 @@ function Spinner() {
   return (
     <div className="min-h-[40vh] flex items-center justify-center">
       <div className="relative">
-        <div className="w-8 h-8 border-2 border-rubl-accent/20 rounded-full" />
-        <div className="w-8 h-8 border-2 border-transparent border-t-rubl-accent rounded-full animate-spin absolute inset-0" />
+        <div className="w-8 h-8 border-2 border-bronze/20 dark:border-gold/20 rounded-full" />
+        <div className="w-8 h-8 border-2 border-transparent border-t-bronze dark:border-t-gold rounded-full animate-spin absolute inset-0" />
       </div>
     </div>
   );
@@ -644,13 +663,13 @@ function CallJournal({
   };
 
   return (
-    <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-5">
+    <div className="bg-milk-card dark:bg-panel/80 border border-milk-line dark:border-line rounded-2xl p-5">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3">
-          <FileSpreadsheet size={18} className="text-emerald-500" />
+          <FileSpreadsheet size={18} className="text-profit" />
           <div>
-            <p className="text-sm font-medium text-gray-800 dark:text-zinc-200">Журнал обзвона</p>
-            <p className="text-xs text-gray-500 dark:text-zinc-500">
+            <p className="text-sm font-medium text-ink-soft dark:text-cream">Журнал обзвона</p>
+            <p className="text-xs text-muted-light dark:text-muted">
               {status?.exists
                 ? `${status.rows} записей. Файл лежит в папке output рядом с проектом.`
                 : "Пока пуст — появится после первого отмеченного звонка."}
@@ -662,7 +681,7 @@ function CallJournal({
           {status?.exists && (
             <a
               href="/api/client-base/journal"
-              className="flex items-center gap-2 text-xs text-gray-600 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-white px-3 py-2 rounded-lg border border-gray-200 dark:border-zinc-800 hover:border-rubl-accent transition-all"
+              className="flex items-center gap-2 text-xs text-muted-light dark:text-muted hover:text-ink-soft dark:hover:text-cream px-3 py-2 rounded-lg border border-milk-line dark:border-line hover:border-bronze dark:hover:border-gold transition-all"
             >
               <Download size={14} />
               Скачать Excel
@@ -670,10 +689,10 @@ function CallJournal({
           )}
           {role === "owner" && (
             <label
-              className={`flex items-center gap-2 text-xs px-3 py-2 rounded-lg border border-gray-200 dark:border-zinc-800 transition-all ${
+              className={`flex items-center gap-2 text-xs px-3 py-2 rounded-lg border border-milk-line dark:border-line transition-all ${
                 uploading
-                  ? "text-gray-400 dark:text-zinc-600"
-                  : "cursor-pointer text-gray-600 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-white hover:border-rubl-accent"
+                  ? "text-muted-light dark:text-muted"
+                  : "cursor-pointer text-muted-light dark:text-muted hover:text-ink-soft dark:hover:text-cream hover:border-bronze dark:hover:border-gold"
               }`}
             >
               <Upload size={14} />
@@ -695,7 +714,7 @@ function CallJournal({
       </div>
 
       {message && (
-        <p className="mt-3 text-xs text-gray-600 dark:text-zinc-400">{message}</p>
+        <p className="mt-3 text-xs text-muted-light dark:text-muted">{message}</p>
       )}
     </div>
   );

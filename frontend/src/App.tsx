@@ -22,6 +22,7 @@ import {
   RefreshCw,
   AlertTriangle,
 } from "lucide-react";
+import { useDark, палитраГрафика } from "./тема";
 import ClientBasePage from "./ClientBasePage";
 import BarberMonthPage from "./BarberMonthPage";
 import logo from "./assets/logo.png";
@@ -126,7 +127,6 @@ interface PlanFactSummary {
   rows: PlanFactRow[];
 }
 
-const GOLD = "#d4a853";
 
 // ── Navigation ──
 // Какие разделы видит каждая роль. Ограничение продублировано на сервере:
@@ -226,12 +226,12 @@ function SyncBadge() {
 
   if (состояние.in_progress) {
     return (
-      <div className="flex items-start gap-2 text-xs text-rubl-accent">
+      <div className="flex items-start gap-2 text-xs text-bronze dark:text-gold">
         <RefreshCw size={13} className="animate-spin mt-0.5 shrink-0" />
         <span>
           Загрузка данных
           {состояние.stage ? `: ${состояние.stage}` : ""}
-          <span className="block text-gray-400 dark:text-zinc-600">
+          <span className="block text-muted-light dark:text-muted">
             это несколько минут
           </span>
         </span>
@@ -241,7 +241,7 @@ function SyncBadge() {
 
   if (!состояние.last_success_at) {
     return (
-      <div className="flex items-start gap-2 text-xs text-gray-400 dark:text-zinc-600">
+      <div className="flex items-start gap-2 text-xs text-muted-light dark:text-muted">
         <AlertTriangle size={13} className="mt-0.5 shrink-0" />
         <span>Данные ещё не загружались</span>
       </div>
@@ -258,8 +258,8 @@ function SyncBadge() {
     <div
       className={`flex items-start gap-2 text-xs ${
         устарело || сорвалось
-          ? "text-amber-600 dark:text-amber-500"
-          : "text-gray-400 dark:text-zinc-600"
+          ? "text-caution"
+          : "text-muted-light dark:text-muted"
       }`}
       title={
         сорвалось
@@ -306,12 +306,12 @@ class PageBoundary extends Component<{ children: ReactNode }, { failed: boolean 
   render() {
     if (!this.state.failed) return this.props.children;
     return (
-      <div className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-6">
-        <div className="flex items-center gap-2 text-amber-600 dark:text-amber-500 font-medium">
+      <div className="rounded-2xl border border-caution/30 bg-caution/5 p-6">
+        <div className="flex items-center gap-2 text-caution font-medium">
           <AlertTriangle size={18} />
           Раздел не открылся
         </div>
-        <p className="text-sm text-gray-600 dark:text-zinc-400 mt-2">
+        <p className="text-sm text-muted-light dark:text-muted mt-2">
           Скорее всего данные ещё не загружены до конца. Слева видно, идёт ли
           загрузка. Если она закончилась, а раздел всё равно не открывается —
           перезапустите Директора и покажите вывод.
@@ -324,10 +324,10 @@ class PageBoundary extends Component<{ children: ReactNode }, { failed: boolean 
 // ── Components ──
 function Spinner() {
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-black flex items-center justify-center">
+    <div className="min-h-screen bg-milk dark:bg-ink flex items-center justify-center">
       <div className="relative">
-        <div className="w-8 h-8 border-2 border-rubl-accent/20 rounded-full" />
-        <div className="w-8 h-8 border-2 border-transparent border-t-rubl-accent rounded-full animate-spin absolute inset-0" />
+        <div className="w-8 h-8 border-2 border-bronze/20 dark:border-gold/20 rounded-full" />
+        <div className="w-8 h-8 border-2 border-transparent border-t-bronze dark:border-t-gold rounded-full animate-spin absolute inset-0" />
       </div>
     </div>
   );
@@ -344,10 +344,14 @@ const COST_FIELDS = [
   { key: "product_commission_pct", label: "Мастеру с косметики", unit: "% продаж" },
 ] as const;
 
-const ZONE_TEXT: Record<string, { label: string; color: string }> = {
-  red: { label: "убыток при любом раскладе", color: "#ef4444" },
-  amber: { label: "исход зависит от загрузки мастеров", color: "#eab308" },
-  green: { label: "прибыль при любом раскладе", color: "#22c55e" },
+type КлючЦвета = "убыток" | "внимание" | "прибыль";
+
+const ZONE_TEXT: Record<string, { label: string; ключ: КлючЦвета }> = {
+  // Цвета зон берутся из палитры графика по текущей теме: подписи легенды
+  // стоят на панели, и тёмно-красный на чёрном фоне слепнет.
+  red: { label: "убыток при любом раскладе", ключ: "убыток" as const },
+  amber: { label: "исход зависит от загрузки мастеров", ключ: "внимание" as const },
+  green: { label: "прибыль при любом раскладе", ключ: "прибыль" as const },
 };
 
 /**
@@ -357,6 +361,7 @@ const ZONE_TEXT: Record<string, { label: string; color: string }> = {
  * и во что этот день обошёлся.
  */
 function DayTooltip({ active, payload }: { active?: boolean; payload?: any[] }) {
+  const цвета = палитраГрафика(useDark());
   if (!active || !payload?.length) return null;
   const day = payload[0].payload;
   const rub = (n: number) => Math.round(n).toLocaleString("ru-RU") + " ₽";
@@ -364,11 +369,11 @@ function DayTooltip({ active, payload }: { active?: boolean; payload?: any[] }) 
   const planned = day.scheduled_day ?? 0;
 
   return (
-    <div className="bg-white dark:bg-zinc-900 border border-gray-300 dark:border-zinc-700 rounded-xl px-4 py-3 text-xs shadow-xl">
-      <div className="font-semibold text-sm mb-2 text-gray-900 dark:text-white">
+    <div className="bg-milk-card dark:bg-panel border border-milk-line dark:border-line rounded-xl px-4 py-3 text-xs shadow-xl">
+      <div className="font-semibold text-sm mb-2 text-ink-soft dark:text-cream">
         {day.date}
         {day.masters_count > 0 && (
-          <span className="ml-2 font-normal text-gray-500 dark:text-zinc-500">
+          <span className="ml-2 font-normal text-muted-light dark:text-muted">
             мастеров на смене: {day.masters_count}
           </span>
         )}
@@ -377,29 +382,32 @@ function DayTooltip({ active, payload }: { active?: boolean; payload?: any[] }) 
       {day.delta > 0 ? (
         <>
           <div className="flex items-baseline gap-2">
-            <span className="text-gray-500 dark:text-zinc-400">За день:</span>
-            <span className="text-base font-bold" style={{ color: zone?.color }}>
+            <span className="text-muted-light dark:text-muted">За день:</span>
+            <span
+              className="text-base font-bold"
+              style={{ color: zone ? цвета[zone.ключ] : undefined }}
+            >
               {rub(day.delta)}
             </span>
           </div>
           {zone && (
-            <div className="mb-2" style={{ color: zone.color }}>
+            <div className="mb-2" style={{ color: цвета[zone.ключ] }}>
               {zone.label}
             </div>
           )}
-          <div className="text-gray-500 dark:text-zinc-500 mb-2">
+          <div className="text-muted-light dark:text-muted mb-2">
             пороги дня: {rub(day.zone_low)}
             {day.zone_high > day.zone_low && ` … ${rub(day.zone_high)}`}
           </div>
         </>
       ) : (
-        <div className="text-gray-500 dark:text-zinc-400 mb-2">
+        <div className="text-muted-light dark:text-muted mb-2">
           {planned > 0 ? `Записей на ${rub(planned)}` : "Выручки нет"}
         </div>
       )}
 
-      <div className="border-t border-gray-200 dark:border-zinc-800 pt-2 space-y-0.5 text-gray-600 dark:text-zinc-400">
-        <div className="text-[10px] uppercase tracking-wider text-gray-400 dark:text-zinc-600">
+      <div className="border-t border-milk-line dark:border-line pt-2 space-y-0.5 text-muted-light dark:text-muted">
+        <div className="text-[10px] uppercase tracking-wider text-muted-light dark:text-muted">
           накопленным итогом
         </div>
         <div>Услуги: {rub(day.services)}</div>
@@ -413,6 +421,8 @@ function DayTooltip({ active, payload }: { active?: boolean; payload?: any[] }) 
 }
 
 function PlanFactPage() {
+  // Цвета графиков — литералами, по текущей теме. Подробнее у палитраГрафика.
+  const цвета = палитраГрафика(useDark());
   const [hourly, setHourly] = useState<any[]>([]);
   const [daily, setDaily] = useState<DailyFinancePoint[]>([]);
   const [plan, setPlan] = useState<PlanData>({ period: "", profit_target: 0, margin_target_pct: 30 });
@@ -574,14 +584,14 @@ function PlanFactPage() {
       <div className="mb-6 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight mb-1">План-факт</h1>
-          <p className="text-gray-500 dark:text-zinc-500 text-sm">Маржинальность, точка безубыточности, план/факт</p>
+          <p className="text-muted-light dark:text-muted text-sm">Маржинальность, точка безубыточности, план/факт</p>
         </div>
         <div className="flex items-end gap-3">
           <div>
             {/* Единицы подписаны не случайно: раньше поле принимало голое
                 число, и «500» вместо 500 000 молча превращалось в план
                 в пятьсот рублей. */}
-            <label className="block text-[11px] uppercase tracking-wider text-gray-500 dark:text-zinc-500 mb-1">
+            <label className="block text-[11px] uppercase tracking-wider text-muted-light dark:text-muted mb-1">
               План прибыли на месяц, ₽
             </label>
             <input
@@ -589,20 +599,20 @@ function PlanFactPage() {
               value={planInput}
               onChange={(e) => setPlanInput(e.target.value)}
               placeholder="например, 500000"
-              className="w-40 bg-gray-100 dark:bg-zinc-900 border border-gray-300 dark:border-zinc-700 rounded-lg px-3 py-2 text-sm text-right focus:outline-none focus:border-rubl-accent"
+              className="w-40 bg-milk-deep dark:bg-panel border border-milk-line dark:border-line rounded-lg px-3 py-2 text-sm text-right focus:outline-none focus:border-bronze dark:focus:border-gold"
             />
           </div>
           <button
             onClick={fetchData}
             disabled={loading}
-            className="flex items-center gap-1.5 border border-gray-300 dark:border-zinc-700 hover:border-rubl-accent px-4 py-2 rounded-lg text-sm transition-all disabled:opacity-50"
+            className="flex items-center gap-1.5 border border-milk-line dark:border-line hover:border-bronze dark:hover:border-gold px-4 py-2 rounded-lg text-sm transition-all disabled:opacity-50"
           >
             <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
             Обновить данные
           </button>
           <button
             onClick={savePlan}
-            className="flex items-center gap-1.5 bg-rubl-accent hover:bg-rubl-accent/90 text-black font-semibold px-4 py-2 rounded-lg text-sm transition-all"
+            className="flex items-center gap-1.5 bg-bronze dark:bg-gold hover:bg-bronze/90 dark:hover:bg-gold/90 text-ink-soft font-semibold px-4 py-2 rounded-lg text-sm transition-all"
           >
             <Save size={14} />
             Сохранить
@@ -614,19 +624,19 @@ function PlanFactPage() {
           допущений: кто сколько сделал, уже известно. */}
       {summary?.today_detail && (
         <div
-          className={`bg-white dark:bg-zinc-900/80 border rounded-2xl p-6 mb-6 ${
+          className={`bg-milk-card dark:bg-panel/80 border rounded-2xl p-6 mb-6 ${
             summary.today_detail.margin >= 0
-              ? "border-emerald-600/50"
-              : "border-red-500/40"
+              ? "border-profit/50"
+              : "border-loss/40"
           }`}
         >
           <div className="flex flex-wrap items-baseline justify-between gap-3 mb-5">
-            <h3 className="text-sm font-semibold uppercase tracking-widest text-gray-500 dark:text-zinc-400">
+            <h3 className="text-sm font-semibold uppercase tracking-widest text-muted-light dark:text-muted">
               Сегодня — {summary.today}
             </h3>
             <span
               className={`text-sm font-semibold ${
-                summary.today_detail.margin >= 0 ? "text-emerald-500" : "text-red-400"
+                summary.today_detail.margin >= 0 ? "text-profit" : "text-loss"
               }`}
             >
               {summary.today_detail.margin >= 0
@@ -638,14 +648,14 @@ function PlanFactPage() {
           </div>
 
           {summary.today_detail.masters.length === 0 ? (
-            <p className="text-sm text-gray-500 dark:text-zinc-500">
+            <p className="text-sm text-muted-light dark:text-muted">
               Выполненных записей сегодня пока нет.
             </p>
           ) : (
             <div className="overflow-x-auto mb-5">
               <table className="w-full text-sm min-w-[520px]">
                 <thead>
-                  <tr className="text-left text-[11px] uppercase tracking-wider text-gray-500 dark:text-zinc-500">
+                  <tr className="text-left text-[11px] uppercase tracking-wider text-muted-light dark:text-muted">
                     <th className="pb-2 pr-4 font-semibold">Мастер</th>
                     <th className="pb-2 px-4 font-semibold text-right">Услуги</th>
                     <th className="pb-2 px-4 font-semibold text-right">Косметика</th>
@@ -654,17 +664,17 @@ function PlanFactPage() {
                 </thead>
                 <tbody>
                   {summary.today_detail.masters.map((m) => (
-                    <tr key={m.name} className="border-t border-gray-100 dark:border-zinc-800/60">
+                    <tr key={m.name} className="border-t border-milk-line dark:border-line/60">
                       <td className="py-2.5 pr-4">
                         {m.name}
                         {m.on_guarantee && (
-                          <span className="ml-2 text-[10px] uppercase tracking-wider text-amber-500 border border-amber-500/40 rounded px-1.5 py-0.5">
+                          <span className="ml-2 text-[10px] uppercase tracking-wider text-caution border border-caution/40 rounded px-1.5 py-0.5">
                             гарант
                           </span>
                         )}
                       </td>
                       <td className="py-2.5 px-4 text-right">{RUB(m.services)}</td>
-                      <td className="py-2.5 px-4 text-right text-gray-500 dark:text-zinc-500">
+                      <td className="py-2.5 px-4 text-right text-muted-light dark:text-muted">
                         {m.products > 0 ? RUB(m.products) : "—"}
                       </td>
                       <td className="py-2.5 pl-4 text-right font-semibold">{RUB(m.payout)}</td>
@@ -677,26 +687,26 @@ function PlanFactPage() {
 
           <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 text-sm">
             <div>
-              <div className="text-xs text-gray-500 dark:text-zinc-500">Заработано</div>
+              <div className="text-xs text-muted-light dark:text-muted">Заработано</div>
               <div className="font-semibold mt-1">{RUB(summary.today_detail.revenue)}</div>
             </div>
             <div>
-              <div className="text-xs text-gray-500 dark:text-zinc-500">Мастерам</div>
+              <div className="text-xs text-muted-light dark:text-muted">Мастерам</div>
               <div className="font-semibold mt-1">− {RUB(summary.today_detail.payout)}</div>
             </div>
             <div>
-              <div className="text-xs text-gray-500 dark:text-zinc-500">Постоянные</div>
+              <div className="text-xs text-muted-light dark:text-muted">Постоянные</div>
               <div className="font-semibold mt-1">− {RUB(summary.today_detail.fixed)}</div>
             </div>
             <div>
-              <div className="text-xs text-gray-500 dark:text-zinc-500">Расходники</div>
+              <div className="text-xs text-muted-light dark:text-muted">Расходники</div>
               <div className="font-semibold mt-1">− {RUB(summary.today_detail.variable)}</div>
             </div>
             <div>
-              <div className="text-xs text-gray-500 dark:text-zinc-500">Итог дня</div>
+              <div className="text-xs text-muted-light dark:text-muted">Итог дня</div>
               <div
                 className={`font-semibold mt-1 ${
-                  summary.today_detail.margin >= 0 ? "text-emerald-500" : "text-red-400"
+                  summary.today_detail.margin >= 0 ? "text-profit" : "text-loss"
                 }`}
               >
                 {summary.today_detail.margin >= 0 ? "+" : "−"}
@@ -705,7 +715,7 @@ function PlanFactPage() {
             </div>
           </div>
 
-          <p className="text-xs text-gray-500 dark:text-zinc-500 mt-4 max-w-[80ch]">
+          <p className="text-xs text-muted-light dark:text-muted mt-4 max-w-[80ch]">
             Считается по фактической выработке каждого: гарант платится
             персонально, поэтому две одинаковые общие суммы обходятся салону
             по-разному. Порог сегодня при сложившемся распределении —{" "}
@@ -716,12 +726,12 @@ function PlanFactPage() {
 
       {/* Сводка месяца и таблица по составу смены */}
       {summary && (
-        <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-6 mb-6">
+        <div className="bg-milk-card dark:bg-panel/80 border border-milk-line dark:border-line rounded-2xl p-6 mb-6">
           <div className="flex flex-wrap items-baseline justify-between gap-3 mb-5">
-            <h3 className="text-sm font-semibold uppercase tracking-widest text-gray-500 dark:text-zinc-400">
+            <h3 className="text-sm font-semibold uppercase tracking-widest text-muted-light dark:text-muted">
               С начала месяца — {summary.period}
             </h3>
-            <span className="text-xs text-gray-500 dark:text-zinc-500">
+            <span className="text-xs text-muted-light dark:text-muted">
               прошло {summary.days_passed} из {summary.days_in_month} дней · осталось {summary.days_left}
             </span>
           </div>
@@ -771,7 +781,7 @@ function PlanFactPage() {
           <div className="overflow-x-auto">
             <table className="w-full text-sm min-w-[560px]">
               <thead>
-                <tr className="text-left text-[11px] uppercase tracking-wider text-gray-500 dark:text-zinc-500">
+                <tr className="text-left text-[11px] uppercase tracking-wider text-muted-light dark:text-muted">
                   <th className="pb-2 pr-4 font-semibold">Мастеров на смене</th>
                   <th className="pb-2 px-4 font-semibold">Маржинальность</th>
                   <th className="pb-2 px-4 font-semibold">План — нужна выручка</th>
@@ -784,14 +794,14 @@ function PlanFactPage() {
                     key={row.masters}
                     className={
                       row.is_today
-                        ? "bg-rubl-accent/10 border-l-2 border-rubl-accent"
+                        ? "bg-bronze/10 dark:bg-gold/10 border-l-2 border-bronze dark:border-gold"
                         : "border-l-2 border-transparent"
                     }
                   >
                     <td className="py-3 pr-4">
                       <span className="font-semibold">{row.masters}</span>
                       {row.is_today && (
-                        <span className="ml-2 text-[11px] text-rubl-accent uppercase tracking-wider">
+                        <span className="ml-2 text-[11px] text-bronze dark:text-gold uppercase tracking-wider">
                           сегодня
                         </span>
                       )}
@@ -800,12 +810,12 @@ function PlanFactPage() {
                       <div className="font-semibold">
                         {RUB(row.break_even_daily)}
                         {row.break_even_worst > row.break_even_daily && (
-                          <span className="text-gray-500 dark:text-zinc-500 font-normal">
+                          <span className="text-muted-light dark:text-muted font-normal">
                             {" … "}{RUB(row.break_even_worst)}
                           </span>
                         )}
                       </div>
-                      <div className="text-xs text-gray-500 dark:text-zinc-500">
+                      <div className="text-xs text-muted-light dark:text-muted">
                         {row.break_even_worst > row.break_even_daily
                           ? "при равной загрузке … если работает один"
                           : "день в ноль"}
@@ -815,12 +825,12 @@ function PlanFactPage() {
                       {row.plan_daily_required > 0 ? (
                         <>
                           <div className="font-semibold">{RUB(row.plan_daily_required)}</div>
-                          <div className="text-xs text-gray-500 dark:text-zinc-500">
+                          <div className="text-xs text-muted-light dark:text-muted">
                             по {RUB(row.plan_per_master)} на мастера
                           </div>
                         </>
                       ) : (
-                        <span className="text-gray-400 dark:text-zinc-600">—</span>
+                        <span className="text-muted-light dark:text-muted">—</span>
                       )}
                     </td>
                     <td className="py-3 pl-4">
@@ -829,18 +839,18 @@ function PlanFactPage() {
                           <div
                             className={`font-semibold ${
                               row.fact_daily_avg >= row.break_even_daily
-                                ? "text-emerald-500"
-                                : "text-red-400"
+                                ? "text-profit"
+                                : "text-loss"
                             }`}
                           >
                             {RUB(row.fact_daily_avg)}
                           </div>
-                          <div className="text-xs text-gray-500 dark:text-zinc-500">
+                          <div className="text-xs text-muted-light dark:text-muted">
                             среднее за {row.fact_days} дн.
                           </div>
                         </>
                       ) : (
-                        <span className="text-gray-400 dark:text-zinc-600">
+                        <span className="text-muted-light dark:text-muted">
                           таких смен не было
                         </span>
                       )}
@@ -855,17 +865,17 @@ function PlanFactPage() {
 
       {/* Структура расходов — из неё считается порог безубыточности */}
       {costs && (
-        <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-6 mb-6">
+        <div className="bg-milk-card dark:bg-panel/80 border border-milk-line dark:border-line rounded-2xl p-6 mb-6">
           <button
             onClick={() => setCostsOpen(!costsOpen)}
             className="w-full flex flex-wrap items-baseline justify-between gap-3 text-left"
           >
-            <h3 className="text-sm font-semibold uppercase tracking-widest text-gray-500 dark:text-zinc-400">
+            <h3 className="text-sm font-semibold uppercase tracking-widest text-muted-light dark:text-muted">
               Расходы {costsOpen ? "▴" : "▾"}
             </h3>
-            <span className="text-xs text-gray-500 dark:text-zinc-500">
+            <span className="text-xs text-muted-light dark:text-muted">
               {RUB(costs.fixed_monthly)} в месяц ·{" "}
-              <span className="text-gray-700 dark:text-zinc-300">
+              <span className="text-ink-soft dark:text-cream">
                 {RUB(costs.fixed_daily)} в день
               </span>
               {" · мастеру "}{costs.master_commission_pct}% с услуг и{" "}
@@ -875,7 +885,7 @@ function PlanFactPage() {
 
           {costsOpen && (
             <>
-              <p className="text-xs text-gray-500 dark:text-zinc-500 mt-4 max-w-[70ch]">
+              <p className="text-xs text-muted-light dark:text-muted mt-4 max-w-[70ch]">
                 Из этих чисел считается всё остальное: порог безубыточности,
                 выручка под план и прибыль за месяц. Постоянные расходы —
                 аренда, оклады, уборка, налоги — задаются одной суммой за месяц
@@ -886,7 +896,7 @@ function PlanFactPage() {
               <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mt-4">
                 {COST_FIELDS.map((f) => (
                   <label key={f.key} className="block">
-                    <span className="block text-[11px] uppercase tracking-wider text-gray-500 dark:text-zinc-500 mb-1">
+                    <span className="block text-[11px] uppercase tracking-wider text-muted-light dark:text-muted mb-1">
                       {f.label}
                     </span>
                     <input
@@ -896,21 +906,21 @@ function PlanFactPage() {
                       onChange={(e) =>
                         setCostsDraft({ ...costsDraft, [f.key]: e.target.value })
                       }
-                      className="w-full bg-gray-100 dark:bg-zinc-950 border border-gray-300 dark:border-zinc-700 rounded-lg px-3 py-2 text-sm text-right focus:outline-none focus:border-rubl-accent"
+                      className="w-full bg-milk-deep dark:bg-ink border border-milk-line dark:border-line rounded-lg px-3 py-2 text-sm text-right focus:outline-none focus:border-bronze dark:focus:border-gold"
                     />
-                    <span className="block text-[11px] text-gray-400 dark:text-zinc-600 mt-1">
+                    <span className="block text-[11px] text-muted-light dark:text-muted mt-1">
                       {f.unit}
                     </span>
                   </label>
                 ))}
               </div>
               {costsError && (
-                <p className="text-sm text-red-400 mt-4">{costsError}</p>
+                <p className="text-sm text-loss mt-4">{costsError}</p>
               )}
               <div className="flex items-center gap-3 mt-5">
                 <button
                   onClick={saveCosts}
-                  className="flex items-center gap-1.5 bg-rubl-accent hover:bg-rubl-accent/90 text-black font-semibold px-4 py-2 rounded-lg text-sm transition-all"
+                  className="flex items-center gap-1.5 bg-bronze dark:bg-gold hover:bg-bronze/90 dark:hover:bg-gold/90 text-ink-soft font-semibold px-4 py-2 rounded-lg text-sm transition-all"
                 >
                   <Save size={14} />
                   Сохранить расходы
@@ -924,7 +934,7 @@ function PlanFactPage() {
                     );
                     setCostsError("");
                   }}
-                  className="text-sm text-gray-500 dark:text-zinc-500 hover:text-gray-800 dark:hover:text-zinc-300"
+                  className="text-sm text-muted-light dark:text-muted hover:text-ink-soft dark:hover:text-cream"
                 >
                   Вернуть как было
                 </button>
@@ -935,26 +945,26 @@ function PlanFactPage() {
       )}
 
       {/* Chart 1: Hourly (Today) */}
-      <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-6 mb-6">
+      <div className="bg-milk-card dark:bg-panel/80 border border-milk-line dark:border-line rounded-2xl p-6 mb-6">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-          <h3 className="text-sm font-semibold uppercase tracking-widest text-gray-500 dark:text-zinc-400">
+          <h3 className="text-sm font-semibold uppercase tracking-widest text-muted-light dark:text-muted">
             Сегодня — {todayStr}
           </h3>
-          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 dark:text-zinc-400">
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-rubl-accent" /> Услуги выполн.</span>
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-emerald-500" /> Товары</span>
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm border border-rubl-accent/30 bg-rubl-accent/25" /> Запланировано</span>
-            <span className="flex items-center gap-1.5"><span className="w-0.5 h-4 bg-red-500 rounded-full" /> Безубыточность {FMT_RUB(breakEvenDaily)}</span>
-            {dailyPlan > 0 && <span className="flex items-center gap-1.5"><span className="w-0.5 h-4 bg-emerald-400 rounded-full" /> План дня {FMT_RUB(dailyPlan)}</span>}
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-light dark:text-muted">
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-bronze dark:bg-gold" /> Услуги выполн.</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-profit" /> Товары</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm border border-bronze/30 dark:border-gold/30 bg-bronze/25 dark:bg-gold/25" /> Запланировано</span>
+            <span className="flex items-center gap-1.5"><span className="w-0.5 h-4 bg-loss rounded-full" /> Безубыточность {FMT_RUB(breakEvenDaily)}</span>
+            {dailyPlan > 0 && <span className="flex items-center gap-1.5"><span className="w-0.5 h-4 bg-profit rounded-full" /> План дня {FMT_RUB(dailyPlan)}</span>}
           </div>
         </div>
         <ResponsiveContainer width="100%" height={320}>
           <ComposedChart data={hourlyCumulative} barGap={2}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
-            <XAxis dataKey="hour" tick={{ fill: "#71717a", fontSize: 11 }} />
-            <YAxis tick={{ fill: "#71717a", fontSize: 11 }} tickFormatter={(v) => FMT(v)} />
+            <CartesianGrid strokeDasharray="3 3" stroke={цвета.сетка} />
+            <XAxis dataKey="hour" tick={{ fill: цвета.ось, fontSize: 11 }} />
+            <YAxis tick={{ fill: цвета.ось, fontSize: 11 }} tickFormatter={(v) => FMT(v)} />
             <Tooltip
-              contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", borderRadius: "12px", fontSize: 12 }}
+              contentStyle={{ background: цвета.подсказкаФон, border: `1px solid ${цвета.подсказкаРамка}`, borderRadius: "12px", fontSize: 12 }}
               formatter={(value: any, name: any) => {
                 if (name === "services") return [FMT_RUB(value), "Услуги (накопл.)"];
                 if (name === "products") return [FMT_RUB(value), "Товары (накопл.)"];
@@ -969,58 +979,58 @@ function PlanFactPage() {
               return (
                 <g>
                   <text x={x + width / 2} y={y - 8} fill="#000" fontSize={12} fontWeight={700} textAnchor="middle" stroke="#000" strokeWidth={3} paintOrder="stroke">{FMT_RUB(value)}</text>
-                  <text x={x + width / 2} y={y - 8} fill="#f0c060" fontSize={12} fontWeight={700} textAnchor="middle">{FMT_RUB(value)}</text>
+                  <text x={x + width / 2} y={y - 8} fill={цвета.подпись} fontSize={12} fontWeight={700} textAnchor="middle">{FMT_RUB(value)}</text>
                 </g>
               );
             }}>
               {hourlyCumulative.map((entry, i) => (
-                <Cell key={i} fill={GOLD} stroke={entry.hour === nowHour ? "#22d3ee" : "transparent"} strokeWidth={entry.hour === nowHour ? 2 : 0} />
+                <Cell key={i} fill={цвета.золото} stroke={entry.hour === nowHour ? цвета.сейчас : "transparent"} strokeWidth={entry.hour === nowHour ? 2 : 0} />
               ))}
             </Bar>
-            <Bar dataKey="products" stackId="rev" fill="#22c55e" name="products" radius={[0, 0, 0, 0]} />
+            <Bar dataKey="products" stackId="rev" fill={цвета.прибыль} name="products" radius={[0, 0, 0, 0]} />
             <Bar dataKey="scheduled" stackId="rev" name="scheduled" radius={[4, 4, 0, 0]} label={({ x, y, width, index }: any) => {
               const entry = hourlyCumulative[index];
               if (!entry || entry.hour !== nowHour) return null;
               const total = entry.services + entry.products + entry.scheduled;
-              return <text x={x + width / 2} y={y - 8} fill="#f0c060" fontSize={11} fontWeight={700} textAnchor="middle">{FMT_RUB(total)}</text>;
+              return <text x={x + width / 2} y={y - 8} fill={цвета.подпись} fontSize={11} fontWeight={700} textAnchor="middle">{FMT_RUB(total)}</text>;
             }}>
               {hourlyCumulative.map((entry, i) => (
-                <Cell key={i} fill={GOLD} fillOpacity={0.25} stroke={entry.hour === nowHour ? "#22d3ee" : GOLD} strokeWidth={entry.hour === nowHour ? 2 : 1} />
+                <Cell key={i} fill={цвета.золото} fillOpacity={0.25} stroke={entry.hour === nowHour ? цвета.сейчас : цвета.золото} strokeWidth={entry.hour === nowHour ? 2 : 1} />
               ))}
             </Bar>
-            <Line dataKey="break_even" stroke="#ef4444" strokeWidth={2.5} dot={false} name="break_even" />
+            <Line dataKey="break_even" stroke={цвета.убыток} strokeWidth={2.5} dot={false} name="break_even" />
             {dailyPlan > 0 && (
-              <Line dataKey={() => dailyPlan} stroke="#22c55e" strokeWidth={2.5} dot={false} name="daily_plan" />
+              <Line dataKey={() => dailyPlan} stroke={цвета.прибыль} strokeWidth={2.5} dot={false} name="daily_plan" />
             )}
           </ComposedChart>
         </ResponsiveContainer>
       </div>
 
       {/* Chart 2: Daily (current month) */}
-      <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-6 mb-6">
+      <div className="bg-milk-card dark:bg-panel/80 border border-milk-line dark:border-line rounded-2xl p-6 mb-6">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-          <h3 className="text-sm font-semibold uppercase tracking-widest text-gray-500 dark:text-zinc-400">
+          <h3 className="text-sm font-semibold uppercase tracking-widest text-muted-light dark:text-muted">
             По дням — {currentPeriod}
           </h3>
-          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 dark:text-zinc-400">
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-rubl-accent" /> Услуги выполн.</span>
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-emerald-500" /> Товары</span>
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm border border-rubl-accent/30 bg-rubl-accent/25" /> Запланировано</span>
-            <span className="flex items-center gap-1.5"><span className="w-0.5 h-4 bg-red-500 rounded-full" /> Мин. марж. (накоп.)</span>
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-light dark:text-muted">
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-bronze dark:bg-gold" /> Услуги выполн.</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-profit" /> Товары</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm border border-bronze/30 dark:border-gold/30 bg-bronze/25 dark:bg-gold/25" /> Запланировано</span>
+            <span className="flex items-center gap-1.5"><span className="w-0.5 h-4 bg-loss rounded-full" /> Мин. марж. (накоп.)</span>
             <span className="flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-red-500" />
-              <span className="w-2 h-2 rounded-full bg-yellow-500" />
-              <span className="w-2 h-2 rounded-full bg-emerald-500" />
+              <span className="w-2 h-2 rounded-full bg-loss" />
+              <span className="w-2 h-2 rounded-full bg-caution" />
+              <span className="w-2 h-2 rounded-full bg-profit" />
               день: убыток · спорно · прибыль
             </span>
-            {plan.profit_target > 0 && <span className="flex items-center gap-1.5"><span className="w-0.5 h-4 bg-emerald-400 rounded-full" /> Выручка под план (накоп.)</span>}
+            {plan.profit_target > 0 && <span className="flex items-center gap-1.5"><span className="w-0.5 h-4 bg-profit rounded-full" /> Выручка под план (накоп.)</span>}
           </div>
         </div>
         <ResponsiveContainer width="100%" height={340}>
           <ComposedChart data={dailyCumulative} barGap={2}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
-            <XAxis dataKey="date" tick={{ fill: "#71717a", fontSize: 11 }} tickFormatter={(d: string) => d.slice(5)} />
-            <YAxis tick={{ fill: "#71717a", fontSize: 11 }} tickFormatter={(v) => FMT(v)} />
+            <CartesianGrid strokeDasharray="3 3" stroke={цвета.сетка} />
+            <XAxis dataKey="date" tick={{ fill: цвета.ось, fontSize: 11 }} tickFormatter={(d: string) => d.slice(5)} />
+            <YAxis tick={{ fill: цвета.ось, fontSize: 11 }} tickFormatter={(v) => FMT(v)} />
             <Tooltip cursor={{ fill: "rgba(212,168,83,0.08)" }} content={<DayTooltip />} />
             {/* Столбец красится по зоне дня: подписей над каждым больше нет,
                 сумма и пояснение — в подсказке при наведении. */}
@@ -1028,37 +1038,37 @@ function PlanFactPage() {
               {dailyCumulative.map((entry, i) => (
                 <Cell
                   key={i}
-                  fill={GOLD}
+                  fill={цвета.золото}
                   stroke={
                     entry.date === todayStr
-                      ? "#22d3ee"
+                      ? цвета.сейчас
                       : entry.zone === "green"
-                        ? "#22c55e"
+                        ? цвета.прибыль
                         : entry.zone === "amber"
-                          ? "#eab308"
+                          ? цвета.внимание
                           : entry.zone === "red"
-                            ? "#ef4444"
+                            ? цвета.убыток
                             : "transparent"
                   }
                   strokeWidth={entry.date === todayStr ? 2 : entry.zone ? 1.5 : 0}
                 />
               ))}
             </Bar>
-            <Bar dataKey="products" stackId="rev" fill="#22c55e" name="products" radius={[0, 0, 0, 0]} />
+            <Bar dataKey="products" stackId="rev" fill={цвета.прибыль} name="products" radius={[0, 0, 0, 0]} />
             <Bar dataKey="scheduled" stackId="rev" name="scheduled" radius={[6, 6, 0, 0]} label={({ x, y, width, index }: any) => {
               const entry = dailyCumulative[index];
               if (!entry || entry.date !== todayStr) return null;
               const actual = entry.services + entry.products;
               if (actual <= 0) return null;
-              return <text x={x + width / 2} y={y - 8} fill="#22d3ee" fontSize={11} fontWeight={700} textAnchor="middle">{FMT_RUB(actual)}</text>;
+              return <text x={x + width / 2} y={y - 8} fill={цвета.сейчас} fontSize={11} fontWeight={700} textAnchor="middle">{FMT_RUB(actual)}</text>;
             }}>
               {dailyCumulative.map((entry, i) => (
-                <Cell key={i} fill={GOLD} fillOpacity={0.25} stroke={entry.date === todayStr ? "#22d3ee" : GOLD} strokeWidth={entry.date === todayStr ? 2 : 1} />
+                <Cell key={i} fill={цвета.золото} fillOpacity={0.25} stroke={entry.date === todayStr ? цвета.сейчас : цвета.золото} strokeWidth={entry.date === todayStr ? 2 : 1} />
               ))}
             </Bar>
-            <Line dataKey="break_even" stroke="#ef4444" strokeWidth={2.5} dot={false} name="break_even" />
+            <Line dataKey="break_even" stroke={цвета.убыток} strokeWidth={2.5} dot={false} name="break_even" />
             {plan.profit_target > 0 && (
-              <Line dataKey="daily_plan_cum" stroke="#22c55e" strokeWidth={2.5} dot={false} name="daily_plan_cum" />
+              <Line dataKey="daily_plan_cum" stroke={цвета.прибыль} strokeWidth={2.5} dot={false} name="daily_plan_cum" />
             )}
           </ComposedChart>
         </ResponsiveContainer>
@@ -1066,20 +1076,20 @@ function PlanFactPage() {
 
       {/* KPI mini-cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-xl p-4">
-          <div className="text-xs text-gray-500 dark:text-zinc-500">Выручка сегодня</div>
+        <div className="bg-milk-card dark:bg-panel/80 border border-milk-line dark:border-line rounded-xl p-4">
+          <div className="text-xs text-muted-light dark:text-muted">Выручка сегодня</div>
           <div className="text-lg font-bold mt-1">{FMT_RUB(todayRevenue)}</div>
         </div>
-        <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-xl p-4">
-          <div className="text-xs text-gray-500 dark:text-zinc-500">Мастеров на смене</div>
+        <div className="bg-milk-card dark:bg-panel/80 border border-milk-line dark:border-line rounded-xl p-4">
+          <div className="text-xs text-muted-light dark:text-muted">Мастеров на смене</div>
           <div className="text-lg font-bold mt-1">{mastersToday}</div>
         </div>
-        <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-xl p-4">
-          <div className="text-xs text-gray-500 dark:text-zinc-500">Точка безубыточности</div>
+        <div className="bg-milk-card dark:bg-panel/80 border border-milk-line dark:border-line rounded-xl p-4">
+          <div className="text-xs text-muted-light dark:text-muted">Точка безубыточности</div>
           <div className="text-lg font-bold mt-1">{FMT_RUB(breakEvenDaily)}</div>
         </div>
-        <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-xl p-4">
-          <div className="text-xs text-gray-500 dark:text-zinc-500">План на день</div>
+        <div className="bg-milk-card dark:bg-panel/80 border border-milk-line dark:border-line rounded-xl p-4">
+          <div className="text-xs text-muted-light dark:text-muted">План на день</div>
           <div className="text-lg font-bold mt-1">{dailyPlan > 0 ? FMT_RUB(dailyPlan) : "—"}</div>
         </div>
       </div>
@@ -1100,10 +1110,10 @@ function SumCard({
   accent?: boolean;
 }) {
   return (
-    <div className="bg-gray-50 dark:bg-zinc-950/60 border border-gray-200 dark:border-zinc-800 rounded-xl p-4">
-      <div className="text-xs text-gray-500 dark:text-zinc-500">{label}</div>
-      <div className={`text-2xl font-bold mt-1 ${accent ? "text-rubl-accent" : ""}`}>{value}</div>
-      <div className="text-xs text-gray-500 dark:text-zinc-500 mt-1">{note}</div>
+    <div className="bg-milk dark:bg-ink/60 border border-milk-line dark:border-line rounded-xl p-4">
+      <div className="text-xs text-muted-light dark:text-muted">{label}</div>
+      <div className={`text-2xl font-bold mt-1 ${accent ? "text-bronze dark:text-gold" : ""}`}>{value}</div>
+      <div className="text-xs text-muted-light dark:text-muted mt-1">{note}</div>
     </div>
   );
 }
@@ -1190,12 +1200,12 @@ function BookingsPage() {
 
   if (failed || !data) {
     return (
-      <div className="animate-in rounded-2xl border border-amber-500/30 bg-amber-500/5 p-6">
-        <div className="flex items-center gap-2 text-amber-600 dark:text-amber-500 font-medium">
+      <div className="animate-in rounded-2xl border border-caution/30 bg-caution/5 p-6">
+        <div className="flex items-center gap-2 text-caution font-medium">
           <AlertTriangle size={18} />
           Не удалось получить данные
         </div>
-        <p className="text-sm text-gray-600 dark:text-zinc-400 mt-2">
+        <p className="text-sm text-muted-light dark:text-muted mt-2">
           {failed || "Ответ пустой."} Слева видно, идёт ли загрузка из YCLIENTS.
         </p>
       </div>
@@ -1207,7 +1217,7 @@ function BookingsPage() {
 
   // Классы вынесены: разделители блоков должны совпадать в заголовке и в
   // каждой строке, иначе рамка расходится по вертикали.
-  const блокСлева = "border-l border-gray-200 dark:border-zinc-700";
+  const блокСлева = "border-l border-milk-line dark:border-line";
   const число = "px-3 py-2.5 text-right whitespace-nowrap";
   // По центру блока, а не вправо: прижатая подпись читается как заголовок
   // последнего столбца, а не как название группы из трёх.
@@ -1217,8 +1227,8 @@ function BookingsPage() {
     <tr
       className={
         итоговая
-          ? "border-t-2 border-gray-300 dark:border-zinc-600 font-semibold"
-          : "border-t border-gray-100 dark:border-zinc-800/70"
+          ? "border-t-2 border-milk-line dark:border-line font-semibold"
+          : "border-t border-milk-line dark:border-line/70"
       }
     >
       <td className="px-3 py-2.5 whitespace-nowrap">{итоговая ? "Всего" : row.name}</td>
@@ -1232,7 +1242,7 @@ function BookingsPage() {
 
       <td className={`${число} ${блокСлева}`}>{ШТ(row.expected_count)}</td>
       <td className={число}>{РУБ(row.expected_services)}</td>
-      <td className={`${число} text-rubl-accent`}>{РУБ(row.expected_revenue)}</td>
+      <td className={`${число} text-bronze dark:text-gold`}>{РУБ(row.expected_revenue)}</td>
     </tr>
   );
 
@@ -1240,7 +1250,7 @@ function BookingsPage() {
     <div className="animate-in">
       <div className="mb-6">
         <h1 className="text-2xl font-bold tracking-tight mb-1">Записи за месяц</h1>
-        <p className="text-gray-500 dark:text-zinc-500 text-sm">
+        <p className="text-muted-light dark:text-muted text-sm">
           {периодМесяца(data.month_start, data.month_end)}. Выполненное — с первого
           числа по сейчас, будущее — до конца месяца. Отменённые и неявки не
           учитываются.
@@ -1250,18 +1260,18 @@ function BookingsPage() {
       {data.warnings.map((w) => (
         <div
           key={w}
-          className="mb-4 flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm text-amber-600 dark:text-amber-500"
+          className="mb-4 flex items-start gap-2 rounded-xl border border-caution/30 bg-caution/5 px-4 py-3 text-sm text-caution"
         >
           <AlertTriangle size={16} className="mt-0.5 shrink-0" />
           {w}
         </div>
       ))}
 
-      <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl overflow-x-auto">
+      <div className="bg-milk-card dark:bg-panel/80 border border-milk-line dark:border-line rounded-2xl overflow-x-auto">
         <table className="w-full text-sm min-w-[960px]">
           <thead>
             {/* Первый ряд — названия блоков. Рамка слева отделяет блок от блока. */}
-            <tr className="text-gray-500 dark:text-zinc-500">
+            <tr className="text-muted-light dark:text-muted">
               <th className="px-3 pt-4 pb-1" />
               <th className={`${подпись} pt-4 ${блокСлева}`} colSpan={3}>
                 Выполнено
@@ -1269,11 +1279,11 @@ function BookingsPage() {
               <th className={`${подпись} pt-4 ${блокСлева}`} colSpan={2}>
                 Впереди
               </th>
-              <th className={`${подпись} pt-4 ${блокСлева} text-rubl-accent`} colSpan={3}>
+              <th className={`${подпись} pt-4 ${блокСлева} text-bronze dark:text-gold`} colSpan={3}>
                 Прогноз на месяц
               </th>
             </tr>
-            <tr className="text-gray-400 dark:text-zinc-600 text-xs">
+            <tr className="text-muted-light dark:text-muted text-xs">
               <th className="px-3 pb-3 text-left font-medium">Мастер</th>
 
               <th className={`px-3 pb-3 text-right font-normal ${блокСлева}`}>записей</th>
@@ -1299,7 +1309,7 @@ function BookingsPage() {
         </table>
       </div>
 
-      <p className="text-xs text-gray-400 dark:text-zinc-600 mt-3">
+      <p className="text-xs text-muted-light dark:text-muted mt-3">
         Прогноз — выполненное плюс будущее до конца месяца. Две суммы: отдельно
         услуги и они же вместе с проданной косметикой. Это выручка, а не
         зарплата мастера; расчёт оплаты — на отдельной вкладке.
@@ -1354,17 +1364,17 @@ export default function App() {
   if (loading) return <Spinner />;
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-black text-gray-900 dark:text-white flex">
+    <div className="min-h-screen bg-milk dark:bg-ink text-ink-soft dark:text-cream flex">
       {/* Sidebar */}
-      <aside className="w-60 border-r border-gray-200 dark:border-zinc-800/50 flex flex-col fixed h-full bg-white/90 dark:bg-black/80 backdrop-blur-xl z-10">
+      <aside className="w-60 border-r border-milk-line dark:border-line/50 flex flex-col fixed h-full bg-milk-card/90 dark:bg-ink/80 backdrop-blur-xl z-10">
         <div className="p-6">
           <div className="flex items-center gap-2.5 mb-8">
             <img src={logo} alt="РублЪ" className="h-12 w-auto object-contain" />
             <div>
               <div className="text-sm font-bold tracking-tight leading-none">
-                Рубл<span className="text-rubl-accent">Ъ</span>
+                Рубл<span className="text-bronze dark:text-gold">Ъ</span>
               </div>
-              <div className="text-[10px] text-gray-500 dark:text-zinc-500 mt-0.5">AI Director</div>
+              <div className="text-[10px] text-muted-light dark:text-muted mt-0.5">AI Director</div>
             </div>
           </div>
 
@@ -1378,14 +1388,14 @@ export default function App() {
                   onClick={() => setPage(item.id)}
                   className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition-all duration-200 ${
                     active
-                      ? "bg-gray-100 dark:bg-zinc-800/80 text-gray-900 dark:text-white font-medium"
-                      : "text-gray-500 dark:text-zinc-500 hover:text-gray-700 dark:hover:text-zinc-300 hover:bg-gray-100 dark:hover:bg-zinc-900"
+                      ? "bg-milk-deep dark:bg-panel-deep/80 text-ink-soft dark:text-cream font-medium"
+                      : "text-muted-light dark:text-muted hover:text-ink-soft dark:hover:text-cream hover:bg-milk-deep dark:hover:bg-panel"
                   }`}
                 >
-                  <Icon size={18} className={active ? "text-rubl-accent" : ""} />
+                  <Icon size={18} className={active ? "text-bronze dark:text-gold" : ""} />
                   {item.label}
                   {active && (
-                    <span className="ml-auto w-1.5 h-1.5 rounded-full bg-rubl-accent" />
+                    <span className="ml-auto w-1.5 h-1.5 rounded-full bg-bronze dark:bg-gold" />
                   )}
                 </button>
               );
@@ -1393,10 +1403,10 @@ export default function App() {
           </nav>
         </div>
 
-        <div className="mt-auto p-6 border-t border-gray-200 dark:border-zinc-800/50">
+        <div className="mt-auto p-6 border-t border-milk-line dark:border-line/50">
           <button
             onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-gray-600 dark:text-zinc-400 hover:bg-gray-100 dark:hover:bg-zinc-900 transition-colors"
+            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-muted-light dark:text-muted hover:bg-milk-deep dark:hover:bg-panel transition-colors"
           >
             {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
             {theme === "dark" ? "Светлая тема" : "Тёмная тема"}
@@ -1409,7 +1419,7 @@ export default function App() {
 
           {/* Кто вошёл. Мастеру это важнее всего: он должен видеть, что перед
               ним его собственный расчёт, а не чужой. */}
-          <div className="text-xs text-gray-400 dark:text-zinc-600 mt-3">
+          <div className="text-xs text-muted-light dark:text-muted mt-3">
             {userName
               ? userName
               : role === "owner"
