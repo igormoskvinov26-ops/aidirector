@@ -1121,8 +1121,11 @@ interface MonthRow {
   /** Впереди до конца этого же месяца. */
   future_count: number;
   future_revenue: number;
-  /** Выполненное плюс будущее. Сумма null, если неизвестна косметика. */
+  /** Выполненное плюс будущее. */
   expected_count: number;
+  /** Только услуги — считается всегда. */
+  expected_services: number;
+  /** Услуги вместе с косметикой. null, если продажи косметики не получены. */
   expected_revenue: number | null;
 }
 
@@ -1228,6 +1231,7 @@ function BookingsPage() {
       <td className={число}>{РУБ(row.future_revenue)}</td>
 
       <td className={`${число} ${блокСлева}`}>{ШТ(row.expected_count)}</td>
+      <td className={число}>{РУБ(row.expected_services)}</td>
       <td className={`${число} text-rubl-accent`}>{РУБ(row.expected_revenue)}</td>
     </tr>
   );
@@ -1254,7 +1258,7 @@ function BookingsPage() {
       ))}
 
       <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl overflow-x-auto">
-        <table className="w-full text-sm min-w-[860px]">
+        <table className="w-full text-sm min-w-[960px]">
           <thead>
             {/* Первый ряд — названия блоков. Рамка слева отделяет блок от блока. */}
             <tr className="text-gray-500 dark:text-zinc-500">
@@ -1265,7 +1269,7 @@ function BookingsPage() {
               <th className={`${подпись} pt-4 ${блокСлева}`} colSpan={2}>
                 Впереди
               </th>
-              <th className={`${подпись} pt-4 ${блокСлева} text-rubl-accent`} colSpan={2}>
+              <th className={`${подпись} pt-4 ${блокСлева} text-rubl-accent`} colSpan={3}>
                 Прогноз на месяц
               </th>
             </tr>
@@ -1280,7 +1284,8 @@ function BookingsPage() {
               <th className="px-3 pb-3 text-right font-normal">сумма</th>
 
               <th className={`px-3 pb-3 text-right font-normal ${блокСлева}`}>записей</th>
-              <th className="px-3 pb-3 text-right font-normal">сумма</th>
+              <th className="px-3 pb-3 text-right font-normal">услуги</th>
+              <th className="px-3 pb-3 text-right font-normal">с косметикой</th>
             </tr>
           </thead>
           <tbody>
@@ -1295,9 +1300,9 @@ function BookingsPage() {
       </div>
 
       <p className="text-xs text-gray-400 dark:text-zinc-600 mt-3">
-        Прогноз — выполненное плюс будущее: услуги, косметика и суммы записей до
-        конца месяца. Это выручка, а не зарплата мастера; расчёт оплаты — на
-        отдельной вкладке.
+        Прогноз — выполненное плюс будущее до конца месяца. Две суммы: отдельно
+        услуги и они же вместе с проданной косметикой. Это выручка, а не
+        зарплата мастера; расчёт оплаты — на отдельной вкладке.
       </p>
     </div>
   );
