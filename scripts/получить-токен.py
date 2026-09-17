@@ -15,6 +15,7 @@
 import asyncio
 import getpass
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -41,18 +42,37 @@ def прочитать_партнёрский(путь: Path) -> str:
     return ""
 
 
-async def main() -> None:
+def найти_партнёрский() -> str:
+    """Партнёрский токен — из окружения, иначе из .env.
+
+    Окружение первым, потому что внутри контейнера Директора .env нет: файл
+    остаётся на компьютере, а значения приходят переменными. Запуск через
+    docker exec — самый простой способ, там уже есть и httpx, и ключи.
+    """
+    из_окружения = os.environ.get("YCLIENTS_PARTNER_TOKEN", "").strip()
+    if из_окружения and not из_окружения.startswith("<"):
+        return из_окружения
+
     путь = найти_env()
     if путь is None:
-        print("Файл .env не найден. Запускайте из папки проекта:")
+        print("Партнёрский токен не найден: ни в переменных окружения, ни в .env.")
+        print("Запускайте из папки проекта:")
         print('    cd backend && uv run python "../scripts/получить-токен.py"')
+        print("или, если Директор работает, через его контейнер:")
+        print("    docker cp scripts/получить-токен.py rubl_director:/app/token.py")
+        print("    docker exec -it rubl_director python /app/token.py")
         sys.exit(1)
 
-    партнёр = прочитать_партнёрский(путь)
-    if not партнёр or партнёр.startswith("<"):
+    из_файла = прочитать_партнёрский(путь)
+    if not из_файла or из_файла.startswith("<"):
         print(f"В файле {путь} не заполнен YCLIENTS_PARTNER_TOKEN.")
         print("Он есть в настройках YCLIENTS, в разделе для партнёров.")
         sys.exit(1)
+    return из_файла
+
+
+async def main() -> None:
+    партнёр = найти_партнёрский()
 
     print("Вход в YCLIENTS — те же логин и пароль, что и на сайте yclients.com.")
     print("Это НЕ логин от Директора: тот мы придумали сами, YCLIENTS его не знает.")
@@ -109,7 +129,7 @@ async def main() -> None:
     print("Впишите эту строку в .env, заменив прежнюю:\n")
     print(f"    YCLIENTS_USER_TOKEN={токен}\n")
     print("Токен — такой же секрет, как пароль: никому не пересылайте.")
-    print("Дальше: uv run python \"../scripts/показать-филиалы.py\"")
+    print("После правки .env перезапустите Директора: local/Запустить.command")
 
 
 if __name__ == "__main__":
