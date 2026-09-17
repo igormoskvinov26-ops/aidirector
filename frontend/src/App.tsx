@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { Component, useEffect, useMemo, useState } from "react";
+import type { ErrorInfo, ReactNode } from "react";
 import {
   Bar,
   XAxis,
@@ -19,6 +20,7 @@ import {
   CalendarClock,
   Wallet,
   RefreshCw,
+  AlertTriangle,
 } from "lucide-react";
 import ClientBasePage from "./ClientBasePage";
 import BarberMonthPage from "./BarberMonthPage";
@@ -142,6 +144,182 @@ const NAV = [
   { id: "payroll", label: "Расчёт ЗП", icon: Wallet },
   { id: "clients", label: "Клиенты", icon: Users },
 ];
+
+/** Ответ /api/sync/status — свежесть данных и текущий ход выгрузки. */
+interface SyncState {
+  in_progress: boolean;
+  stage: string | null;
+  last_success_at: string | null;
+  last_attempt_at: string | null;
+  last_error: string | null;
+  counts: Record<string, number> | null;
+}
+
+// Время показываем московское, а не то, в котором стоит компьютер: салон
+// работает по Москве, и администратор сверяет надпись со своей сменой.
+const МОСКВА = "Europe/Moscow";
+
+/** «17.09 в 13:42» по Москве. */
+function времяПоМоскве(iso: string): string {
+  const д = new Date(iso);
+  const дата = д.toLocaleDateString("ru-RU", {
+    timeZone: МОСКВА,
+    day: "2-digit",
+    month: "2-digit",
+  });
+  const часы = д.toLocaleTimeString("ru-RU", {
+    timeZone: МОСКВА,
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  return `${дата} в ${часы}`;
+}
+
+/** Сколько минут прошло. Нужно, чтобы отметить устаревшие данные. */
+function минутНазад(iso: string): number {
+  return Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+}
+
+// Выгрузка идёт раз в час. Полтора часа без удачной — значит что-то не так,
+// и числа на экране уже не сегодняшние.
+const УСТАРЕЛО_МИНУТ = 90;
+
+/** Свежесть данных: когда обновлялись и не идёт ли загрузка прямо сейчас.
+ *
+ *  Стоит в боковой панели, то есть на каждой странице. Без этой надписи
+ *  вчерашние числа выглядят как сегодняшние: выгрузка работает в фоне раз в
+ *  час, и по экрану её не видно вовсе.
+ */
+function SyncBadge() {
+  const [состояние, setСостояние] = useState<SyncState | null>(null);
+
+  useEffect(() => {
+    let живой = true;
+    let таймер: number | undefined;
+
+    const спросить = async () => {
+      try {
+        const r = await fetch("/api/sync/status");
+        if (r.ok && живой) {
+          const тело: SyncState = await r.json();
+          setСостояние(тело);
+          // Пока выгрузка идёт, спрашиваем чаще: человек смотрит на надпись
+          // и ждёт, когда она сменится. В покое реже — раз в час всё равно.
+          таймер = window.setTimeout(спросить, тело.in_progress ? 3000 : 30000);
+          return;
+        }
+      } catch {
+        // Молча: Директор мог перезапускаться. Надпись останется прежней,
+        // следующая попытка будет через полминуты.
+      }
+      if (живой) таймер = window.setTimeout(спросить, 30000);
+    };
+
+    спросить();
+    return () => {
+      живой = false;
+      if (таймер) window.clearTimeout(таймер);
+    };
+  }, []);
+
+  if (!состояние) return null;
+
+  if (состояние.in_progress) {
+    return (
+      <div className="flex items-start gap-2 text-xs text-rubl-accent">
+        <RefreshCw size={13} className="animate-spin mt-0.5 shrink-0" />
+        <span>
+          Загрузка данных
+          {состояние.stage ? `: ${состояние.stage}` : ""}
+          <span className="block text-gray-400 dark:text-zinc-600">
+            это несколько минут
+          </span>
+        </span>
+      </div>
+    );
+  }
+
+  if (!состояние.last_success_at) {
+    return (
+      <div className="flex items-start gap-2 text-xs text-gray-400 dark:text-zinc-600">
+        <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+        <span>Данные ещё не загружались</span>
+      </div>
+    );
+  }
+
+  const возраст = минутНазад(состояние.last_success_at);
+  const устарело = возраст > УСТАРЕЛО_МИНУТ;
+  // Упавшая попытка после удачной — единственный случай, когда числа на
+  // экране верные, но уже не свежие. Об этом надо сказать прямо.
+  const сорвалось = Boolean(состояние.last_error);
+
+  return (
+    <div
+      className={`flex items-start gap-2 text-xs ${
+        устарело || сорвалось
+          ? "text-amber-600 dark:text-amber-500"
+          : "text-gray-400 dark:text-zinc-600"
+      }`}
+      title={
+        сорвалось
+          ? `Последняя попытка обновления не удалась: ${состояние.last_error}`
+          : undefined
+      }
+    >
+      {устарело || сорвалось ? (
+        <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+      ) : (
+        <RefreshCw size={13} className="mt-0.5 shrink-0" />
+      )}
+      <span>
+        Обновлено {времяПоМоскве(состояние.last_success_at)}
+        {сорвалось && (
+          <span className="block">Последняя попытка не удалась</span>
+        )}
+      </span>
+    </div>
+  );
+}
+
+/** Ограждение раздела: ошибка внутри страницы не гасит весь интерфейс.
+ *
+ *  Без него любая неожиданная выдача сервера — поле не того типа, пустой
+ *  ответ вместо списка — обрывала отрисовку всего приложения. Человек видел
+ *  белый экран: ни меню, ни надписи о свежести данных, ни намёка на причину.
+ *  Найдено при проверке интерфейса на подставных ответах 17.09.2026.
+ *
+ *  Ограждается только область страницы. Боковая панель снаружи и остаётся
+ *  на месте: по ней можно уйти в другой раздел, а не перезагружать окно.
+ */
+class PageBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error("Раздел не отрисовался:", error, info.componentStack);
+  }
+
+  render() {
+    if (!this.state.failed) return this.props.children;
+    return (
+      <div className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-6">
+        <div className="flex items-center gap-2 text-amber-600 dark:text-amber-500 font-medium">
+          <AlertTriangle size={18} />
+          Раздел не открылся
+        </div>
+        <p className="text-sm text-gray-600 dark:text-zinc-400 mt-2">
+          Скорее всего данные ещё не загружены до конца. Слева видно, идёт ли
+          загрузка. Если она закончилась, а раздел всё равно не открывается —
+          перезапустите Директора и покажите вывод.
+        </p>
+      </div>
+    );
+  }
+}
 
 // ── Components ──
 function Spinner() {
@@ -1238,6 +1416,12 @@ export default function App() {
             {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
             {theme === "dark" ? "Светлая тема" : "Тёмная тема"}
           </button>
+          {/* Свежесть данных. Здесь, а не на каждой странице по отдельности:
+              боковая панель видна везде, и надпись не придётся повторять. */}
+          <div className="mt-3">
+            <SyncBadge />
+          </div>
+
           {/* Кто вошёл. Мастеру это важнее всего: он должен видеть, что перед
               ним его собственный расчёт, а не чужой. */}
           <div className="text-xs text-gray-400 dark:text-zinc-600 mt-3">
@@ -1258,12 +1442,15 @@ export default function App() {
           {/* Каждая страница показывается, только если роль её действительно
               имеет. Список ролей один, и меню, и маршрутизация читают его. */}
           {PAGES_BY_ROLE[role].includes(page) && (
-            <>
+            /* key по разделу: при переходе React создаёт ограждение заново,
+               и сломанная страница не держит его поднятым до перезагрузки
+               окна. Сбрасывать состояние вручную для этого не нужно. */
+            <PageBoundary key={page}>
               {page === "planfact" && <PlanFactPage />}
               {page === "bookings" && <BookingsPage />}
               {page === "payroll" && <BarberMonthPage payroll />}
               {page === "clients" && <ClientBasePage role={role} />}
-            </>
+            </PageBoundary>
           )}
         </div>
       </main>

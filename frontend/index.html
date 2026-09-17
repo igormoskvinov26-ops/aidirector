@@ -4,9 +4,11 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>РублЪ — AI Director</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <!-- Шрифт лежит в самой сборке, внешних запросов страница не делает.
+         Прежде здесь загружался Inter с fonts.googleapis.com: из России этот
+         адрес отвечает через раз, и открытие страницы ждало его; на
+         компьютере без интернета — ждало таймаута. Директор работает на
+         своей машине, зависеть от чужого сервера ему незачем. -->
   </head>
   <body>
     <div id="root"></div>

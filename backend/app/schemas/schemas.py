@@ -150,10 +150,22 @@ class AIReportResponse(BaseModel):
 
 # ── Sync ──
 class SyncStatusResponse(BaseModel):
+    """Состояние выгрузки для надписи на экране.
+
+    Поля records_synced и clients_synced убраны: они всегда отдавались нулями,
+    то есть сообщали неправду. Настоящие числа лежат в counts — по последней
+    удачной выгрузке.
+    """
+
+    # Идёт ли выгрузка прямо сейчас и какой шаг: «клиенты», «визиты».
     in_progress: bool
-    last_sync: datetime | None = None
-    records_synced: int = 0
-    clients_synced: int = 0
+    stage: str | None = None
+    # Когда данные обновились в последний раз. Именно это стоит на экране.
+    last_success_at: datetime | None = None
+    # Когда была последняя попытка. Новее удачной — значит данные устарели.
+    last_attempt_at: datetime | None = None
+    last_error: str | None = None
+    counts: dict[str, int] | None = None
 
 
 # ── Finance ──

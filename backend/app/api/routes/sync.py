@@ -2,24 +2,25 @@
 
 from datetime import date
 
-from fastapi import APIRouter, BackgroundTasks, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Query
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database import get_db
 from app.schemas.schemas import SyncStatusResponse
 from app.services.kpi import calculate_all_daily
-from app.services.sync import get_sync_status, sync_all
+from app.services.sync import get_sync_state, sync_all
 
 router = APIRouter(prefix="/api/sync", tags=["sync"])
 
 
 @router.get("/status", response_model=SyncStatusResponse)
-async def sync_status() -> dict:
-    status = get_sync_status()
-    return SyncStatusResponse(
-        in_progress=status["in_progress"],
-        last_sync=status.get("last_sync"),
-        records_synced=0,
-        clients_synced=0,
-    )
+async def sync_status(db: AsyncSession = Depends(get_db)) -> SyncStatusResponse:
+    """Открыт всем ролям: надпись о свежести данных стоит на каждой странице.
+
+    Секретов здесь нет — время, шаг и количества строк. Запуск выгрузки
+    (/api/sync/trigger) роли, кроме владельца, по-прежнему не получают.
+    """
+    return SyncStatusResponse(**await get_sync_state(db))
 
 
 @router.post("/trigger")

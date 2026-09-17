@@ -52,6 +52,14 @@ def client() -> TestClient:
     async def brand_new() -> dict:
         return {"ok": True}
 
+    @app.get("/api/sync/status")
+    async def sync_status() -> dict:
+        return {"in_progress": False}
+
+    @app.post("/api/sync/trigger")
+    async def sync_trigger() -> dict:
+        return {"status": "started"}
+
     @app.get("/")
     async def index() -> dict:
         return {"page": "spa"}
@@ -140,3 +148,37 @@ def test_unlisted_route_is_closed_for_operator_by_default(client):
 def test_operator_still_gets_the_page_itself(client):
     """Статику интерфейса оператор получать обязан, иначе ему нечего открыть."""
     assert client.get("/", headers=OPERATOR).status_code == 200
+
+
+# --------------------------------------------------------------------------- #
+# Состояние выгрузки
+#
+# Надпись «данные обновлены тогда-то» стоит на каждой странице, значит её
+# должны получать все роли. Запуск выгрузки — нет: это действие, а не сведение.
+# --------------------------------------------------------------------------- #
+
+
+def test_состояние_выгрузки_видят_все_роли(client):
+    for кто in (OWNER, OPERATOR):
+        assert client.get("/api/sync/status", headers=кто).status_code == 200
+
+
+def test_мастер_тоже_видит_состояние_выгрузки(client):
+    """Без этой надписи мастер не отличит свежий расчёт от вчерашнего."""
+    аккаунты = settings.master_accounts
+    if not аккаунты:
+        pytest.skip("в настройках нет учётных записей мастеров")
+    мастер = _auth(аккаунты[0]["login"], аккаунты[0]["password"])
+    assert client.get("/api/sync/status", headers=мастер).status_code == 200
+
+
+def test_запуск_выгрузки_остался_у_владельца(client):
+    """Оператору доступно чтение состояния, но не запуск: это разные вещи,
+    и открытие одного не должно открывать другое."""
+    assert client.post("/api/sync/trigger", headers=OWNER).status_code == 200
+    assert client.post("/api/sync/trigger", headers=OPERATOR).status_code == 403
+
+
+def test_без_пароля_состояние_не_отдаётся(client):
+    """Открыли всем ролям — не значит открыли всем в сети."""
+    assert client.get("/api/sync/status").status_code == 401

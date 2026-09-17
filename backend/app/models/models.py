@@ -336,3 +336,32 @@ class DailySegmentSnapshot(Base):
     snapshot_date: Mapped[date] = mapped_column(Date, primary_key=True)
     segment_code: Mapped[str] = mapped_column(String(40), primary_key=True)
     clients_count: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class SyncRun(Base):
+    """Одна выгрузка из YCLIENTS: когда шла, чем кончилась, сколько привезла.
+
+    Лежит в базе, а не в памяти процесса. На экране должно стоять время
+    настоящего последнего обновления: после перезапуска Директора память
+    пуста, и человек увидел бы «никогда» при свежих данных.
+
+    Строка на каждую выгрузку, а не одна перезаписываемая. Так видно не только
+    последнюю удачную, но и то, что последние пять попыток подряд упали — при
+    одной строке эта разница исчезает, а именно она означает, что цифры на
+    экране устарели.
+    """
+
+    __tablename__ = "sync_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    finished_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    ok: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    # Текст ошибки урезается: в журнале контейнера лежит полный, а здесь нужна
+    # строка, которую можно показать человеку на экране.
+    error: Mapped[str | None] = mapped_column(String(500))
+    staff_count: Mapped[int] = mapped_column(Integer, default=0)
+    services_count: Mapped[int] = mapped_column(Integer, default=0)
+    clients_count: Mapped[int] = mapped_column(Integer, default=0)
+    visits_count: Mapped[int] = mapped_column(Integer, default=0)
+    sales_count: Mapped[int] = mapped_column(Integer, default=0)

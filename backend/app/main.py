@@ -39,11 +39,17 @@ PUBLIC_PATHS = {"/health"}
 # расчёт зарплаты. Список из префиксов, а не из точных путей, потому что под
 # /api/client-base лежат и задачи, и результаты звонков, и они ещё будут
 # добавляться.
-OPERATOR_API_PREFIXES = ("/api/client-base", "/api/barbers", "/api/me")
+# Состояние выгрузки открыто всем: надпись «данные обновлены тогда-то» стоит
+# на каждой странице, и без неё администратор со стойки не отличит свежие
+# цифры от вчерашних. Секретов в ответе нет — время, шаг и количества строк.
+# Запуск выгрузки (/api/sync/trigger) остаётся только у владельца.
+SYNC_STATE_PREFIX = "/api/sync/status"
+
+OPERATOR_API_PREFIXES = ("/api/client-base", "/api/barbers", "/api/me", SYNC_STATE_PREFIX)
 
 # Мастер заходит только за своими деньгами. Внутри /api/barbers ответ ещё и
 # урезается до его собственной строки — одного лишь доступа к пути мало.
-MASTER_API_PREFIXES = ("/api/barbers", "/api/me")
+MASTER_API_PREFIXES = ("/api/barbers", "/api/me", SYNC_STATE_PREFIX)
 
 
 def _resolve_identity(login: str, password: str) -> tuple[str, int | None] | None:
