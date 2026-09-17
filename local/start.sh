@@ -9,11 +9,20 @@ set -euo pipefail
 cd "$(dirname "$0")"
 ROOT="$(cd .. && pwd)"
 
+# Docker Desktop кладёт команду docker не всегда туда, куда смотрит PATH.
+. "./docker-path.sh"
+
 echo "── Проверки ──────────────────────────────────────"
 
 if ! command -v docker >/dev/null; then
-    echo "  ✗ Docker не установлен."
-    echo "    Скачайте Docker Desktop: https://www.docker.com/products/docker-desktop/"
+    echo "  ✗ Команда docker не найдена. Искал здесь:$DOCKER_LOOKED_IN"
+    echo ""
+    echo "    Если Docker Desktop ещё не установлен — поставьте:"
+    echo "    https://www.docker.com/products/docker-desktop/"
+    echo ""
+    echo "    Если установлен и открыт — значит команды лежат в другом месте."
+    echo "    Откройте Docker Desktop → Settings → Advanced и включите"
+    echo "    установку CLI-инструментов в /usr/local/bin (потребуется пароль)."
     exit 1
 fi
 

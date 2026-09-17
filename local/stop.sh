@@ -3,5 +3,6 @@
 # всё будет как было.
 set -euo pipefail
 cd "$(dirname "$0")"
+. "./docker-path.sh"
 docker compose --env-file ../.env down
 echo "Директор остановлен. Данные сохранены."
