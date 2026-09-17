@@ -22,21 +22,35 @@ _sync_in_progress = False
 _last_sync: datetime | None = None
 
 
+def default_window(today: date | None = None) -> tuple[str, str]:
+    """Окно выгрузки по умолчанию: назад за историей, вперёд за записями.
+
+    Вперёд — обязательно. Прежняя версия заканчивала окно сегодняшним днём,
+    и записи на завтра в базу не попадали вовсе: раздел предстоящих читает
+    их оттуда, а не из YCLIENTS, и оставался пустым при исправной выгрузке.
+    """
+    from app.config import settings
+
+    today = today or date.today()
+    back = today - timedelta(days=settings.sync_window_days)
+    ahead = today + timedelta(days=settings.sync_window_ahead_days)
+    return back.isoformat(), ahead.isoformat()
+
+
 async def sync_all(date_from: str | None = None, date_to: str | None = None) -> dict[str, int]:
     """Pull YCLIENTS -> PostgreSQL for a bounded window.
 
-    When no dates are given the window defaults to the last
-    ``settings.sync_window_days`` days. The previous version passed None straight
-    through, which made every sync re-download the entire history.
+    When no dates are given the window defaults to ``default_window()``. The
+    previous version passed None straight through, which made every sync
+    re-download the entire history.
     """
     global _sync_in_progress, _last_sync
 
-    from app.config import settings
-
-    if date_to is None:
-        date_to = date.today().isoformat()
+    окно_назад, окно_вперёд = default_window()
     if date_from is None:
-        date_from = (date.today() - timedelta(days=settings.sync_window_days)).isoformat()
+        date_from = окно_назад
+    if date_to is None:
+        date_to = окно_вперёд
 
     if _sync_in_progress:
         logger.info("Sync already in progress, skipping")

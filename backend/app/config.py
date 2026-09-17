@@ -67,6 +67,11 @@ class Settings(BaseSettings):
     sync_interval_minutes: int = 60
     # How far back the hourly sync pulls data. Never "everything".
     sync_window_days: int = 90
+    # Насколько вперёд. Без этого окно кончалось сегодняшним днём, и раздел
+    # предстоящих записей был пуст по построению: в базе их просто не было.
+    # Значение согласовано с MAX_DAYS_AHEAD в app/services/bookings.py —
+    # смотреть дальше горизонта, который умеет показывать интерфейс, незачем.
+    sync_window_ahead_days: int = 60
 
     # -- Cache --
     cache_ttl_seconds: int = 300
