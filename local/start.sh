@@ -125,9 +125,24 @@ echo "  ✓ структура базы обновлена"
 
 # Последняя проверка: приложение должно отвечать. Печатать «запущен», не
 # убедившись в этом, — значит отправить человека искать несуществующий адрес.
-if ! docker compose --env-file "$ROOT/.env" exec -T director \
-        python -c "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/health')" >/dev/null 2>&1; then
-    echo "  ✗ Приложение не отвечает на проверку здоровья."
+#
+# Проверяем в цикле, а не один раз. Uvicorn начинает принимать соединения не
+# в тот же миг, когда контейнер запущен, и одна попытка попадает в промежуток:
+# на живой установке скрипт сообщил, что приложение не отвечает, тогда как в
+# журнале рядом стояло «Application startup complete».
+ANSWERS=""
+for _ in $(seq 1 30); do
+    if docker compose --env-file "$ROOT/.env" exec -T director python -c \
+            "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/health')" \
+            >/dev/null 2>&1; then
+        ANSWERS="да"
+        break
+    fi
+    sleep 1
+done
+
+if [ -z "$ANSWERS" ]; then
+    echo "  ✗ Приложение не ответило за 30 секунд. Последние строки журнала:"
     docker compose --env-file "$ROOT/.env" logs --tail 20 director | sed 's/^/      /'
     exit 1
 fi
