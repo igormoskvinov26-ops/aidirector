@@ -9,6 +9,13 @@
 
 Запуск из папки проекта:
     cd backend && uv run python "../scripts/показать-мастеров.py"
+
+Если Директор уже работает, проще через его контейнер — там и библиотеки, и
+ключи уже на месте, ставить ничего не нужно:
+    docker cp scripts/показать-мастеров.py rubl_director:/app/masters.py
+    docker exec rubl_director python /app/masters.py
+
+Копировать нужно именно в /app: оттуда Python находит модули приложения.
 """
 
 import asyncio
