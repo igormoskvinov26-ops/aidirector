@@ -91,8 +91,34 @@ fi
 docker compose --env-file "$ROOT/.env" exec -T -u root director \
     chown -R rubl /app/output >/dev/null 2>&1 || true
 
-if ! docker compose --env-file "$ROOT/.env" exec -T director alembic upgrade head; then
-    echo "  ✗ Не удалось обновить структуру базы. Директор запущен не будет."
+# Вывод миграции придерживаем: при ошибке в .env приложение отвечает
+# трейсбеком на десятки строк, в котором по делу одна — какая настройка не
+# подошла. Её и нужно показать человеку, а не заставлять искать.
+if ! MIGRATION=$(docker compose --env-file "$ROOT/.env" exec -T director \
+        alembic upgrade head 2>&1); then
+    # Из строки берём только текст ошибки. Хвост «[type=..., input_value=...]»
+    # отбрасывается не для красоты: pydantic вкладывает туда само значение,
+    # то есть в вывод попал бы кусок пароля.
+    REASON=$(printf '%s\n' "$MIGRATION" | awk '/Value error, /{
+        sub(/.*Value error, /, ""); sub(/ \[type=.*/, ""); print; exit }')
+    # Название настройки pydantic печатает строкой выше текста ошибки.
+    FIELD=$(printf '%s\n' "$MIGRATION" | awk '
+        /Value error, /{ gsub(/^[ \t]+|[ \t]+$/, "", prev); print prev; exit }
+        { prev = $0 }')
+
+    if [ -n "$REASON" ]; then
+        echo "  ✗ Настройки в .env не подошли:"
+        echo ""
+        echo "      $REASON"
+        echo ""
+        if [ -n "$FIELD" ]; then
+            echo "    Строка в .env: $(printf '%s' "$FIELD" | tr '[:lower:]' '[:upper:]')"
+        fi
+        echo "    Откройте .env, исправьте и запустите этот файл снова."
+    else
+        echo "  ✗ Не удалось обновить структуру базы. Директор запущен не будет."
+        printf '%s\n' "$MIGRATION" | tail -20 | sed 's/^/      /'
+    fi
     exit 1
 fi
 echo "  ✓ структура базы обновлена"
