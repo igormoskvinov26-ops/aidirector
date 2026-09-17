@@ -174,6 +174,50 @@ def _normalize_visit_status(raw: Any) -> str:
     return "scheduled"
 
 
+async def _услуга_под_ссылку(
+    session: AsyncSession,
+    service_map: dict[int, int],
+    svc: dict,
+) -> int | None:
+    """Локальный id услуги. Для незнакомой — завести запись-заместитель.
+
+    YCLIENTS отдаёт список действующих услуг, а визиты за прошедшие месяцы
+    ссылаются и на удалённые: три месяца истории почти наверняка содержат
+    услугу, которую с тех пор убрали из прейскуранта.
+
+    Прежде в ссылку подставлялся идентификатор услуги из YCLIENTS — чужое для
+    нашей базы число. Отсюда две беды. База отвергала ссылку и вместе с ней
+    всю выгрузку визитов: на живой установке 2441 визит приехал и не сохранился
+    ни один. А совпади это число со существующей строкой услуг — визит молча
+    приписался бы не к той услуге, и ошибка уехала бы в расчёт зарплаты.
+
+    Заместитель помечается неактивным: это не услуга прейскуранта, а след
+    удалённой. Название и цена строки визита сохраняются как были.
+    """
+    yclients_id = svc.get("id")
+    if not yclients_id:
+        return None
+    if yclients_id in service_map:
+        return service_map[yclients_id]
+
+    название = (svc.get("title") or "").strip() or "Услуга удалена в YCLIENTS"
+    stmt = (
+        pg_insert(Service)
+        .values(yclients_id=yclients_id, title=название[:255], is_active=False)
+        # Обновление-пустышка нужно ради RETURNING: do_nothing на конфликте
+        # не возвращает строку, и id пришлось бы запрашивать отдельно.
+        .on_conflict_do_update(
+            index_elements=["yclients_id"], set_={"yclients_id": yclients_id}
+        )
+        .returning(Service.id)
+    )
+    строка = (await session.execute(stmt)).fetchone()
+    if строка is None:
+        return None
+    service_map[yclients_id] = строка[0]
+    return строка[0]
+
+
 class VisitRepository:
     @staticmethod
     async def upsert_many(
@@ -231,8 +275,9 @@ class VisitRepository:
             visit_db_id = visit_row[0]
 
             for svc in item.get("services", []):
-                svc_yclients_id = svc.get("id", 0)
-                svc_db_id = service_map.get(svc_yclients_id, svc_yclients_id)
+                svc_db_id = await _услуга_под_ссылку(session, service_map, svc)
+                if svc_db_id is None:
+                    continue
                 svc_stmt = pg_insert(VisitService).values(
                     visit_id=visit_db_id,
                     service_id=svc_db_id,
@@ -409,8 +454,12 @@ class SaleRepository:
 
             sale_datetime = _parse_datetime(item.get("create_date"))
 
+            # Незнакомый товар — пустая ссылка, а не его номер из YCLIENTS:
+            # чужое число здесь либо отвергается базой, либо указывает на
+            # посторонний товар. Поле допускает пустоту, а название и цена
+            # строки продажи хранятся рядом и не теряются.
             product_yid = item.get("good", {}).get("id", 0)
-            product_db_id = product_map.get(product_yid, product_yid)
+            product_db_id = product_map.get(product_yid)
 
             sale_id = item["id"]
             sale_cost = abs(Decimal(str(item.get("cost", 0))))
