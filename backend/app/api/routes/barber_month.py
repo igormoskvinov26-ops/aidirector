@@ -39,6 +39,34 @@ def _only_own(masters: list[dict], staff_id: int | None) -> list[dict]:
     return [m for m in masters if int(m["staff_id"]) == staff_id]
 
 
+def _expected(строка: dict) -> dict:
+    """Прогноз по мастеру: выполненное плюс будущее.
+
+    Две величины, которые владелец смотрит первыми: сколько записей выйдет за
+    месяц и сколько денег они принесут.
+
+    Сумма складывается из трёх столбцов — услуги выполненных записей, проданная
+    косметика, услуги будущих записей. Косметика входит намеренно: это деньги,
+    которые принёс тот же мастер, и в прогнозе по нему им место.
+
+    Если косметика недоступна (YCLIENTS не отдал продажи), прогноз по сумме не
+    считается вовсе. Неполная сумма выглядит как полная: увидев её, владелец
+    решит, что до плана не хватает больше, чем на самом деле. Причина при этом
+    уже лежит в warnings — там сказано, что продажи косметики не получены.
+    """
+    косметика = строка.get("product_sales")
+    записей = int(строка.get("completed_count") or 0) + int(строка.get("future_count") or 0)
+    if косметика is None:
+        return {"expected_count": записей, "expected_revenue": None}
+
+    сумма = (
+        Decimal(str(строка.get("completed_revenue") or 0))
+        + Decimal(str(косметика))
+        + Decimal(str(строка.get("future_revenue") or 0))
+    )
+    return {"expected_count": записей, "expected_revenue": float(сумма)}
+
+
 def _totals(masters: list[dict]) -> dict:
     """Итог по всем мастерам. Считается по тем же строкам, что показаны."""
     def _sum(key: str) -> Decimal:
@@ -64,7 +92,15 @@ def _totals(masters: list[dict]) -> dict:
 
 @router.get("/future")
 async def future(request: Request) -> dict:
-    """Записи за месяц по мастерам: выполнено, впереди, косметика."""
+    """Месяц по мастерам: выполнено, впереди, прогноз.
+
+    Строки — мастера, плюс итог по всем. Столбцы — три величины по выполненным
+    записям (количество, услуги, косметика), две по будущим (количество, сумма)
+    и две прогнозные, где выполненное сложено с будущим.
+
+    Зарплаты здесь нет и быть не должно: это загрузка мастеров, а не их доход.
+    Доход — в расчёте ЗП, и там своё разграничение прав.
+    """
     result = await _safe_report()
     role = getattr(request.state, "role", ROLE_MASTER)
 
@@ -72,9 +108,23 @@ async def future(request: Request) -> dict:
     if role == ROLE_MASTER:
         masters = _only_own(masters, getattr(request.state, "staff_id", None))
 
-    result["masters"] = [
-        {k: v for k, v in m.items() if k not in SALARY_FIELDS} for m in masters
-    ]
+    видимые = [{k: v for k, v in m.items() if k not in SALARY_FIELDS} for m in masters]
+    result["masters"] = [{**m, **_expected(m)} for m in видимые]
+
+    # Итог считается по тем строкам, что показаны: мастер видит свою строку, и
+    # итог под ней должен совпадать с ней, а не с суммой по всему салону.
+    итог = {k: v for k, v in _totals(masters).items() if k not in ("earned", "forecast")}
+
+    # _totals складывает столбец, пропуская неизвестные значения, и по косметике
+    # отдаёт ноль вместо «неизвестно». Для прогноза это разные вещи: ноль он
+    # сложит как настоящую сумму. Поэтому если хоть у одного мастера косметика
+    # не получена, в итоге её тоже нет.
+    if any(m.get("product_sales") is None for m in видимые):
+        итог["product_sales"] = None
+
+    result["totals"] = {**итог, **_expected(итог)}
+    result["scope"] = "own" if role == ROLE_MASTER else "all"
+
     result["warnings"] = [w for w in result["warnings"] if "косметики" in w]
     return result
 

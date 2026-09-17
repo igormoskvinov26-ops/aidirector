@@ -140,7 +140,7 @@ const PAGES_BY_ROLE: Record<string, string[]> = {
 
 const NAV = [
   { id: "planfact", label: "План-факт", icon: CreditCard },
-  { id: "bookings", label: "Будущие записи", icon: CalendarClock },
+  { id: "bookings", label: "Записи за месяц", icon: CalendarClock },
   { id: "payroll", label: "Расчёт ЗП", icon: Wallet },
   { id: "clients", label: "Клиенты", icon: Users },
 ];
@@ -1109,216 +1109,196 @@ function SumCard({
 }
 
 /** Ответ /api/bookings/upcoming. */
-interface BookingRecord {
-  id: number;
-  time: string;
-  client: string;
-  phone: string;
-  is_new_client: boolean;
-  total_visits: number;
-  master: string;
-  services: string[];
-  amount: number;
-  comment: string;
+/** Строка мастера в дашборде месяца. Зарплаты здесь нет: это загрузка, а не доход. */
+interface MonthRow {
+  staff_id: number;
+  name: string;
+  /** Выполнено с первого числа месяца по текущий момент. */
+  completed_count: number;
+  completed_revenue: number;
+  /** Проданная косметика. null — YCLIENTS не отдал продажи. */
+  product_sales: number | null;
+  /** Впереди до конца этого же месяца. */
+  future_count: number;
+  future_revenue: number;
+  /** Выполненное плюс будущее. Сумма null, если неизвестна косметика. */
+  expected_count: number;
+  expected_revenue: number | null;
 }
 
-interface BookingDay {
-  date: string;
-  count: number;
-  amount: number;
-  masters: string[];
-  records: BookingRecord[];
+interface MonthReport {
+  month_start: string;
+  month_end: string;
+  as_of: string;
+  updated_at: string;
+  masters: MonthRow[];
+  totals: MonthRow;
+  warnings: string[];
+  scope: "all" | "own";
 }
 
-interface UpcomingBookings {
-  from: string;
-  to: string;
-  days_ahead: number;
-  total_count: number;
-  total_amount: number;
-  days: BookingDay[];
-}
-
-const HORIZONS = [
-  { days: 7, label: "Неделя" },
-  { days: 14, label: "Две недели" },
-  { days: 30, label: "Месяц" },
+const МЕСЯЦЫ = [
+  "января", "февраля", "марта", "апреля", "мая", "июня",
+  "июля", "августа", "сентября", "октября", "ноября", "декабря",
 ];
 
-const WEEKDAYS = ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"];
-
-/** Дата как «15 сентября, вторник» — в списке на месяц иначе не сориентироваться. */
-function humanDate(iso: string): string {
-  const d = new Date(iso + "T00:00:00");
-  const month = [
-    "января", "февраля", "марта", "апреля", "мая", "июня",
-    "июля", "августа", "сентября", "октября", "ноября", "декабря",
-  ][d.getMonth()];
-  return `${d.getDate()} ${month}, ${WEEKDAYS[d.getDay()]}`;
+/** «1 — 30 сентября»: период, за который посчитан весь дашборд. */
+function периодМесяца(начало: string, конец: string): string {
+  const с = new Date(начало + "T00:00:00");
+  const по = new Date(конец + "T00:00:00");
+  return `${с.getDate()} — ${по.getDate()} ${МЕСЯЦЫ[по.getMonth()]}`;
 }
 
+const РУБ = (n: number | null): string =>
+  n === null ? "—" : Math.round(n).toLocaleString("ru-RU") + " ₽";
+
+const ШТ = (n: number | null): string => (n === null ? "—" : String(n));
+
+/** Дашборд месяца: мастера в строках, выполненное и будущее — двумя блоками.
+ *
+ *  Прежде здесь лежал список всех предстоящих записей по дням с разбивкой по
+ *  мастерам. Владелец 17.09.2026: это видно в самом YCLIENTS, а от Директора
+ *  нужна сводка — сколько каждый мастер сделал, сколько у него впереди и
+ *  сколько выйдет за месяц.
+ *
+ *  Столбцы разделены на блоки рамкой, а не только подписью: без неё «сумма»
+ *  слева и «сумма» справа читаются как один ряд однотипных чисел, хотя одно —
+ *  уже полученные деньги, а другое — ожидаемые.
+ */
 function BookingsPage() {
-  const [data, setData] = useState<UpcomingBookings | null>(null);
-  const [days, setDays] = useState(14);
+  const [data, setData] = useState<MonthReport | null>(null);
   const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState("");
 
-  const load = async (horizon: number) => {
-    setLoading(true);
-    try {
-      const r = await fetch(`/api/bookings/upcoming?days=${horizon}`);
-      setData(await r.json());
-    } catch (e) {
-      console.error("Bookings fetch error", e);
-    }
-    setLoading(false);
-  };
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch("/api/barbers/future");
+        if (!r.ok) throw new Error(`сервер ответил ${r.status}`);
+        setData(await r.json());
+      } catch (e) {
+        setFailed(e instanceof Error ? e.message : "не удалось получить данные");
+      }
+      setLoading(false);
+    })();
+  }, []);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { load(days); }, [days]);
+  if (loading) return <Spinner />;
 
-  const RUB = (n: number): string => Math.round(n).toLocaleString("ru-RU") + " ₽";
-  const todayIso = new Date().toISOString().slice(0, 10);
+  if (failed || !data) {
+    return (
+      <div className="animate-in rounded-2xl border border-amber-500/30 bg-amber-500/5 p-6">
+        <div className="flex items-center gap-2 text-amber-600 dark:text-amber-500 font-medium">
+          <AlertTriangle size={18} />
+          Не удалось получить данные
+        </div>
+        <p className="text-sm text-gray-600 dark:text-zinc-400 mt-2">
+          {failed || "Ответ пустой."} Слева видно, идёт ли загрузка из YCLIENTS.
+        </p>
+      </div>
+    );
+  }
 
-  if (loading && !data) return <Spinner />;
+  const строки = data.masters;
+  const итог = data.totals;
+
+  // Классы вынесены: разделители блоков должны совпадать в заголовке и в
+  // каждой строке, иначе рамка расходится по вертикали.
+  const блокСлева = "border-l border-gray-200 dark:border-zinc-700";
+  const число = "px-3 py-2.5 text-right whitespace-nowrap";
+  // По центру блока, а не вправо: прижатая подпись читается как заголовок
+  // последнего столбца, а не как название группы из трёх.
+  const подпись = "px-3 py-2 text-center text-[11px] font-medium uppercase tracking-wide";
+
+  const Строка = ({ row, итоговая }: { row: MonthRow; итоговая?: boolean }) => (
+    <tr
+      className={
+        итоговая
+          ? "border-t-2 border-gray-300 dark:border-zinc-600 font-semibold"
+          : "border-t border-gray-100 dark:border-zinc-800/70"
+      }
+    >
+      <td className="px-3 py-2.5 whitespace-nowrap">{итоговая ? "Всего" : row.name}</td>
+
+      <td className={`${число} ${блокСлева}`}>{ШТ(row.completed_count)}</td>
+      <td className={число}>{РУБ(row.completed_revenue)}</td>
+      <td className={число}>{РУБ(row.product_sales)}</td>
+
+      <td className={`${число} ${блокСлева}`}>{ШТ(row.future_count)}</td>
+      <td className={число}>{РУБ(row.future_revenue)}</td>
+
+      <td className={`${число} ${блокСлева}`}>{ШТ(row.expected_count)}</td>
+      <td className={`${число} text-rubl-accent`}>{РУБ(row.expected_revenue)}</td>
+    </tr>
+  );
 
   return (
     <div className="animate-in">
-      <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight mb-1">Будущие записи</h1>
-          <p className="text-gray-500 dark:text-zinc-500 text-sm">
-            Кто придёт, когда и на какую сумму. Отменённые и неявки сюда не попадают.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {HORIZONS.map((h) => (
-            <button
-              key={h.days}
-              onClick={() => setDays(h.days)}
-              className={`px-3 py-2 rounded-lg text-sm border transition-all ${
-                days === h.days
-                  ? "border-rubl-accent text-rubl-accent"
-                  : "border-gray-300 dark:border-zinc-700 text-gray-500 dark:text-zinc-500 hover:border-gray-400"
-              }`}
-            >
-              {h.label}
-            </button>
-          ))}
-          <button
-            onClick={() => load(days)}
-            disabled={loading}
-            className="flex items-center gap-1.5 border border-gray-300 dark:border-zinc-700 hover:border-rubl-accent px-4 py-2 rounded-lg text-sm transition-all disabled:opacity-50"
-          >
-            <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
-            Обновить
-          </button>
-        </div>
+      <div className="mb-6">
+        <h1 className="text-2xl font-bold tracking-tight mb-1">Записи за месяц</h1>
+        <p className="text-gray-500 dark:text-zinc-500 text-sm">
+          {периодМесяца(data.month_start, data.month_end)}. Выполненное — с первого
+          числа по сейчас, будущее — до конца месяца. Отменённые и неявки не
+          учитываются.
+        </p>
       </div>
 
-      {data && (
-        <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
-          <SumCard
-            label="Записей впереди"
-            value={String(data.total_count)}
-            note={`с ${data.from} по ${data.to}`}
-            accent
-          />
-          <SumCard
-            label="На сумму"
-            value={RUB(data.total_amount)}
-            note="если все дойдут"
-          />
-          <SumCard
-            label="Дней с записями"
-            value={String(data.days.length)}
-            note={`из ${data.days_ahead} впереди`}
-          />
+      {data.warnings.map((w) => (
+        <div
+          key={w}
+          className="mb-4 flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm text-amber-600 dark:text-amber-500"
+        >
+          <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+          {w}
         </div>
-      )}
+      ))}
 
-      {data && data.days.length === 0 && (
-        <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl p-10 text-center">
-          <p className="text-gray-500 dark:text-zinc-500">
-            На ближайшие {data.days_ahead} дней записей нет.
-          </p>
-        </div>
-      )}
+      <div className="bg-white dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800 rounded-2xl overflow-x-auto">
+        <table className="w-full text-sm min-w-[860px]">
+          <thead>
+            {/* Первый ряд — названия блоков. Рамка слева отделяет блок от блока. */}
+            <tr className="text-gray-500 dark:text-zinc-500">
+              <th className="px-3 pt-4 pb-1" />
+              <th className={`${подпись} pt-4 ${блокСлева}`} colSpan={3}>
+                Выполнено
+              </th>
+              <th className={`${подпись} pt-4 ${блокСлева}`} colSpan={2}>
+                Впереди
+              </th>
+              <th className={`${подпись} pt-4 ${блокСлева} text-rubl-accent`} colSpan={2}>
+                Прогноз на месяц
+              </th>
+            </tr>
+            <tr className="text-gray-400 dark:text-zinc-600 text-xs">
+              <th className="px-3 pb-3 text-left font-medium">Мастер</th>
 
-      <div className="space-y-4">
-        {data?.days.map((day) => (
-          <div
-            key={day.date}
-            className={`bg-white dark:bg-zinc-900/80 border rounded-2xl p-6 ${
-              day.date === todayIso
-                ? "border-rubl-accent"
-                : "border-gray-200 dark:border-zinc-800"
-            }`}
-          >
-            <div className="flex flex-wrap items-baseline justify-between gap-3 mb-4">
-              <h3 className="text-sm font-semibold uppercase tracking-widest text-gray-600 dark:text-zinc-300">
-                {humanDate(day.date)}
-                {day.date === todayIso && (
-                  <span className="ml-2 text-rubl-accent">сегодня</span>
-                )}
-              </h3>
-              <span className="text-xs text-gray-500 dark:text-zinc-500">
-                {day.count} записей на {RUB(day.amount)} · {day.masters.join(", ")}
-              </span>
-            </div>
+              <th className={`px-3 pb-3 text-right font-normal ${блокСлева}`}>записей</th>
+              <th className="px-3 pb-3 text-right font-normal">услуги</th>
+              <th className="px-3 pb-3 text-right font-normal">косметика</th>
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm min-w-[640px]">
-                <thead>
-                  <tr className="text-left text-[11px] uppercase tracking-wider text-gray-500 dark:text-zinc-500">
-                    <th className="pb-2 pr-4 font-semibold">Время</th>
-                    <th className="pb-2 px-4 font-semibold">Клиент</th>
-                    <th className="pb-2 px-4 font-semibold">Мастер</th>
-                    <th className="pb-2 px-4 font-semibold">Услуги</th>
-                    <th className="pb-2 pl-4 font-semibold text-right">Сумма</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {day.records.map((r) => (
-                    <tr key={r.id} className="border-t border-gray-100 dark:border-zinc-800/60">
-                      <td className="py-3 pr-4 font-semibold whitespace-nowrap">{r.time}</td>
-                      <td className="py-3 px-4">
-                        <div className="flex items-center gap-2">
-                          <span>{r.client}</span>
-                          {r.is_new_client && (
-                            <span className="text-[10px] uppercase tracking-wider text-rubl-accent border border-rubl-accent/40 rounded px-1.5 py-0.5">
-                              новый
-                            </span>
-                          )}
-                        </div>
-                        {r.phone && (
-                          <a
-                            href={`tel:${r.phone}`}
-                            className="text-xs text-gray-500 dark:text-zinc-500 hover:text-rubl-accent"
-                          >
-                            {r.phone}
-                          </a>
-                        )}
-                      </td>
-                      <td className="py-3 px-4 text-gray-600 dark:text-zinc-400">{r.master}</td>
-                      <td className="py-3 px-4 text-gray-600 dark:text-zinc-400">
-                        {r.services.length ? r.services.join(", ") : "—"}
-                        {r.comment && (
-                          <div className="text-xs text-gray-400 dark:text-zinc-600 mt-0.5">
-                            {r.comment}
-                          </div>
-                        )}
-                      </td>
-                      <td className="py-3 pl-4 text-right font-semibold whitespace-nowrap">
-                        {RUB(r.amount)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        ))}
+              <th className={`px-3 pb-3 text-right font-normal ${блокСлева}`}>записей</th>
+              <th className="px-3 pb-3 text-right font-normal">сумма</th>
+
+              <th className={`px-3 pb-3 text-right font-normal ${блокСлева}`}>записей</th>
+              <th className="px-3 pb-3 text-right font-normal">сумма</th>
+            </tr>
+          </thead>
+          <tbody>
+            {строки.map((row) => (
+              <Строка key={row.staff_id} row={row} />
+            ))}
+            {/* Итог показываем и одному мастеру: он должен совпасть с его
+                строкой, и по этому видно, что ничего не потерялось. */}
+            <Строка row={итог} итоговая />
+          </tbody>
+        </table>
       </div>
+
+      <p className="text-xs text-gray-400 dark:text-zinc-600 mt-3">
+        Прогноз — выполненное плюс будущее: услуги, косметика и суммы записей до
+        конца месяца. Это выручка, а не зарплата мастера; расчёт оплаты — на
+        отдельной вкладке.
+      </p>
     </div>
   );
 }
