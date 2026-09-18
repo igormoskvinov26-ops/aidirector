@@ -1136,8 +1136,14 @@ interface MonthRow {
   expected_count: number;
   /** Только услуги — считается всегда. */
   expected_services: number;
-  /** Услуги вместе с косметикой. null, если продажи косметики не получены. */
+  /** Услуги вместе с косметикой. null, если продажи косметики не получены.
+   *  По нему же таблица отсортирована: это ключевой параметр. */
   expected_revenue: number | null;
+  /** Начислено мастеру на сегодня. null — зарплата не посчитана. */
+  payroll: number | null;
+  /** Выручка мастера минус его зарплата. Не чистая прибыль салона: постоянные
+   *  расходы, расходники и эквайринг сюда не входят. */
+  contribution: number | null;
 }
 
 interface MonthReport {
@@ -1219,54 +1225,74 @@ function BookingsPage() {
 
   // Классы собраны в одном месте: разделители и отступы блоков должны
   // совпадать в шапке и в каждой строке, иначе полосы разъезжаются.
-  const клетка = "px-4 py-3.5 text-right whitespace-nowrap align-middle";
+  const клетка = "px-3 py-3.5 text-right whitespace-nowrap align-middle";
   const межблок = "border-l border-milk-line dark:border-line";
-  // Акцент первого уровня: деньги, которые уже заработаны или ожидаются.
+  // Четыре ступени выделения, сверху вниз по важности.
+  //
+  //   принесено  — сколько осталось салону. Самое важное число, и цвет у него
+  //                свой: зелёный значит деньги, которые остались, а не прошли
+  //                мимо. Отрицательный вклад показывается красным — мастер на
+  //                гаранте при пустом месяце обходится дороже, чем приносит;
+  //   ключевой   — прогноз с косметикой. По нему отсортирована таблица, и
+  //                сравнивать мастеров владелец будет по нему;
+  //   первый     — прочие заработанные деньги;
+  //   второй     — будущие записи: тише денег, громче служебных чисел.
+  const принесено = "text-[17px] font-bold";
+  const ключевой = "text-[17px] font-bold text-bronze dark:text-gold";
   const первый = "text-[15px] font-semibold text-bronze dark:text-gold";
-  // Он же, но для итоговой суммы прогноза: это то число, ради которого
-  // владелец открывает страницу, и оно должно быть заметно крупнее соседних.
-  const главный = "text-[17px] font-bold text-bronze dark:text-gold";
-  // Второго: будущие записи. Тише денег, но громче служебных чисел.
   const второй = "text-sm font-medium text-bronze-ink dark:text-gold-2";
   const обычный = "text-sm text-ink-soft dark:text-cream";
 
-  const Строка = ({ row, итоговая }: { row: MonthRow; итоговая?: boolean }) => (
-    <tr
-      className={
-        итоговая
-          ? "border-t-2 border-bronze/40 dark:border-gold/40"
-          : "border-t border-milk-line/70 dark:border-line/70"
-      }
-    >
-      <td className="px-4 py-3 align-middle">
-        {итоговая ? (
-          <span className="font-semibold text-ink-soft dark:text-cream">
-            Всего по салону
-          </span>
-        ) : (
-          <span className="flex items-center gap-3">
-            <Аватар staffId={row.staff_id} name={row.name} />
-            <span className="font-semibold text-ink-soft dark:text-cream">{row.name}</span>
-          </span>
-        )}
-      </td>
+  const Строка = ({ row, итоговая }: { row: MonthRow; итоговая?: boolean }) => {
+    // Строка итогов набрана крупнее и золотом целиком: это сводка по салону,
+    // и глаз должен находить её, не пересчитывая строки сверху.
+    const итог = итоговая ? "text-[15px] text-bronze dark:text-gold" : "";
+    const вклад =
+      row.contribution !== null && row.contribution < 0 ? "text-loss" : "text-profit";
 
-      <td className={`${клетка} ${межблок} ${обычный}`}>{ШТ(row.completed_count)}</td>
-      <td className={`${клетка} ${первый}`}>{РУБ(row.completed_revenue)}</td>
-      <td className={`${клетка} ${обычный}`}>{РУБ(row.product_sales)}</td>
+    return (
+      <tr
+        className={
+          итоговая
+            ? "border-t-2 border-bronze/50 dark:border-gold/50"
+            : "border-t border-milk-line/70 dark:border-line/70"
+        }
+      >
+        <td className="px-4 py-3 align-middle">
+          {итоговая ? (
+            <span className="text-[15px] font-bold text-bronze dark:text-gold">
+              Всего по салону
+            </span>
+          ) : (
+            <span className="flex items-center gap-3">
+              <Аватар staffId={row.staff_id} name={row.name} />
+              <span className="font-semibold text-ink-soft dark:text-cream">{row.name}</span>
+            </span>
+          )}
+        </td>
 
-      <td className={`${клетка} ${межблок} ${второй}`}>{ШТ(row.future_count)}</td>
-      <td className={`${клетка} ${второй}`}>{РУБ(row.future_revenue)}</td>
+        <td className={`${клетка} ${межблок} ${итог || обычный}`}>{ШТ(row.completed_count)}</td>
+        <td className={`${клетка} ${первый} ${итог}`}>{РУБ(row.completed_revenue)}</td>
+        <td className={`${клетка} ${итог || обычный}`}>{РУБ(row.product_sales)}</td>
 
-      <td className={`${клетка} ${межблок} ${обычный}`}>{ШТ(row.expected_count)}</td>
-      <td className={`${клетка} ${первый}`}>{РУБ(row.expected_services)}</td>
-      <td className={`${клетка} ${главный}`}>{РУБ(row.expected_revenue)}</td>
-    </tr>
-  );
+        <td className={`${клетка} ${межблок} ${второй} ${итог}`}>{ШТ(row.future_count)}</td>
+        <td className={`${клетка} ${второй} ${итог}`}>{РУБ(row.future_revenue)}</td>
+
+        <td className={`${клетка} ${межблок} ${итог || обычный}`}>{ШТ(row.expected_count)}</td>
+        <td className={`${клетка} ${первый} ${итог}`}>{РУБ(row.expected_services)}</td>
+        <td className={`${клетка} ${ключевой}`}>{РУБ(row.expected_revenue)}</td>
+
+        <td className={`${клетка} ${межблок} ${итог || обычный}`}>{РУБ(row.payroll)}</td>
+        {/* Цвет вклада не зависит от того, итоговая строка или нет: знак суммы
+            важнее единообразия, минус обязан быть виден сразу. */}
+        <td className={`${клетка} ${принесено} ${вклад}`}>{РУБ(row.contribution)}</td>
+      </tr>
+    );
+  };
 
   const подписьБлока =
-    "px-4 pt-4 pb-1 text-center text-[10px] font-semibold uppercase tracking-[0.14em]";
-  const подписьСтолбца = "px-4 pb-3 text-right text-[11px] font-normal";
+    "px-3 pt-4 pb-1 text-center text-[10px] font-semibold uppercase tracking-[0.14em]";
+  const подписьСтолбца = "px-3 pb-3 text-right text-[11px] font-normal";
 
   return (
     <div className="animate-in">
@@ -1292,7 +1318,7 @@ function BookingsPage() {
       ))}
 
       <div className="bg-milk-card dark:bg-panel border border-milk-line dark:border-line rounded-2xl overflow-x-auto">
-        <table className="w-full min-w-[1000px] border-collapse">
+        <table className="w-full min-w-[1150px] border-collapse">
           {/* Фон блоков — на столбцах. Полоса идёт на всю высоту таблицы и не
               рвётся между строками. Клетки фона не имеют, иначе они закрасят
               полосу собой. */}
@@ -1303,6 +1329,9 @@ function BookingsPage() {
             <col span={3} />
             <col span={2} className="bg-milk-deep dark:bg-panel-deep" />
             <col span={3} className="bg-bronze/[0.07] dark:bg-gold/[0.08]" />
+            {/* Последний блок подсвечен сильнее остальных: в нём то, ради чего
+                вся таблица, — сколько осталось салону. */}
+            <col span={2} className="bg-bronze/[0.14] dark:bg-gold/[0.15]" />
           </colgroup>
 
           <thead>
@@ -1316,6 +1345,12 @@ function BookingsPage() {
               </th>
               <th className={`${подписьБлока} ${межблок} text-bronze dark:text-gold`} colSpan={3}>
                 Прогноз на месяц
+              </th>
+              <th
+                className={`${подписьБлока} pt-4 ${межблок} text-bronze dark:text-gold`}
+                colSpan={2}
+              >
+                Вклад в салон
               </th>
             </tr>
             <tr className="text-muted-light dark:text-muted">
@@ -1331,6 +1366,9 @@ function BookingsPage() {
               <th className={`${подписьСтолбца} ${межблок}`}>записей</th>
               <th className={подписьСтолбца}>услуги</th>
               <th className={подписьСтолбца}>с косметикой</th>
+
+              <th className={`${подписьСтолбца} ${межблок}`}>зарплата</th>
+              <th className={подписьСтолбца}>принесено</th>
             </tr>
           </thead>
 
@@ -1345,11 +1383,27 @@ function BookingsPage() {
         </table>
       </div>
 
-      <p className="text-xs text-muted-light dark:text-muted mt-3">
-        Прогноз — выполненное плюс будущее до конца месяца. Две суммы: отдельно
-        услуги и они же вместе с проданной косметикой. Это выручка, а не
-        зарплата мастера; расчёт оплаты — на отдельной вкладке.
-      </p>
+      <div className="mt-3 space-y-1.5 text-xs text-muted-light dark:text-muted">
+        <p>
+          Строки отсортированы по прогнозу с косметикой — по тому числу, по
+          которому мастеров и сравнивают. Прогноз — выполненное плюс будущее до
+          конца месяца.
+        </p>
+        <p>
+          <span className="text-ink-soft dark:text-cream">Принесено</span> —
+          выручка мастера за вычетом его зарплаты: услуги выполненных записей
+          плюс косметика минус начисленное. Будущие записи сюда не входят, их
+          ещё не оплатили.
+        </p>
+        <p>
+          Это{" "}
+          <span className="text-ink-soft dark:text-cream">
+            не чистая прибыль салона
+          </span>
+          : постоянные расходы, расходники и эквайринг по мастерам не делятся и
+          здесь не вычтены. Прибыль салона — на вкладке «План-факт».
+        </p>
+      </div>
     </div>
   );
 }

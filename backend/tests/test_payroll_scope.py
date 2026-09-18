@@ -73,9 +73,33 @@ def test_totals_of_nobody_are_zero_not_crash():
     assert totals["earned"] is None
 
 
-@pytest.mark.parametrize("field", ["rule", "earned", "forecast", "days"])
-def test_salary_fields_named_for_stripping(field):
-    """Список вычищаемых полей должен покрывать всё, что выдаёт доход."""
-    from app.api.routes.barber_month import SALARY_FIELDS
+@pytest.mark.parametrize("поле", ["rule", "forecast", "days"])
+def test_служебные_поля_вычищаются(поле):
+    """Условия оплаты, прогноз зарплаты и разбивка по дням — не для дашборда.
 
-    assert field in SALARY_FIELDS
+    Это расчёт ЗП, у него своя вкладка и свой вид.
+    """
+    from app.api.routes.barber_month import СЛУЖЕБНЫЕ_ПОЛЯ
+
+    assert поле in СЛУЖЕБНЫЕ_ПОЛЯ
+
+
+def test_начисленная_зарплата_остаётся_в_дашборде():
+    """Владелец 18.09.2026 попросил показать, что остаётся салону от выручки
+    мастера. Без начисленной зарплаты такой столбец не посчитать, поэтому она
+    из списка вычищаемых убрана — сознательно, а не по недосмотру."""
+    from app.api.routes.barber_month import СЛУЖЕБНЫЕ_ПОЛЯ
+
+    assert "earned" not in СЛУЖЕБНЫЕ_ПОЛЯ
+
+
+def test_чужая_зарплата_закрыта_отбором_а_не_вычищением():
+    """Раз зарплата теперь есть в ответе, защищает её только отбор строк.
+
+    Мастер должен получить одну строку — свою. Если этот тест упадёт,
+    в дашборде откроются чужие деньги.
+    """
+    строки = _only_own(MASTERS, 5659611)
+    assert [м["name"] for м in строки] == ["Арташ"]
+    assert _only_own(MASTERS, None) == []
+    assert _only_own(MASTERS, 999999) == []

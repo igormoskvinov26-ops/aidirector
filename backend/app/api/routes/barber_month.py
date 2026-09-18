@@ -15,9 +15,16 @@ from app.services.barber_month import report
 
 router = APIRouter(prefix="/api/barbers", tags=["barbers"])
 
-# Поля, которых не должно быть в статистике записей: она про загрузку мастеров,
-# а не про их доход.
-SALARY_FIELDS = ("rule", "earned", "forecast", "days")
+# Что не уходит в дашборд месяца. Условия оплаты, прогноз зарплаты и разбивка
+# по дням — это уже расчёт ЗП, у него своя вкладка.
+#
+# Начисленная зарплата (earned) отсюда убрана намеренно: по просьбе владельца
+# 18.09.2026 дашборд показывает не только выручку мастера, но и то, что от неё
+# остаётся салону. Без зарплаты такой столбец не посчитать.
+#
+# Разграничение прав от этого не меняется: мастер по-прежнему видит только
+# свою строку, отбор идёт ниже по staff_id.
+СЛУЖЕБНЫЕ_ПОЛЯ = ("rule", "forecast", "days")
 
 # Кому видны все мастера и общий итог.
 ROLES_SEEING_EVERYONE = (ROLE_OWNER, ROLE_OPERATOR)
@@ -37,6 +44,35 @@ def _only_own(masters: list[dict], staff_id: int | None) -> list[dict]:
     if staff_id is None:
         return []
     return [m for m in masters if int(m["staff_id"]) == staff_id]
+
+
+def _вклад(строка: dict) -> dict:
+    """Сколько мастер принёс салону к текущему моменту.
+
+    Принесено = выручка мастера минус его начисленная зарплата. Выручка — это
+    услуги выполненных записей и проданная косметика, то есть деньги, которые
+    уже в кассе; будущие записи сюда не входят, их ещё не оплатили.
+
+    Это НЕ чистая прибыль салона, и называть её так нельзя. Постоянные расходы
+    — 389 117 ₽ в месяц, — расходники и эквайринг сюда не входят: они не
+    делятся по мастерам. Сложив три этих числа и сравнив с планом по прибыли,
+    владелец решит, что до плана ближе, чем на самом деле.
+
+    Если зарплата не посчитана (YCLIENTS не отдал график или продажи), вклад
+    не считается вовсе. Выручка без вычета зарплаты выглядела бы как вклад и
+    завышала бы его на десятки тысяч.
+    """
+    зарплата = строка.get("earned")
+    косметика = строка.get("product_sales")
+    if зарплата is None or косметика is None:
+        return {"payroll": None if зарплата is None else float(зарплата),
+                "contribution": None}
+
+    выручка = Decimal(str(строка.get("completed_revenue") or 0)) + Decimal(str(косметика))
+    return {
+        "payroll": float(зарплата),
+        "contribution": float(выручка - Decimal(str(зарплата))),
+    }
 
 
 def _expected(строка: dict) -> dict:
@@ -113,8 +149,25 @@ async def future(request: Request) -> dict:
     if role == ROLE_MASTER:
         masters = _only_own(masters, getattr(request.state, "staff_id", None))
 
-    видимые = [{k: v for k, v in m.items() if k not in SALARY_FIELDS} for m in masters]
-    result["masters"] = [{**m, **_expected(m)} for m in видимые]
+    видимые = [{k: v for k, v in m.items() if k not in СЛУЖЕБНЫЕ_ПОЛЯ} for m in masters]
+    строки = [{**m, **_expected(m), **_вклад(m)} for m in видимые]
+
+    # Порядок — по прогнозу выручки с косметикой, от большего. Это то число,
+    # ради которого владелец открывает страницу, и сравнивать мастеров он
+    # будет по нему. Алфавит или порядок в настройках тут ничего не говорят.
+    #
+    # Когда прогноз с косметикой неизвестен, сортируем по услугам: они есть
+    # всегда. Иначе строка без косметики улетала бы в конец таблицы, хотя
+    # мастер мог заработать больше всех.
+    строки.sort(
+        key=lambda м: float(
+            м.get("expected_revenue")
+            if м.get("expected_revenue") is not None
+            else (м.get("expected_services") or 0)
+        ),
+        reverse=True,
+    )
+    result["masters"] = строки
 
     # Итог считается по тем строкам, что показаны: мастер видит свою строку, и
     # итог под ней должен совпадать с ней, а не с суммой по всему салону.
@@ -127,7 +180,15 @@ async def future(request: Request) -> dict:
     if any(m.get("product_sales") is None for m in видимые):
         итог["product_sales"] = None
 
-    result["totals"] = {**итог, **_expected(итог)}
+    # Зарплата в итоге складывается по тем же правилам, что и остальное: если
+    # хоть у одного мастера она не посчитана, итог по ней не показывается.
+    # Неполная сумма выглядит как полная.
+    if any(m.get("earned") is None for m in видимые):
+        итог["earned"] = None
+    else:
+        итог["earned"] = float(sum(Decimal(str(m["earned"])) for m in видимые))
+
+    result["totals"] = {**итог, **_expected(итог), **_вклад(итог)}
     result["scope"] = "own" if role == ROLE_MASTER else "all"
 
     result["warnings"] = [w for w in result["warnings"] if "косметики" in w]
