@@ -13,3 +13,7 @@
 *.webp binary
 *.mp4 binary
 *.docx binary
+
+# Скрипт NSIS: кириллица в нём в UTF-8, переводы строк трогать не надо.
+*.nsi -text
+*.ico binary
