@@ -73,6 +73,29 @@ function Get-AppPort {
 
 # ── Docker ────────────────────────────────────────────────────────────────
 
+function Invoke-Quietly {
+    # В штатном Windows PowerShell 5.1 (не в pwsh 7+) при
+    # $ErrorActionPreference = 'Stop' любая строка, которую внешняя
+    # программа пишет в поток ошибок, превращается в завершающее
+    # исключение — даже если вывод перенаправлен в $null. Перенаправление
+    # прячет текст, но не отменяет исключение: оно создаётся раньше, чем
+    # применяется редирект. Подтверждено: PowerShell/PowerShell#14273.
+    #
+    # docker.exe пишет в stderr не только при явной ошибке — 'compose up
+    # --build' точно так же ведёт себя при обычной сборке (там идёт вывод
+    # BuildKit). Без этой обёртки первый же такой вызов оборвал бы установку
+    # исключением вместо того, чтобы дать нам разобрать её по $LASTEXITCODE,
+    # как и задумано.
+    #
+    # Правильно эту проблему решает только PowerShell 7.1+
+    # ($ErrorActionPreference там на стандартный вывод программ не влияет),
+    # но менять версию PowerShell в системе человека установщик не может.
+    param([Parameter(Mandatory)][scriptblock]$Command)
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { & $Command } finally { $ErrorActionPreference = $prev }
+}
+
 function Find-Docker {
     # Сразу после установки Docker его каталог ещё не попал в PATH текущего
     # процесса, поэтому одного Get-Command мало — проверяем и обычные места.
@@ -101,7 +124,7 @@ function Start-DockerEngine {
     $docker = Find-Docker
     if (-not $docker) { throw 'docker.exe не найден' }
 
-    & $docker info *> $null
+    Invoke-Quietly { & $docker info *> $null }
     if ($LASTEXITCODE -eq 0) { return $docker }
 
     $desktop = Find-DockerDesktop
@@ -114,7 +137,7 @@ function Start-DockerEngine {
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Seconds 5
-        & $docker info *> $null
+        Invoke-Quietly { & $docker info *> $null }
         if ($LASTEXITCODE -eq 0) {
             Write-Log 'Docker отвечает'
             return $docker
@@ -147,7 +170,7 @@ function Start-Stack {
         } else {
             Set-Status 'Запускаю Директора'
         }
-        & $Docker @arguments
+        Invoke-Quietly { & $Docker @arguments }
         if ($LASTEXITCODE -ne 0) { throw "docker compose up вернул код $LASTEXITCODE" }
 
         # Ждём, пока контейнер действительно поднимется. Без этого миграция
@@ -155,20 +178,22 @@ function Start-Stack {
         Set-Status 'Готовлю базу данных'
         $ready = $false
         foreach ($attempt in 1..90) {
-            $state = & $Docker inspect -f '{{.State.Status}}' rubl_director 2>$null
+            $state = Invoke-Quietly { & $Docker inspect -f '{{.State.Status}}' rubl_director 2>$null }
             if ($state -eq 'running') {
-                & $Docker compose --env-file $EnvFile exec -T director `
-                    python -c "import socket;socket.create_connection(('postgres',5432),3)" *> $null
+                Invoke-Quietly {
+                    & $Docker compose --env-file $EnvFile exec -T director `
+                        python -c "import socket;socket.create_connection(('postgres',5432),3)" *> $null
+                }
                 if ($LASTEXITCODE -eq 0) { $ready = $true; break }
             }
             Start-Sleep -Seconds 2
         }
         if (-not $ready) {
-            & $Docker compose --env-file $EnvFile logs --tail 30 director | ForEach-Object { Write-Log $_ }
+            Invoke-Quietly { & $Docker compose --env-file $EnvFile logs --tail 30 director } | ForEach-Object { Write-Log $_ }
             throw 'приложение не запустилось'
         }
 
-        & $Docker compose --env-file $EnvFile exec -T director alembic upgrade head
+        Invoke-Quietly { & $Docker compose --env-file $EnvFile exec -T director alembic upgrade head }
         if ($LASTEXITCODE -ne 0) { throw 'не удалось обновить структуру базы' }
         Write-Log 'структура базы обновлена'
     } finally {
