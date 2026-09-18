@@ -442,6 +442,8 @@ function PlanFactPage() {
   // обновляет его целиком, и нижняя форма при следующем открытии подхватит
   // новое значение.
   const [fixedInput, setFixedInput] = useState("");
+  const [headerError, setHeaderError] = useState("");
+  const [headerSaved, setHeaderSaved] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const now = new Date();
@@ -485,13 +487,28 @@ function PlanFactPage() {
 
   // Сохраняет план и «Фикс» одной кнопкой — обе цифры относятся к одному и
   // тому же месяцу, и вводить их по отдельности незачем.
+  //
+  // fetch() не бросает исключение на 4xx/5xx — раньше здесь Promise.all
+  // просто дожидался обоих ответов и шёл дальше, не глядя, что в них. Если
+  // сервер отклонял значение (или сеть подводила), человек не видел вообще
+  // ничего: ни ошибки, ни того, что «Сохранить» вообще сработало. Теперь
+  // оба ответа проверяются по .ok, а из отказа читается detail — тот же
+  // приём, что уже в saveCosts ниже.
   const saveHeader = async () => {
+    setHeaderError("");
+    setHeaderSaved(false);
     const planVal = parseFloat(planInput);
     const fixedVal = parseFloat(fixedInput);
-    if (isNaN(planVal) || planVal <= 0) return;
-    if (!costs || isNaN(fixedVal) || fixedVal < 0) return;
+    if (isNaN(planVal) || planVal <= 0) {
+      setHeaderError("План должен быть положительным числом.");
+      return;
+    }
+    if (!costs || isNaN(fixedVal) || fixedVal < 0) {
+      setHeaderError("Фикс должен быть числом не меньше нуля.");
+      return;
+    }
     try {
-      await Promise.all([
+      const [planRes, costsRes] = await Promise.all([
         fetch("/api/finance/plan", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -509,10 +526,22 @@ function PlanFactPage() {
           body: JSON.stringify({ ...costs, fixed_monthly: fixedVal }),
         }),
       ]);
+      if (!planRes.ok || !costsRes.ok) {
+        const failed = !planRes.ok ? planRes : costsRes;
+        const detail = await failed.json().catch(() => null);
+        setHeaderError(
+          typeof detail?.detail === "string"
+            ? detail.detail
+            : `Сервер отклонил значение (код ${failed.status}). Ничего не сохранено.`,
+        );
+        return;
+      }
       setPlan({ ...plan, profit_target: planVal });
       await fetchData();
+      setHeaderSaved(true);
     } catch (e) {
       console.error("Header save error", e);
+      setHeaderError("Сервер не ответил. Проверьте, что Директор запущен.");
     }
   };
 
@@ -609,7 +638,8 @@ function PlanFactPage() {
   return (
     <div className="animate-in">
       {/* Header with plan input */}
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-6">
+      <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight mb-1">План-факт</h1>
           <p className="text-muted-light dark:text-muted text-sm">Маржинальность, точка безубыточности, план/факт</p>
@@ -625,7 +655,7 @@ function PlanFactPage() {
             <input
               type="number"
               value={planInput}
-              onChange={(e) => setPlanInput(e.target.value)}
+              onChange={(e) => { setPlanInput(e.target.value); setHeaderSaved(false); }}
               placeholder="например, 500000"
               className="w-40 bg-milk-deep dark:bg-panel border border-milk-line dark:border-line rounded-lg px-3 py-2 text-sm text-right focus:outline-none focus:border-bronze dark:focus:border-gold"
             />
@@ -640,7 +670,7 @@ function PlanFactPage() {
             <input
               type="number"
               value={fixedInput}
-              onChange={(e) => setFixedInput(e.target.value)}
+              onChange={(e) => { setFixedInput(e.target.value); setHeaderSaved(false); }}
               placeholder="например, 389117"
               className="w-40 bg-milk-deep dark:bg-panel border border-milk-line dark:border-line rounded-lg px-3 py-2 text-sm text-right focus:outline-none focus:border-bronze dark:focus:border-gold"
             />
@@ -661,6 +691,17 @@ function PlanFactPage() {
             Сохранить
           </button>
         </div>
+      </div>
+      {/* Обратная связь по сохранению. fetch не бросает исключение на 4xx —
+          без этой строки отказ сервера был не видно вообще никак: кнопка
+          молчала, а «Обновить данные» просто честно показывал то, что
+          реально осталось лежать в базе. */}
+      {headerError && (
+        <p className="mt-2 text-right text-sm text-loss">{headerError}</p>
+      )}
+      {headerSaved && !headerError && (
+        <p className="mt-2 text-right text-sm text-profit">Сохранено.</p>
+      )}
       </div>
 
       {/* Сегодня — по фактической выработке каждого мастера. Никаких
