@@ -1,14 +1,5 @@
 import { useEffect, useState } from "react";
 import {
-  Area,
-  AreaChart,
-  CartesianGrid,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
-import {
   Users,
   UserPlus,
   ShieldCheck,
@@ -32,6 +23,7 @@ import {
 } from "lucide-react";
 import { useDark, палитраГрафика, шкалаСегментов } from "./тема";
 import { ClientCounters } from "./ClientCounters";
+import { MetricChart, type MetricPoint, type ТонГрафика } from "./MetricChart";
 
 // ── Types ──
 type Period = "day" | "week" | "month" | "quarter" | "year";
@@ -157,7 +149,6 @@ export default function ClientBasePage({ role }: { role: "owner" | "operator" | 
 
 function ManagerView() {
   const тёмная = useDark();
-  const цвета = палитраГрафика(тёмная);
   const шкала = шкалаСегментов(тёмная);
   const [period, setPeriod] = useState<Period>("month");
   const [data, setData] = useState<DashboardData | null>(null);
@@ -167,6 +158,12 @@ function ManagerView() {
   const [selectedSegment, setSelectedSegment] = useState<string | null>(null);
   const [clients, setClients] = useState<SegmentClient[]>([]);
   const [clientsLoading, setClientsLoading] = useState(false);
+  // Динамика по дням для клика на плитку — решение владельца 18.09.2026.
+  // Не зависит от периода вверху страницы: у самой истории глубина своя.
+  const [metricHistory, setMetricHistory] = useState<Record<string, MetricPoint[]>>({});
+  const [selectedMetric, setSelectedMetric] = useState<
+    { key: string; label: string; тон: ТонГрафика } | null
+  >(null);
 
   const fetchData = async (p: Period) => {
     setLoading(true);
@@ -195,6 +192,17 @@ function ManagerView() {
     fetchData(period);
     fetchStatus();
   }, [period]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch("/api/client-base/metric-history");
+        if (r.ok) setMetricHistory((await r.json()).series ?? {});
+      } catch {
+        // молча: это дополнение к графику, не он сам
+      }
+    })();
+  }, []);
 
   const runSync = async () => {
     try {
@@ -231,13 +239,17 @@ function ManagerView() {
   // У сегментов есть смысл, и он трёхчастный: хорошо, тревожно, плохо. Его и
   // показываем. Что именно за сегмент, говорят иконка и подпись рядом —
   // различать плитки цветом не требуется, они не марки на одном графике.
+  // seg — поле в timeseries с историей по дням для этой плитки. У «Новые»,
+  // «Стали постоянными» и «Вернули» такой истории нет: это метрики за период
+  // (сколько за месяц/квартал), а не число «на сегодня», и день за днём их
+  // пока не считаем — клика на них поэтому нет.
   const cards = [
-    { label: "Активная база", value: m?.active_base ?? 0, icon: Users, тон: "профит" },
-    { label: "Новые", value: m?.new ?? 0, icon: UserPlus, тон: "акцент" },
-    { label: "Стали постоянными", value: m?.became_regular ?? 0, icon: ShieldCheck, тон: "профит" },
-    { label: "В зоне риска", value: m?.at_risk ?? 0, icon: AlertTriangle, тон: "внимание" },
-    { label: "Потеряны", value: m?.lost ?? 0, icon: UserMinus, тон: "убыток" },
-    { label: "Вернули", value: m?.returned ?? 0, icon: RotateCcw, тон: "профит" },
+    { label: "Активная база", value: m?.active_base ?? 0, icon: Users, тон: "профит", seg: "active_base" },
+    { label: "Новые", value: m?.new ?? 0, icon: UserPlus, тон: "акцент", seg: null },
+    { label: "Стали постоянными", value: m?.became_regular ?? 0, icon: ShieldCheck, тон: "профит", seg: null },
+    { label: "В зоне риска", value: m?.at_risk ?? 0, icon: AlertTriangle, тон: "внимание", seg: "risk" },
+    { label: "Потеряны", value: m?.lost ?? 0, icon: UserMinus, тон: "убыток", seg: "lost" },
+    { label: "Вернули", value: m?.returned ?? 0, icon: RotateCcw, тон: "профит", seg: null },
   ] as const;
 
   const ТОН: Record<string, string> = {
@@ -245,6 +257,18 @@ function ManagerView() {
     акцент: "text-bronze dark:text-gold",
     внимание: "text-caution",
     убыток: "text-loss",
+  };
+  const ТОН_ГРАФИКА: Record<string, ТонГрафика> = {
+    профит: "profit",
+    убыток: "loss",
+    акцент: "accent",
+    внимание: "accent",
+  };
+  const КОЛЬЦО: Record<string, string> = {
+    профит: "ring-profit",
+    убыток: "ring-loss",
+    акцент: "ring-bronze dark:ring-gold",
+    внимание: "ring-caution",
   };
 
   return (
@@ -273,43 +297,70 @@ function ManagerView() {
       {/* Те же два счётчика, что на «Записях за месяц» — решение владельца
           18.09.2026. Отдельно от плиток сегментации ниже: «Потеряны» там —
           другая методика (личный цикл клиента), а не тот же показатель. */}
-      <ClientCounters />
+      <ClientCounters
+        selected={selectedMetric?.key ?? null}
+        onSelect={(key, label, тон) => setSelectedMetric({ key, label, тон })}
+      />
 
       <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
-        {cards.map((c) => (
-          <div key={c.label} className="bg-milk-card dark:bg-panel/80 border border-milk-line dark:border-line rounded-2xl p-4">
-            <div className="flex items-center gap-2 mb-3">
-              <c.icon size={16} className={ТОН[c.тон]} />
-              <span className="text-muted-light dark:text-muted text-[11px] font-medium uppercase tracking-widest">{c.label}</span>
+        {cards.map((c) => {
+          const key = c.seg ? `segment:${c.seg}` : null;
+          const активна = key !== null && selectedMetric?.key === key;
+          return (
+            <div
+              key={c.label}
+              onClick={key ? () => setSelectedMetric({ key, label: c.label, тон: ТОН_ГРАФИКА[c.тон] }) : undefined}
+              className={`bg-milk-card dark:bg-panel/80 border rounded-2xl p-4 ${key ? "cursor-pointer transition-shadow hover:shadow-md" : ""} ${активна ? `ring-2 border-transparent ${КОЛЬЦО[c.тон]}` : "border-milk-line dark:border-line"}`}
+            >
+              <div className="flex items-center gap-2 mb-3">
+                <c.icon size={16} className={ТОН[c.тон]} />
+                <span className="text-muted-light dark:text-muted text-[11px] font-medium uppercase tracking-widest">{c.label}</span>
+              </div>
+              <div className="text-2xl font-bold tabular-nums">{c.value}</div>
             </div>
-            <div className="text-2xl font-bold tabular-nums">{c.value}</div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[1.6fr_0.8fr]">
         <div className="bg-milk-card dark:bg-panel/80 border border-milk-line dark:border-line rounded-2xl p-6">
           <div className="flex items-center gap-2 mb-4">
-            <Activity size={16} className="text-profit" />
-            <h2 className="text-sm font-semibold uppercase tracking-widest text-muted-light dark:text-muted">Пульс базы</h2>
+            <Activity
+              size={16}
+              className={
+                !selectedMetric || selectedMetric.тон === "profit"
+                  ? "text-profit"
+                  : selectedMetric.тон === "loss"
+                  ? "text-loss"
+                  : "text-bronze dark:text-gold"
+              }
+            />
+            <h2 className="text-sm font-semibold uppercase tracking-widest text-muted-light dark:text-muted">
+              {selectedMetric ? selectedMetric.label : "Пульс базы"}
+            </h2>
+            {selectedMetric && (
+              <button
+                onClick={() => setSelectedMetric(null)}
+                className="ml-auto text-xs text-muted-light dark:text-muted hover:text-ink-soft dark:hover:text-cream"
+              >
+                ← Пульс базы
+              </button>
+            )}
           </div>
-          <ResponsiveContainer width="100%" height={260}>
-            <AreaChart data={timeseries} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
-              <defs>
-                <linearGradient id="pulseFill" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={цвета.прибыль} stopOpacity={0.28} />
-                  <stop offset="100%" stopColor={цвета.прибыль} stopOpacity={0.02} />
-                </linearGradient>
-              </defs>
-              {/* Одна сетка вместо двух, спрятанных друг за другом классами:
-                  цвет теперь приходит по теме, и прятать нечего. */}
-              <CartesianGrid strokeDasharray="3 3" stroke={цвета.сетка} vertical={false} />
-              <XAxis dataKey="date" tick={{ fontSize: 11, fill: цвета.ось }} tickLine={false} axisLine={false} tickFormatter={(d) => d.slice(5)} minTickGap={24} />
-              <YAxis tick={{ fontSize: 11, fill: цвета.ось }} tickLine={false} axisLine={false} />
-              <Tooltip contentStyle={{ background: цвета.подсказкаФон, border: `1px solid ${цвета.подсказкаРамка}`, borderRadius: "12px", fontSize: 12 }} />
-              <Area type="monotone" dataKey="active_base" name="Активная база" stroke={цвета.прибыль} strokeWidth={2.5} fill="url(#pulseFill)" />
-            </AreaChart>
-          </ResponsiveContainer>
+          <MetricChart
+            points={
+              !selectedMetric
+                ? timeseries.map((p) => ({ date: p.date, value: p.active_base }))
+                : selectedMetric.key.startsWith("segment:")
+                ? timeseries.map((p) => ({
+                    date: p.date,
+                    value: Number((p as unknown as Record<string, number>)[selectedMetric.key.slice(8)] ?? 0),
+                  }))
+                : metricHistory[selectedMetric.key] ?? []
+            }
+            label={selectedMetric ? selectedMetric.label : "Активная база"}
+            тон={selectedMetric ? selectedMetric.тон : "profit"}
+          />
         </div>
 
         <div className="bg-milk-card dark:bg-panel/80 border border-milk-line dark:border-line rounded-2xl p-6">

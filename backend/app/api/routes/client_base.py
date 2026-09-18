@@ -58,6 +58,20 @@ async def timeseries(
     return await client_base.backfill_timeseries(db, days)
 
 
+@router.get("/metric-history")
+async def metric_history(
+    days: int = Query(90, ge=1, le=365),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """История для графика по клику на плитку — «Повторные»/«Потерянные» и
+    показатели мастеров (потерянные/новые/уникальные клиенты/возвращаемость).
+
+    Один запрос на обе страницы: подробности формата ключей и метода —
+    app/services/client_base.py:backfill_metric_history.
+    """
+    return await client_base.backfill_metric_history(db, days)
+
+
 @router.get("/clients")
 async def clients_by_segment(
     segment: str = Query(..., description="active|due|risk|late|lost"),

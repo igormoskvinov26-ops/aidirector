@@ -21,11 +21,13 @@ import {
   Wallet,
   RefreshCw,
   AlertTriangle,
+  Activity,
 } from "lucide-react";
 import { useDark, палитраГрафика } from "./тема";
 import ClientBasePage from "./ClientBasePage";
 import BarberMonthPage from "./BarberMonthPage";
 import { ClientCounters } from "./ClientCounters";
+import { MetricChart, type MetricPoint, type ТонГрафика } from "./MetricChart";
 import logo from "./assets/logo.png";
 import { Аватар } from "./мастера";
 
@@ -1322,6 +1324,12 @@ function BookingsPage() {
   // здесь только для блока «Прибыль» ниже таблицы.
   const [fixedMonthly, setFixedMonthly] = useState<number | null>(null);
   const [returnRate, setReturnRate] = useState<ReturnRateRow[] | null>(null);
+  // Динамика по дням для клика на плитку/колонку — решение владельца
+  // 18.09.2026. Общий источник с «Клиентской базой»: тот же формат ключей.
+  const [metricHistory, setMetricHistory] = useState<Record<string, MetricPoint[]>>({});
+  const [selectedMetric, setSelectedMetric] = useState<
+    { key: string; label: string; тон: ТонГрафика } | null
+  >(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState("");
 
@@ -1353,6 +1361,15 @@ function BookingsPage() {
         if (r.ok) setReturnRate((await r.json()).masters);
       } catch {
         // молча: страница и без этого блока работает
+      }
+    })();
+
+    (async () => {
+      try {
+        const r = await fetch("/api/client-base/metric-history");
+        if (r.ok) setMetricHistory((await r.json()).series ?? {});
+      } catch {
+        // молча: это дополнение к графику, не он сам
       }
     })();
   }, []);
@@ -1469,7 +1486,45 @@ function BookingsPage() {
         </div>
       ))}
 
-      <ClientCounters />
+      <ClientCounters
+        selected={selectedMetric?.key ?? null}
+        onSelect={(key, label, тон) => setSelectedMetric({ key, label, тон })}
+      />
+
+      {/* График динамики по дням — появляется по клику на плитку выше или
+          на колонку в «Возвращаемости» ниже. Решение владельца 18.09.2026:
+          на этой странице такого блока раньше не было вовсе. */}
+      {selectedMetric && (
+        <div className="mb-6 bg-milk-card dark:bg-panel border border-milk-line dark:border-line rounded-2xl p-6">
+          <div className="flex items-center gap-2 mb-4">
+            <Activity
+              size={16}
+              className={
+                selectedMetric.тон === "profit"
+                  ? "text-profit"
+                  : selectedMetric.тон === "loss"
+                  ? "text-loss"
+                  : "text-bronze dark:text-gold"
+              }
+            />
+            <h2 className="text-sm font-semibold uppercase tracking-widest text-muted-light dark:text-muted">
+              {selectedMetric.label}
+            </h2>
+            <button
+              onClick={() => setSelectedMetric(null)}
+              className="ml-auto text-xs text-muted-light dark:text-muted hover:text-ink-soft dark:hover:text-cream"
+            >
+              Скрыть график
+            </button>
+          </div>
+          <MetricChart
+            points={metricHistory[selectedMetric.key] ?? []}
+            label={selectedMetric.label}
+            тон={selectedMetric.тон}
+            suffix={selectedMetric.key.endsWith(":return_rate_pct") ? "%" : ""}
+          />
+        </div>
+      )}
 
       <div className="bg-milk-card dark:bg-panel border border-milk-line dark:border-line rounded-2xl overflow-x-auto">
         <table className="w-full min-w-[1150px] border-collapse">
@@ -1565,23 +1620,42 @@ function BookingsPage() {
               </tr>
             </thead>
             <tbody>
-              {returnRate.map((row) => (
-                <tr key={row.staff_id} className="border-t border-milk-line/70 dark:border-line/70">
-                  <td className="px-5 py-2.5 text-ink-soft dark:text-cream">{row.name}</td>
-                  <td className="px-3 py-2.5 text-right text-loss font-medium">
-                    {row.clients_lost}
-                  </td>
-                  <td className="px-3 py-2.5 text-right text-profit font-medium">
-                    {row.clients_new}
-                  </td>
-                  <td className="px-3 py-2.5 text-right text-ink-soft dark:text-cream">
-                    {row.clients_total}
-                  </td>
-                  <td className="px-5 py-2.5 text-right text-[15px] font-bold text-bronze dark:text-gold">
-                    {row.return_rate_pct === null ? "—" : `${row.return_rate_pct}%`}
-                  </td>
-                </tr>
-              ))}
+              {returnRate.map((row) => {
+                // Клик по числу переключает график ниже на динамику именно
+                // этого показателя у этого мастера — решение владельца
+                // 18.09.2026. Ключ — как в metric-history.
+                const ячейка = (
+                  metric: string, label: string, тон: ТонГрафика, содержимое: ReactNode, cls: string,
+                ) => {
+                  const key = `master:${row.staff_id}:${metric}`;
+                  const активна = selectedMetric?.key === key;
+                  return (
+                    <td
+                      onClick={() => setSelectedMetric({ key, label: `${label} — ${row.name}`, тон })}
+                      className={`px-3 py-2.5 text-right cursor-pointer hover:underline ${cls} ${активна ? "underline" : ""}`}
+                    >
+                      {содержимое}
+                    </td>
+                  );
+                };
+                return (
+                  <tr key={row.staff_id} className="border-t border-milk-line/70 dark:border-line/70">
+                    <td className="px-5 py-2.5 text-ink-soft dark:text-cream">{row.name}</td>
+                    {ячейка("clients_lost", "Потерянные", "loss", row.clients_lost, "text-loss font-medium")}
+                    {ячейка("clients_new", "Новые", "profit", row.clients_new, "text-profit font-medium")}
+                    {ячейка("clients_total", "Уникальные клиенты", "accent", row.clients_total, "text-ink-soft dark:text-cream")}
+                    <td
+                      onClick={() => setSelectedMetric({
+                        key: `master:${row.staff_id}:return_rate_pct`,
+                        label: `Возвращаемость — ${row.name}`, тон: "accent",
+                      })}
+                      className="px-5 py-2.5 text-right text-[15px] font-bold text-bronze dark:text-gold cursor-pointer hover:underline"
+                    >
+                      {row.return_rate_pct === null ? "—" : `${row.return_rate_pct}%`}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
           <p className="px-5 pb-4 pt-2 text-xs text-muted-light dark:text-muted">
@@ -1591,7 +1665,7 @@ function BookingsPage() {
             мастеру был в пределах последних 60 дней. Потерянные — те, чей
             последний визит или запись к этому мастеру старше 60 дней;
             будущая запись снимает статус, даже если предыдущий визит был
-            давно.
+            давно. Клик по числу — график динамики по дням выше.
           </p>
         </div>
       )}

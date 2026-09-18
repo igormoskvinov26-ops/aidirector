@@ -17,15 +17,18 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models.models import (
     Client,
     ContactAttempt,
     ContactTask,
     DailySegmentSnapshot,
+    Employee,
     Visit,
     VisitService,
 )
 from app.services import call_journal
+from app.services.finance import LOST_AFTER_DAYS
 
 MOSCOW = ZoneInfo("Europe/Moscow")
 
@@ -147,6 +150,23 @@ async def get_completed_visit_dates(session: AsyncSession) -> dict[int, list[dat
         if dt is not None:
             result[client_id].append(_to_moscow_date(dt))
     return dict(result)
+
+
+async def get_completed_visit_dates_by_master(
+    session: AsyncSession,
+) -> dict[int, dict[int, list[date]]]:
+    """yclients_id мастера → client_id → даты завершённых визитов к нему."""
+    rows = await session.execute(
+        select(Employee.yclients_id, Visit.client_id, Visit.datetime)
+        .join(Employee, Employee.id == Visit.employee_id)
+        .where(Visit.status == "completed")
+        .order_by(Employee.yclients_id, Visit.client_id, Visit.datetime)
+    )
+    result: dict[int, dict[int, list[date]]] = defaultdict(lambda: defaultdict(list))
+    for staff_id, client_id, dt in rows:
+        if dt is not None:
+            result[int(staff_id)][client_id].append(_to_moscow_date(dt))
+    return result
 
 
 async def build_client_profiles(session: AsyncSession) -> dict[int, dict]:
@@ -308,6 +328,74 @@ async def backfill_timeseries(session: AsyncSession, days: int = 30) -> list[dic
             row[code] = counts.get(code, 0)
         out.append(row)
     return out
+
+
+async def backfill_metric_history(session: AsyncSession, days: int = 90) -> dict:
+    """История «Повторные»/«Потерянные» и показателей мастеров для графика
+    по клику на плитку — решение владельца 18.09.2026.
+
+    Тот же приём, что и в backfill_timeseries для сегментов: не хранит
+    отдельных суточных снимков, а на каждый день окна пересчитывает нужные
+    числа из дат завершённых визитов. Поэтому график заполнен на всю глубину
+    истории в базе сразу, а не только с того дня, когда завели снимки.
+
+    В отличие от живого расчёта (finance.get_return_rate,
+    get_repeat_and_lost_clients), здесь не учитывается будущая запись,
+    снимающая статус потерянного/нового: для прошлого дня d нельзя узнать,
+    что было забронировано именно на тот момент — известно только то, что
+    уже совершилось. Для сегодняшнего дня оба расчёта совпадают.
+
+    Ключ серии — как и раньше: "global:<метрика>" на весь салон,
+    "master:<staff_id>:<метрика>" на конкретного мастера.
+    """
+    global_dates = await get_completed_visit_dates(session)
+    by_master = await get_completed_visit_dates_by_master(session)
+
+    today = moscow_today()
+    series: dict[str, list[dict]] = defaultdict(list)
+
+    for offset in range(days, -1, -1):
+        d = today - timedelta(days=offset)
+        threshold = d - timedelta(days=LOST_AFTER_DAYS)
+
+        repeat = 0
+        lost = 0
+        for dates in global_dates.values():
+            past = [x for x in dates if x <= d]
+            if not past:
+                continue
+            if len(past) >= 2:
+                repeat += 1
+            if max(past) < threshold:
+                lost += 1
+        series["global:repeat_clients"].append({"date": d.isoformat(), "value": repeat})
+        series["global:lost_clients"].append({"date": d.isoformat(), "value": lost})
+
+        for rule in settings.barber_payroll_rules:
+            staff_id = int(rule["staff_id"])
+            total = returned = new = master_lost = 0
+            for dates in by_master.get(staff_id, {}).values():
+                past = [x for x in dates if x <= d]
+                if not past:
+                    continue
+                total += 1
+                if len(past) >= 2:
+                    returned += 1
+                if min(past) >= threshold:
+                    new += 1
+                if max(past) < threshold:
+                    master_lost += 1
+
+            точка = {"date": d.isoformat()}
+            series[f"master:{staff_id}:clients_total"].append({**точка, "value": total})
+            series[f"master:{staff_id}:clients_lost"].append({**точка, "value": master_lost})
+            series[f"master:{staff_id}:clients_new"].append({**точка, "value": new})
+            if total > 0:
+                series[f"master:{staff_id}:return_rate_pct"].append(
+                    {**точка, "value": round(returned / total * 100, 1)}
+                )
+
+    return {"series": dict(series)}
 
 
 async def get_clients_by_segment(session: AsyncSession, segment: str) -> list[dict]:
