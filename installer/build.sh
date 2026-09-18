@@ -22,11 +22,15 @@ fi
 # заведомо не попадут ни .env, ни .venv, ни node_modules: всё это в
 # .gitignore. Один раз собранный «по маске» архив уже увозил чужие файлы —
 # больше так не делаем.
+#
+# scripts — те же «получить-токен.py» и «показать-филиалы.py», на которые
+# ссылается local/УСТАНОВКА.md. Без них инструкция указывала бы на
+# несуществующие файлы.
 rm -rf "$payload"
 mkdir -p "$payload"
 
 cd "$root"
-git ls-files -z backend frontend local assets .env.example .dockerignore \
+git ls-files -z backend frontend local scripts assets .env.example .dockerignore \
     | tar --null -cf - -T - \
     | tar -xf - -C "$payload"
 
