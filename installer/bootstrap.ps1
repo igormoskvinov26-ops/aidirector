@@ -20,10 +20,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-# Без этого Invoke-WebRequest рисует полосу прогресса и качает 600 МБ часами.
+# Полоса прогресса Invoke-WebRequest в проверке здоровья только мешает.
 $ProgressPreference = 'SilentlyContinue'
-# PowerShell 5.1 по умолчанию ходит по TLS 1.0, который серверы уже не принимают.
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $Base       = Split-Path -Parent $PSCommandPath
 $App        = Join-Path $Base 'app'
@@ -38,16 +36,11 @@ $TaskName   = 'РублЪ Директор'
 # текст пришлось бы отдавать в какой-то кодировке, и на этом всё бы и село.
 #   0  — Директор поднят и отвечает
 #   10 — нет настроек (не заполнен .env)
-#   11 — Docker поставлен, нужна перезагрузка
+#   13 — Docker Desktop не установлен
 #   12 — не поднялся по другой причине
 #   1  — исключение (подробности в журнале)
 $script:Outcome = 12
 
-# Проверено 18.09.2026: адрес отдаёт 200 и файл на 628 МБ.
-$DockerUrl  = 'https://desktop.docker.com/win/main/amd64/Docker Desktop Installer.exe'
-# Требование Docker Desktop из его документации: Windows 10 22H2 (19045)
-# или Windows 11 23H2 (22631). Ниже — ставить бессмысленно, WSL2 не поднимется.
-$MinBuild   = 19045
 
 # ── Журнал и состояние ────────────────────────────────────────────────────
 
@@ -102,65 +95,11 @@ function Find-DockerDesktop {
     return $null
 }
 
-function Test-Elevated {
-    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
-    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-}
-
-function Install-Docker {
-    # Ярлык «Директор» запускается без повышения прав. Если Docker с него
-    # ставить, установка провалится где-то в середине и оставит мусор —
-    # честнее отказаться сразу и сказать, что делать.
-    if (-not (Test-Elevated)) {
-        throw 'Docker не установлен, а прав на установку нет. Запустите установщик Директора ещё раз — он спросит права.'
-    }
-    $build = [Environment]::OSVersion.Version.Build
-    if ($build -lt $MinBuild) {
-        throw "Windows слишком старая (сборка $build). Docker Desktop требует 22H2 (19045) или новее."
-    }
-
-    Set-Status 'Скачиваю Docker (около 600 МБ)'
-    $installer = Join-Path $env:TEMP 'DockerDesktopInstaller.exe'
-    # curl.exe входит в Windows 10 начиная с 1803 и качает большие файлы
-    # заметно надёжнее Invoke-WebRequest. Если его нет — запасной путь.
-    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
-    if ($curl) {
-        & $curl.Source -L --fail --silent --show-error -o $installer $DockerUrl
-        if ($LASTEXITCODE -ne 0) { throw "не удалось скачать Docker Desktop (код $LASTEXITCODE)" }
-    } else {
-        Invoke-WebRequest -Uri $DockerUrl -OutFile $installer -UseBasicParsing
-    }
-
-    Set-Status 'Устанавливаю Docker'
-    Write-Log 'запускаю установщик Docker Desktop в тихом режиме'
-    # Ключи взяты из документации Docker дословно. --accept-license снимает
-    # вопрос о лицензии при первом запуске, --always-run-service переводит
-    # службу в автозапуск, иначе контейнеры не поднимутся после перезагрузки.
-    $run = Start-Process -FilePath $installer -Wait -PassThru -ArgumentList @(
-        'install', '--quiet', '--accept-license', '--backend=wsl-2', '--always-run-service')
-    Write-Log "установщик Docker завершился с кодом $($run.ExitCode)"
-
-    # 3010 — «установлено, нужна перезагрузка». Это не ошибка: после
-    # перезагрузки работу продолжит задание планировщика.
-    # Шестьсот мегабайт во временной папке ни к чему — убираем в любом исходе.
-    Remove-Item $installer -Force -ErrorAction SilentlyContinue
-
-    if ($run.ExitCode -eq 3010) {
-        Set-Status 'Docker установлен, нужна перезагрузка компьютера'
-        return $false
-    }
-    if ($run.ExitCode -ne 0) {
-        throw "установщик Docker Desktop вернул код $($run.ExitCode)"
-    }
-    return $true
-}
-
 function Start-DockerEngine {
     param([int]$TimeoutSec = 600)
 
     $docker = Find-Docker
-    if (-not $docker) { throw 'docker.exe не найден после установки' }
+    if (-not $docker) { throw 'docker.exe не найден' }
 
     & $docker info *> $null
     if ($LASTEXITCODE -eq 0) { return $docker }
@@ -192,34 +131,6 @@ function Test-Settings {
     # оно упадёт на разборе настроек, а человек увидит невнятную ошибку.
     $blanks = Select-String -Path $EnvFile -Pattern '^[A-Z_]+=<' -ErrorAction SilentlyContinue
     return -not $blanks
-}
-
-# ── Права на файлы ────────────────────────────────────────────────────────
-
-function Protect-Files {
-    # В .env лежат ключи YCLIENTS и все пароли. По умолчанию всё, что создано
-    # в ProgramData, доступно на чтение любой учётной записи компьютера —
-    # для этого файла это недопустимо.
-    #
-    # Снимаем наследование и оставляем троих: систему, администраторов и того,
-    # кто ставил Директора (под UAC это тот же человек — повышение прав не
-    # меняет учётную запись). Группу «Пользователи» не даём: у обычного
-    # сотрудника, севшего за этот компьютер, доступа к ключам быть не должно.
-    #
-    # Ярлык «Директор» работает без повышения прав, поэтому учётная запись
-    # нужна в списке именно поимённо: в непривилегированном токене членство
-    # в администраторах не действует.
-    $account = "$env:USERDOMAIN\$env:USERNAME"
-    try {
-        & icacls.exe $Base /inheritance:r /grant:r `
-            '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' "${account}:(OI)(CI)F" /T /C /Q
-        if ($LASTEXITCODE -ne 0) { throw "icacls вернул код $LASTEXITCODE" }
-        Write-Log "права на $Base ограничены: SYSTEM, администраторы, $account"
-    } catch {
-        # Не повод останавливать установку: Директор будет работать, но об
-        # ослабленных правах должно остаться внятное упоминание в журнале.
-        Write-Log "ВНИМАНИЕ: не удалось ограничить права на $Base — $($_.Exception.Message)"
-    }
 }
 
 # ── Запуск приложения ─────────────────────────────────────────────────────
@@ -288,7 +199,7 @@ function Open-Director {
 # ── Общий ход работы ──────────────────────────────────────────────────────
 
 function Invoke-Bringup {
-    param([switch]$AllowInstall, [switch]$Build)
+    param([switch]$Build)
 
     if (-not (Test-Settings)) {
         Set-Status 'Нужны настройки: заполните файл .env'
@@ -297,18 +208,13 @@ function Invoke-Bringup {
         return $false
     }
 
-    $docker = Find-Docker
-    if (-not $docker) {
-        if (-not $AllowInstall) {
-            Set-Status 'Docker не установлен'
-            $script:Outcome = 12
-            return $false
-        }
-        if (-not (Install-Docker)) {
-            # Нужна перезагрузка: продолжит задание планировщика при входе.
-            $script:Outcome = 11
-            return $false
-        }
+    # Docker ставится отдельно и заранее — вместе с регистрацией, которую в
+    # нём всё равно проходят руками. Наше дело — найти его и запустить.
+    if (-not (Find-Docker)) {
+        Set-Status 'Docker Desktop не установлен'
+        Write-Log 'docker.exe не найден ни в PATH, ни в обычных местах установки'
+        $script:Outcome = 13
+        return $false
     }
 
     $docker = Start-DockerEngine
@@ -329,17 +235,16 @@ try {
     switch ($Mode) {
 
         'install' {
-            Protect-Files
             # Первый раз образ надо собрать: без --build контейнер поднимать
             # не из чего.
-            if (Invoke-Bringup -AllowInstall -Build) { Open-Director }
+            if (Invoke-Bringup -Build) { Open-Director }
         }
 
         'autostart' {
             # При входе в систему. --build тоже нужен: если предыдущий заход
-            # оборвался на перезагрузке, образа ещё нет, а если есть —
-            # сборка займёт секунду и ничего не пересоберёт.
-            Invoke-Bringup -AllowInstall -Build | Out-Null
+            # оборвался, образа ещё нет, а если есть — сборка займёт секунду
+            # и ничего не пересоберёт.
+            Invoke-Bringup -Build | Out-Null
         }
 
         'open' {
@@ -352,7 +257,7 @@ try {
                 Write-Host '  Директор ещё не готов. Поднимаю его — это может занять'
                 Write-Host '  несколько минут, окно закроется само.'
                 Write-Host ''
-                if (Invoke-Bringup -AllowInstall -Build) {
+                if (Invoke-Bringup -Build) {
                     Open-Director
                 } else {
                     $state = if (Test-Path $StatusFile) { Get-Content $StatusFile -Raw } else { 'неизвестно' }

@@ -4,17 +4,20 @@
 ;  Собирается из Linux командой installer/build.sh (makensis из пакета nsis).
 ;  Результат — один файл «РублЪ-Директор-Установка.exe».
 ;
-;  Что он делает после двойного щелчка и одного подтверждения прав:
-;    1. распаковывает исходники Директора в C:\ProgramData\RublDirector\app;
+;  Что он делает после двойного щелчка — и больше ничего от человека не
+;  требуется, окна прав в том числе:
+;    1. распаковывает исходники Директора в %LOCALAPPDATA%\RublDirector\app;
 ;    2. кладёт туда настройки (файл «настройки.env» рядом с установщиком);
-;    3. ставит Docker Desktop в тихом режиме, если его нет;
+;    3. запускает уже установленный Docker Desktop и ждёт, пока тот поднимется;
 ;    4. собирает образ, поднимает контейнеры, обновляет структуру базы;
 ;    5. заводит задание планировщика, чтобы Директор поднимался при входе;
 ;    6. создаёт ярлык на рабочем столе и открывает браузер.
 ;
-;  Прав администратора требует сам Docker Desktop: без них не установить
-;  его службу и не включить WSL2. Одно окно UAC при запуске — это всё,
-;  что требуется от человека.
+;  Docker Desktop ставится отдельно и заранее: в нём проходят регистрацию,
+;  которую всё равно делают руками. Ровно поэтому установщику и не нужны
+;  права администратора — ставить службы и включать WSL2 больше не его дело.
+;  Всё живёт в профиле пользователя, и там же остаётся закрытым от чужих
+;  учётных записей: в .env лежат ключи YCLIENTS и все пароли.
 ;
 ;  Имена меток и переменных латиницей: NSIS не принимает кириллицу в
 ;  идентификаторах. Всё, что видит человек, — по-русски.
@@ -31,7 +34,9 @@ Name "${NAME}"
 OutFile "..\РублЪ-Директор-Установка.exe"
 Icon "director.ico"
 UninstallIcon "director.ico"
-RequestExecutionLevel admin
+; user, а не admin: поднимать права больше незачем, а лишнее окно UAC —
+; это ровно тот шаг, которого быть не должно.
+RequestExecutionLevel user
 ShowInstDetails show
 ShowUninstDetails show
 
@@ -49,10 +54,12 @@ UninstPage instfiles
 Var SettingsSource   ; откуда взяли настройки; пусто — не нашли
 
 Function .onInit
-    ; ProgramData, а не Program Files: там лежит и код, и контекст сборки
-    ; Docker, и журнал. SetShellVarContext all переводит $APPDATA именно туда.
-    SetShellVarContext all
-    StrCpy $INSTDIR "$APPDATA\RublDirector"
+    ; Профиль пользователя, а не Program Files и не ProgramData: туда можно
+    ; писать без прав администратора, там же лежит контекст сборки Docker и
+    ; журнал. И главное — эта папка по умолчанию закрыта от других учётных
+    ; записей компьютера, а в .env лежат ключи YCLIENTS и все пароли.
+    SetShellVarContext current
+    StrCpy $INSTDIR "$LOCALAPPDATA\RublDirector"
 FunctionEnd
 
 Section "Директор"
@@ -98,23 +105,29 @@ Section "Директор"
     settings_copied:
 
     ; ── Автозапуск при входе в систему ────────────────────────────────────
-    ; Отдельный .cmd, а не прямой вызов powershell: так в /TR попадает путь
-    ; без пробелов и без вложенных кавычек, на которых schtasks спотыкается.
+    ; Отдельный .cmd, а не прямой вызов powershell: иначе в /TR пришлось бы
+    ; складывать вложенные кавычки вокруг аргументов, а на них schtasks
+    ; спотыкается.
     FileOpen $0 "$INSTDIR\autostart.cmd" w
     FileWrite $0 "@echo off$\r$\n"
     FileWrite $0 "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File $\"%~dp0bootstrap.ps1$\" -Mode autostart$\r$\n"
     FileClose $0
 
-    UserInfo::GetName
-    Pop $1
-    DetailPrint "Завожу задание планировщика для учётной записи $1"
-    nsExec::ExecToLog 'schtasks /Create /F /TN "${TASK}" /SC ONLOGON /RU "$1" /RL HIGHEST /TR "$INSTDIR\autostart.cmd"'
+    ; Путь лежит в профиле пользователя, а в имени учётной записи бывает
+    ; пробел — «C:\Users\Игорь Москвинов\...». Поэтому кавычки внутри
+    ; значения /TR обязательны: без них планировщик при запуске обрежет
+    ; команду по первому пробелу.
+    ;
+    ; /RU не задаём: по умолчанию это текущая учётная запись, а с явным /RU
+    ; без пароля schtasks в части случаев требует его ввести. /RL HIGHEST
+    ; тоже ни к чему — поднимать права больше незачем.
+    DetailPrint "Завожу задание планировщика"
+    nsExec::ExecToLog 'schtasks /Create /F /TN "${TASK}" /SC ONLOGON /TR "\"$INSTDIR\autostart.cmd\""'
     Pop $2
 
     ; ── Ярлыки ────────────────────────────────────────────────────────────
-    ; Рабочий стол — того, кто ставит, а не общий: ярлык открывает Директора
-    ; от его имени.
-    SetShellVarContext current
+    ; Рабочий стол и меню «Пуск» — того, кто ставит, а не общие: Директор
+    ; поставлен в его профиль и работает от его имени.
     CreateShortCut "$DESKTOP\Директор.lnk" \
         "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" \
         '-NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\bootstrap.ps1" -Mode open' \
@@ -128,24 +141,26 @@ Section "Директор"
         "$WINDIR\system32\notepad.exe" '"$INSTDIR\app\.env"'
     CreateShortCut "$SMPROGRAMS\РублЪ Директор\Журнал установки.lnk" \
         "$WINDIR\system32\notepad.exe" '"$INSTDIR\log\bootstrap.log"'
-    SetShellVarContext all
 
     ; ── Запись в «Программы и компоненты» ─────────────────────────────────
+    ; HKCU, а не HKLM: установка пользовательская, и в список программ она
+    ; попадает только у того, кто ставил. Права администратора для HKLM у
+    ; нас всё равно нет — и не нужны.
     WriteUninstaller "$INSTDIR\Удалить.exe"
-    WriteRegStr   HKLM "${REGKEY}" "DisplayName"     "${NAME}"
-    WriteRegStr   HKLM "${REGKEY}" "DisplayIcon"     "$INSTDIR\director.ico"
-    WriteRegStr   HKLM "${REGKEY}" "DisplayVersion"  "1.0.0"
-    WriteRegStr   HKLM "${REGKEY}" "Publisher"       "Барбершоп РублЪ"
-    WriteRegStr   HKLM "${REGKEY}" "InstallLocation" "$INSTDIR"
-    WriteRegStr   HKLM "${REGKEY}" "UninstallString" '"$INSTDIR\Удалить.exe"'
-    WriteRegDWORD HKLM "${REGKEY}" "NoModify" 1
-    WriteRegDWORD HKLM "${REGKEY}" "NoRepair" 1
+    WriteRegStr   HKCU "${REGKEY}" "DisplayName"     "${NAME}"
+    WriteRegStr   HKCU "${REGKEY}" "DisplayIcon"     "$INSTDIR\director.ico"
+    WriteRegStr   HKCU "${REGKEY}" "DisplayVersion"  "1.0.0"
+    WriteRegStr   HKCU "${REGKEY}" "Publisher"       "Барбершоп РублЪ"
+    WriteRegStr   HKCU "${REGKEY}" "InstallLocation" "$INSTDIR"
+    WriteRegStr   HKCU "${REGKEY}" "UninstallString" '"$INSTDIR\Удалить.exe"'
+    WriteRegDWORD HKCU "${REGKEY}" "NoModify" 1
+    WriteRegDWORD HKCU "${REGKEY}" "NoRepair" 1
 
     ; ── Всё остальное делает bootstrap.ps1 ────────────────────────────────
     DetailPrint ""
-    DetailPrint "Дальше всё происходит само. Это долго: если Docker ещё не"
-    DetailPrint "установлен, его надо скачать (около 600 МБ) и поставить,"
-    DetailPrint "а потом собрать сам Директор. Окно можно не трогать."
+    DetailPrint "Дальше всё происходит само: запускается Docker, собирается"
+    DetailPrint "Директор, готовится база. Первый раз это несколько минут —"
+    DetailPrint "сборка идёт из интернета. Окно можно не трогать."
     DetailPrint ""
     ; /OEM — вывод PowerShell приходит в кодировке консоли, без этого ключа
     ; русские строки в журнале превратились бы в мусор.
@@ -157,7 +172,7 @@ Section "Директор"
     ; сообщения появилась бы ещё одна поломка.
     StrCmp $3 "0"  report_ok
     StrCmp $3 "10" report_no_settings
-    StrCmp $3 "11" report_reboot
+    StrCmp $3 "13" report_no_docker
     Goto report_other
 
     report_ok:
@@ -170,9 +185,9 @@ Section "Директор"
             "Директор установлен, но не запущен: нет настроек.$\r$\n$\r$\nНужен файл .env с ключами YCLIENTS и паролями — тот же, что на рабочем компьютере. Положите его рядом с этим установщиком под именем «настройки.env» и запустите установку ещё раз.$\r$\n$\r$\nИли заполните его прямо здесь: Пуск → РублЪ Директор → Настройки, а потом откройте ярлык «Директор»."
         Goto done
 
-    report_reboot:
-        MessageBox MB_OK|MB_ICONINFORMATION \
-            "Docker установлен, нужна перезагрузка компьютера.$\r$\n$\r$\nПерезагрузите — дальше всё произойдёт само: при входе в систему Директор соберётся и запустится. Это займёт несколько минут, значок «Директор» на рабочем столе покажет, готов ли он."
+    report_no_docker:
+        MessageBox MB_OK|MB_ICONEXCLAMATION \
+            "Директор установлен, но не запущен: на компьютере нет Docker Desktop.$\r$\n$\r$\nПоставьте его — https://www.docker.com/products/docker-desktop/ — и откройте ярлык «Директор» на рабочем столе. Он продолжит с того же места."
         Goto done
 
     report_other:
@@ -183,7 +198,8 @@ Section "Директор"
 SectionEnd
 
 Section "Uninstall"
-    SetShellVarContext all
+    ; Всё лежит в профиле того, кто ставил, — общий контекст тут не нужен.
+    SetShellVarContext current
 
     DetailPrint "Останавливаю Директора"
     nsExec::ExecToLog 'cmd /c cd /d "$INSTDIR\app\local" && docker compose --env-file "$INSTDIR\app\.env" down'
@@ -192,12 +208,10 @@ Section "Uninstall"
     nsExec::ExecToLog 'schtasks /Delete /F /TN "${TASK}"'
     Pop $0
 
-    SetShellVarContext current
     Delete "$DESKTOP\Директор.lnk"
     RMDir /r "$SMPROGRAMS\РублЪ Директор"
-    SetShellVarContext all
 
-    DeleteRegKey HKLM "${REGKEY}"
+    DeleteRegKey HKCU "${REGKEY}"
     RMDir /r "$INSTDIR"
 
     ; Данные Директора живут в томе Docker (rubl_data) и намеренно остаются:
