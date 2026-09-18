@@ -94,12 +94,21 @@ Section "Директор"
 
     StrCmp $SettingsSource "" no_settings 0
         DetailPrint "Беру настройки из $SettingsSource"
+        ; Прежний файл сносим до копирования. Повторный запуск установщика —
+        ; это основной способ заменить настройки: сначала поставили, потом
+        ; нашли и положили рядом .env. Полагаться на то, как CopyFiles
+        ; поступит с уже существующим файлом, в этом месте нельзя.
+        Delete "$INSTDIR\app\.env"
         CopyFiles /SILENT "$SettingsSource" "$INSTDIR\app\.env"
-        Goto settings_copied
+        ; Молча пройти мимо неудавшегося копирования нельзя: человек увидел
+        ; бы «нет настроек» и пошёл искать ошибку в файле, которого на месте
+        ; просто нет.
+        IfFileExists "$INSTDIR\app\.env" settings_copied 0
+        DetailPrint "Скопировать настройки не удалось"
     no_settings:
         ; Без настроек Директор не стартует, но всё остальное поставить
         ; можно: человек заполнит файл и откроет ярлык.
-        DetailPrint "Файл настроек не найден — кладу заготовку"
+        DetailPrint "Настроек нет — кладу заготовку"
         IfFileExists "$INSTDIR\app\.env" settings_copied 0
         CopyFiles /SILENT "$INSTDIR\app\.env.example" "$INSTDIR\app\.env"
     settings_copied:
