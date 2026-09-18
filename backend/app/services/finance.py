@@ -1196,3 +1196,63 @@ async def _get_masters_count(session: AsyncSession, target_date: date) -> int:
         .where(func.date(Visit.datetime) == target_date)
     )
     return int(row or 0)
+
+
+async def get_return_rate(session: AsyncSession) -> dict:
+    """Возвращаемость: доля клиентов мастера, пришедших к нему повторно.
+
+    Решение владельца 18.09.2026: возврат — это второй (и любой следующий)
+    завершённый визит к тому же самому мастеру, без ограничения по срокам
+    между визитами. Клиент, сходивший раз к Ксении и раз к Арташу, — не
+    вернулся ни к одной из них: это два разных мастера, каждый со своим
+    единственным визитом.
+
+    Считается по всей истории завершённых визитов, что лежит в локальной
+    базе, — не по календарному месяцу. У обычной синхронизации глубина
+    всего settings.sync_window_days (90 дней): для «за всё время» этого не
+    хватит, а другого стало на клиентов, вернувшихся через полгода. Чтобы
+    расчёт не занижал возвращаемость молча, базу нужно один раз досин-
+    хронизировать на нужную глубину — POST /api/sync/trigger?date_from=...
+    Само число это не проверяет и не может: у него нет способа узнать,
+    сколько НЕ приехавших в базу визитов было на самом деле.
+    """
+    rows = await session.execute(
+        select(
+            Employee.yclients_id,
+            Visit.client_id,
+            func.count(Visit.id).label("visits"),
+        )
+        .join(Employee, Employee.id == Visit.employee_id)
+        .where(Visit.status.in_(COMPLETED_STATUSES))
+        .group_by(Employee.yclients_id, Visit.client_id)
+    )
+    by_staff: dict[int, list[int]] = {}
+    for row in rows:
+        by_staff.setdefault(int(row.yclients_id), []).append(int(row.visits))
+
+    masters = []
+    for rule in settings.barber_payroll_rules:
+        ident = int(rule["staff_id"])
+        visits_per_client = by_staff.get(ident, [])
+        total = len(visits_per_client)
+        returned = sum(1 for v in visits_per_client if v >= 2)
+        masters.append({
+            "staff_id": ident,
+            "name": rule["name"],
+            "clients_total": total,
+            "clients_returned": returned,
+            "return_rate_pct": (
+                float((Decimal(returned) / Decimal(total) * 100).quantize(Decimal("0.1")))
+                if total > 0
+                else None
+            ),
+        })
+
+    # Лучшая возвращаемость — первой. Мастер без единого клиента (total = 0,
+    # return_rate_pct = None) не «худший из известных», а неизвестный —
+    # ставим его в конец, а не притворяемся, что там ноль.
+    masters.sort(
+        key=lambda m: m["return_rate_pct"] if m["return_rate_pct"] is not None else -1,
+        reverse=True,
+    )
+    return {"masters": masters}

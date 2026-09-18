@@ -8,9 +8,12 @@
 
 from decimal import Decimal
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database import get_db
 from app.main_roles import ROLE_MASTER, ROLE_OPERATOR, ROLE_OWNER
+from app.services import finance
 from app.services.barber_month import report
 
 router = APIRouter(prefix="/api/barbers", tags=["barbers"])
@@ -197,6 +200,10 @@ async def future(request: Request) -> dict:
     # Мастеру своя очередь чужая выручка не нужна — как и остальной салон,
     # она видна только тому, кто видит весь салон.
     admin_sales = result.pop("admin_sales", None)
+    return_rate_month = result.pop("return_rate_month", None)
+    if role != ROLE_MASTER and return_rate_month is not None:
+        result["return_rate_month"] = return_rate_month
+
     company_revenue = None
     if role != ROLE_MASTER and admin_sales is not None:
         result["admin_sales"] = admin_sales
@@ -236,3 +243,20 @@ async def payroll(request: Request) -> dict:
     result["masters"] = _only_own(result["masters"], getattr(request.state, "staff_id", None))
     result["scope"] = "own"
     return result
+
+
+@router.get("/return-rate")
+async def return_rate(request: Request, db: AsyncSession = Depends(get_db)) -> dict:
+    """Возвращаемость мастеров: доля клиентов, пришедших повторно к тому же.
+
+    В отличие от /future и /payroll, считается по локальной базе, а не
+    живым опросом YCLIENTS: это история за год, а не за месяц, и таскать
+    её на каждое открытие страницы было бы медленно. Подробности расчёта —
+    в app/services/finance.py:get_return_rate.
+
+    Мастеру чужая возвращаемость не нужна — как и остальной салон, эта
+    сводка видна только тому, кто видит весь салон.
+    """
+    if getattr(request.state, "role", ROLE_MASTER) == ROLE_MASTER:
+        raise HTTPException(403, "Раздел доступен только владельцу")
+    return await finance.get_return_rate(db)
