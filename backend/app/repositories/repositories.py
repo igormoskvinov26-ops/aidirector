@@ -152,6 +152,26 @@ def _parse_datetime(val: Any) -> datetime | None:
     return None
 
 
+def _visit_amount(services: list[dict]) -> Decimal:
+    """Сумма визита по его строкам услуг.
+
+    cost_to_pay — сумма к оплате, cost — по прайсу без учёта скидки; они
+    расходятся ровно тогда, когда на визит есть скидка. app/services/
+    barber_month.py на том же ответе YCLIENTS уже берёт cost_to_pay первым —
+    правило оттуда: раньше здесь брался только cost, и выручка визита со
+    скидкой в базу уходила завышенной, а эти два места считали одно и то же
+    по-разному.
+    """
+    total = Decimal("0")
+    for svc in services or []:
+        value = next(
+            (svc[k] for k in ("cost_to_pay", "cost", "first_cost") if svc.get(k) is not None),
+            0,
+        )
+        total += Decimal(str(value))
+    return total
+
+
 def _normalize_visit_status(raw: Any) -> str:
     """Код посещения YCLIENTS в наш статус.
 
@@ -279,9 +299,7 @@ class VisitRepository:
                 )
                 continue
 
-            total_amount = Decimal("0")
-            for svc in item.get("services", []):
-                total_amount += Decimal(str(svc.get("cost", 0)))
+            total_amount = _visit_amount(item.get("services", []))
 
             raw_status = item.get("visit_attendance") if item.get("visit_attendance") is not None else item.get("status")
             normalized_status = _normalize_visit_status(raw_status)
