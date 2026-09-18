@@ -53,8 +53,10 @@ else
         echo "    Обратитесь к разработчику."
         exit 1
     fi
-    КОММИТОВ=$(git rev-list --count "$LOCAL..$REMOTE")
-    echo "  ✓ Обновлено: $КОММИТОВ коммит(ов), теперь $(git rev-parse --short HEAD)"
+    # Имя переменной — латиницей: bash не принимает кириллицу в идентификаторах
+    # ни при какой локали, это синтаксис языка, а не вопрос кодировки.
+    COMMITS_COUNT=$(git rev-list --count "$LOCAL..$REMOTE")
+    echo "  ✓ Обновлено: $COMMITS_COUNT коммит(ов), теперь $(git rev-parse --short HEAD)"
 fi
 
 echo ""
