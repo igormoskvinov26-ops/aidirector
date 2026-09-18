@@ -132,7 +132,14 @@ async def source(now):
             except Exception:
                 products = None
                 warnings.append('Продажи косметики недоступны: полная зарплата не рассчитана.')
-            return records, schedule, products, warnings, datetime.now(MOSCOW).isoformat()
+            try:
+                staff = await client.get_active_staff()
+            except Exception:
+                staff = None
+                warnings.append(
+                    'Список сотрудников недоступен: продажи администраторов не показаны.'
+                )
+            return records, schedule, products, staff, warnings, datetime.now(MOSCOW).isoformat()
 
     return await cached(f'barber-month:{settings.yclients_company_id}:{first}', load, ttl=60)
 
@@ -225,9 +232,90 @@ def calculate(records, schedule, products, now, rules):
             'as_of': now.isoformat(), 'masters': masters}
 
 
+def calculate_admin_sales(records, products, now, admin_staff):
+    """Деньги, которые прошли не через трёх зарегистрированных барберов.
+
+    Владелец нашёл в отчёте YCLIENTS реальную продажу товара администратором
+    (Виктор, 1300 ₽) — её нет ни в одной строке дашборда «Записи за месяц»,
+    потому что calculate() выше смотрит только на settings.barber_payroll_rules.
+    Это не баг того дашборда: он про мастеров и их зарплату, администраторам
+    зарплата так не считается. Но выручка салона — их продажи тоже, и прятать
+    эти деньги молча нельзя.
+
+    Отдельная, простая сводка: без графика, гаранта и прогноза — только то,
+    что реально прошло. admin_staff — активные сотрудники не из rules
+    (get_active_staff уже убрал скрытых, увольненных и «Лист Ожидания»).
+    """
+    admin_ids = {int(s['id']) for s in (admin_staff or []) if s.get('id') is not None}
+    if not admin_ids:
+        return {'masters': [], 'totals': {
+            'completed_count': 0, 'completed_revenue': 0.0,
+            'product_sales': None if products is None else 0.0,
+        }}
+
+    start, end = period(now)
+    now = now.astimezone(MOSCOW)
+    today_iso = now.date().isoformat()
+
+    by_id: dict[int, dict] = {}
+    seen = set()
+    for record in records:
+        if record.get('id') in seen:
+            continue
+        seen.add(record.get('id'))
+        record_staff = int(record.get('staff_id') or (record.get('staff') or {}).get('id') or 0)
+        if record.get('deleted') or record_staff not in admin_ids:
+            continue
+        dt = timestamp(record.get('datetime') or record.get('date'))
+        if not start <= dt < end or dt > now or visit_attendance(record) != 1:
+            continue
+        row = by_id.setdefault(record_staff, {
+            'completed_count': 0, 'completed_revenue': Decimal(0),
+            'product_sales': Decimal(0) if products is not None else None,
+        })
+        row['completed_count'] += 1
+        row['completed_revenue'] += amount(record)
+
+    if products is not None:
+        for sale in products:
+            seller = int(sale.get('staff_id') or 0)
+            if seller not in admin_ids or sale['date'] > today_iso:
+                continue
+            row = by_id.setdefault(seller, {
+                'completed_count': 0, 'completed_revenue': Decimal(0),
+                'product_sales': Decimal(0),
+            })
+            row['product_sales'] += money(sale['amount'])
+
+    names = {int(s['id']): s.get('name') for s in admin_staff if s.get('id') is not None}
+    rows = []
+    for ident, agg in by_id.items():
+        product_sales = agg['product_sales']
+        rows.append({
+            'staff_id': ident,
+            'name': names.get(ident) or f'#{ident}',
+            'completed_count': agg['completed_count'],
+            'completed_revenue': float(agg['completed_revenue']),
+            'product_sales': None if product_sales is None else float(product_sales),
+        })
+    rows.sort(key=lambda r: -(r['completed_revenue'] + (r['product_sales'] or 0)))
+
+    totals = {
+        'completed_count': sum(r['completed_count'] for r in rows),
+        'completed_revenue': sum(r['completed_revenue'] for r in rows),
+        'product_sales': None if products is None else sum(r['product_sales'] or 0 for r in rows),
+    }
+    return {'masters': rows, 'totals': totals}
+
+
 async def report():
     now = datetime.now(MOSCOW)
-    records, schedule, products, warnings, updated = await source(now)
+    records, schedule, products, staff, warnings, updated = await source(now)
     result = calculate(records, schedule, products, now, settings.barber_payroll_rules)
+
+    barber_ids = {int(r['staff_id']) for r in settings.barber_payroll_rules}
+    admin_staff = [s for s in (staff or []) if int(s.get('id') or 0) not in barber_ids]
+    result['admin_sales'] = calculate_admin_sales(records, products, now, admin_staff)
+
     result.update(warnings=warnings, updated_at=updated)
     return result

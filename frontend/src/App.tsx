@@ -1229,13 +1229,42 @@ interface MonthRow {
   contribution: number | null;
 }
 
+/** Строка «Продажи администраторов» — деньги не через трёх зарегистрированных
+ *  барберов. Без расписания, гаранта и прогноза: только то, что уже прошло. */
+interface AdminSaleRow {
+  staff_id: number;
+  name: string;
+  completed_count: number;
+  completed_revenue: number;
+  /** null — YCLIENTS не отдал продажи, а не «ничего не продано». */
+  product_sales: number | null;
+}
+
+interface AdminSalesBlock {
+  masters: AdminSaleRow[];
+  totals: {
+    completed_count: number;
+    completed_revenue: number;
+    product_sales: number | null;
+  };
+}
+
+interface MonthTotals extends MonthRow {
+  /** Выручка всего салона: прогноз по барберам плюс продажи администраторов.
+   *  null, если хоть одна из двух частей неизвестна — сложить с неизвестным
+   *  нельзя, не подставляя молча ноль вместо него. */
+  company_revenue: number | null;
+}
+
 interface MonthReport {
   month_start: string;
   month_end: string;
   as_of: string;
   updated_at: string;
   masters: MonthRow[];
-  totals: MonthRow;
+  totals: MonthTotals;
+  /** Только владельцу и управляющему — мастеру чужая выручка не нужна. */
+  admin_sales?: AdminSalesBlock;
   warnings: string[];
   scope: "all" | "own";
 }
@@ -1476,11 +1505,73 @@ function BookingsPage() {
         </table>
       </div>
 
-      {/* Прибыль по итогам месяца: прогнозная выручка минус Фикс. Фикс
-          редактируется на «План-факте» — тот же параметр, что двигает порог
-          безубыточности везде на этой странице; значение одно на оба места. */}
+      {/* Продажи администраторов — отдельно от мастеров: у этих денег нет ни
+          расписания, ни гаранта, ни прогноза, это просто то, что прошло не
+          через трёх зарегистрированных барберов. Найдено владельцем в
+          настоящем отчёте YCLIENTS 18.09.2026 — продажа товара администратором,
+          которой не было ни в одной строке этой страницы. */}
+      {data.admin_sales && (
+        <div className="mt-4 bg-milk-card dark:bg-panel border border-milk-line dark:border-line rounded-2xl overflow-hidden">
+          <div className="px-5 pt-4 pb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-light dark:text-muted">
+            Продажи администраторов
+          </div>
+          {data.admin_sales.masters.length === 0 ? (
+            <p className="px-5 pb-4 text-sm text-muted-light dark:text-muted">
+              В этом периоде — не было.
+            </p>
+          ) : (
+            <table className="w-full border-collapse">
+              <thead>
+                <tr className="text-muted-light dark:text-muted">
+                  <th className="px-5 pb-2 pt-1 text-left text-[11px] font-normal">Сотрудник</th>
+                  <th className="px-3 pb-2 pt-1 text-right text-[11px] font-normal">записей</th>
+                  <th className="px-3 pb-2 pt-1 text-right text-[11px] font-normal">услуги</th>
+                  <th className="px-5 pb-2 pt-1 text-right text-[11px] font-normal">товары</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.admin_sales.masters.map((row) => (
+                  <tr key={row.staff_id} className="border-t border-milk-line/70 dark:border-line/70">
+                    <td className="px-5 py-2.5 text-ink-soft dark:text-cream">{row.name}</td>
+                    <td className="px-3 py-2.5 text-right text-ink-soft dark:text-cream">
+                      {ШТ(row.completed_count)}
+                    </td>
+                    <td className="px-3 py-2.5 text-right text-ink-soft dark:text-cream">
+                      {РУБ(row.completed_revenue)}
+                    </td>
+                    <td className="px-5 py-2.5 text-right text-ink-soft dark:text-cream">
+                      {РУБ(row.product_sales)}
+                    </td>
+                  </tr>
+                ))}
+                <tr className="border-t-2 border-milk-line dark:border-line font-semibold">
+                  <td className="px-5 py-2.5 text-ink-soft dark:text-cream">Итого</td>
+                  <td className="px-3 py-2.5 text-right text-ink-soft dark:text-cream">
+                    {ШТ(data.admin_sales.totals.completed_count)}
+                  </td>
+                  <td className="px-3 py-2.5 text-right text-ink-soft dark:text-cream">
+                    {РУБ(data.admin_sales.totals.completed_revenue)}
+                  </td>
+                  <td className="px-5 py-2.5 text-right text-ink-soft dark:text-cream">
+                    {РУБ(data.admin_sales.totals.product_sales)}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          )}
+          <p className="px-5 pb-4 pt-1 text-xs text-muted-light dark:text-muted">
+            Не мастера — не входят ни в «Записи», ни в расчёт ЗП. Здесь — только
+            чтобы эти деньги не пропали из выручки салона ниже.
+          </p>
+        </div>
+      )}
+
+      {/* Прибыль по итогам месяца: выручка всего салона (мастера плюс
+          администраторы) минус Фикс. Фикс редактируется на «План-факте» —
+          тот же параметр, что двигает порог безубыточности везде на этой
+          странице; значение одно на оба места. */}
       {(() => {
-        const выручка = итог.expected_revenue;
+        const выручка = итог.company_revenue;
         const прибыль =
           выручка !== null && fixedMonthly !== null ? выручка - fixedMonthly : null;
         const цветПрибыли =
@@ -1497,7 +1588,7 @@ function BookingsPage() {
             <div className="grid grid-cols-3 divide-x divide-milk-line dark:divide-line">
               <div className="px-5 py-4 text-center">
                 <div className="text-[11px] text-muted-light dark:text-muted mb-1">
-                  Расчётная выручка на конец месяца
+                  Расчётная выручка на конец месяца, весь салон
                 </div>
                 <div className="text-xl font-bold text-ink-soft dark:text-cream">
                   {РУБ(выручка)}
@@ -1540,10 +1631,11 @@ function BookingsPage() {
         </p>
         <p>
           Блок <span className="text-ink-soft dark:text-cream">«Прибыль»</span>{" "}
-          ниже вычитает из прогнозной выручки только Фикс — постоянные
-          расходы. Расходники, эквайринг и то, что ещё не начислено мастерам
-          за будущие записи, в это число не входят; полный расчёт — на
-          вкладке «План-факт».
+          — выручка всего салона: прогноз по мастерам плюс продажи
+          администраторов из блока выше. Из неё вычтен только Фикс —
+          постоянные расходы. Расходники, эквайринг и то, что ещё не начислено
+          мастерам за будущие записи, в это число не входят; полный расчёт —
+          на вкладке «План-факт».
         </p>
       </div>
     </div>

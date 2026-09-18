@@ -191,7 +191,34 @@ async def future(request: Request) -> dict:
     result["totals"] = {**итог, **_expected(итог), **_вклад(итог)}
     result["scope"] = "own" if role == ROLE_MASTER else "all"
 
-    result["warnings"] = [w for w in result["warnings"] if "косметики" in w]
+    # Продажи не через мастеров (администраторы) — отдельная сводка, не
+    # строка в таблице выше: у неё нет ни расписания, ни прогноза, ни
+    # зарплаты, это просто деньги, которые иначе никуда бы не попали.
+    # Мастеру своя очередь чужая выручка не нужна — как и остальной салон,
+    # она видна только тому, кто видит весь салон.
+    admin_sales = result.pop("admin_sales", None)
+    company_revenue = None
+    if role != ROLE_MASTER and admin_sales is not None:
+        result["admin_sales"] = admin_sales
+
+        # «Прибыль» на этой странице должна быть выручкой всего салона, а не
+        # только трёх зарегистрированных барберов — иначе в неё не попадают
+        # деньги вроде продажи администратора. Отдельное поле, а не правка
+        # totals.expected_revenue: строка «Итого по мастерам» обязана совпадать
+        # с суммой видимых строк, это проверяется взглядом на таблицу.
+        barbers_revenue = result["totals"].get("expected_revenue")
+        admin_totals = admin_sales["totals"]
+        if barbers_revenue is not None and admin_totals.get("product_sales") is not None:
+            company_revenue = float(
+                Decimal(str(barbers_revenue))
+                + Decimal(str(admin_totals["completed_revenue"]))
+                + Decimal(str(admin_totals["product_sales"]))
+            )
+    result["totals"]["company_revenue"] = company_revenue
+
+    result["warnings"] = [
+        w for w in result["warnings"] if "косметики" in w or "администраторов" in w
+    ]
     return result
 
 
