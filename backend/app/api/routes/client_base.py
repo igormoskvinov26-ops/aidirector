@@ -90,6 +90,21 @@ async def tasks(
     return await client_base.get_tasks(db, status)
 
 
+@router.patch("/clients/{client_id}/note")
+async def save_admin_note(
+    client_id: int,
+    body: dict = Body(...),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Заметка администратора на карточке клиента, например «перезвонить завтра».
+
+    Хранится на клиенте, а не на сегодняшней задаче обзвона: задачи
+    пересобираются каждый день заново, заметка должна это пережить.
+    """
+    note = str(body.get("note", ""))
+    return await client_base.set_admin_note(db, client_id, note)
+
+
 @router.post("/tasks/{task_id}/outcome")
 async def task_outcome(
     task_id: int,

@@ -122,9 +122,10 @@ def test_operator_denied_finance(client):
     assert r.status_code == 403
 
 
-def test_operator_reaches_payroll(client):
-    """Администратор видит зарплату всех — это его работа."""
-    assert client.get("/api/barbers/payroll", headers=OPERATOR).status_code == 200
+def test_operator_denied_payroll(client):
+    """Расчёт ЗП — дело управляющего. Решение владельца 18.09.2026."""
+    assert client.get("/api/barbers/payroll", headers=OPERATOR).status_code == 403
+    assert client.get("/api/barbers/future", headers=OPERATOR).status_code == 403
 
 
 def test_master_reaches_only_payroll(client, monkeypatch):

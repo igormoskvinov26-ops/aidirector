@@ -463,8 +463,24 @@ async def get_tasks(session: AsyncSession, status: str = "open") -> list[dict]:
             "goal": script.get("goal", ""),
             "phone_script": script.get("phone", "").replace("{name}", client.name or ""),
             "message_script": script.get("message", "").replace("{name}", client.name or ""),
+            "admin_note": client.admin_note,
         })
     return out
+
+
+async def set_admin_note(session: AsyncSession, client_id: int, note: str) -> dict:
+    """Сохранить заметку администратора на клиенте.
+
+    Не на задаче обзвона: задачи пересобираются каждый день заново
+    (refresh_tasks), а заметка должна пережить эту пересборку и снова
+    появиться на карточке того же клиента.
+    """
+    client = await session.get(Client, client_id)
+    if client is None:
+        return {"ok": False, "error": "client not found"}
+    client.admin_note = note.strip() or None
+    await session.commit()
+    return {"ok": True, "client_id": client_id, "admin_note": client.admin_note}
 
 
 async def record_outcome(

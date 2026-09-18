@@ -57,6 +57,11 @@ class Client(Base):
     discount: Mapped[int] = mapped_column(Integer, default=0)
     card: Mapped[str | None] = mapped_column(String(50))
     comment: Mapped[str | None] = mapped_column(Text)
+    # Заметка администратора — не из YCLIENTS, а своя: «перезвонить завтра» и
+    # подобное. Живёт на клиенте, а не на задаче обзвона, потому что задачи
+    # пересобираются каждый день заново (refresh_tasks), а заметка должна
+    # это пережить.
+    admin_note: Mapped[str | None] = mapped_column(Text)
     total_visits: Mapped[int] = mapped_column(Integer, default=0)
     total_spent: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
     last_visit_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

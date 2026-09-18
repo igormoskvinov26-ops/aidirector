@@ -135,7 +135,9 @@ interface PlanFactSummary {
 // прямому адресу, всё равно получит от сервера только свою строку.
 const PAGES_BY_ROLE: Record<string, string[]> = {
   owner: ["planfact", "bookings", "payroll", "clients"],
-  operator: ["payroll", "clients"],
+  // Расчёт ЗП администратору не показываем — это дело управляющего.
+  // Решение владельца 18.09.2026.
+  operator: ["clients"],
   master: ["payroll"],
 };
 
@@ -433,6 +435,13 @@ function PlanFactPage() {
   const [costsDraft, setCostsDraft] = useState<Record<string, string>>({});
   const [costsError, setCostsError] = useState("");
   const [planInput, setPlanInput] = useState("");
+  // «Фикс» — то же fixed_monthly, что и в «Структуре расходов» ниже, просто
+  // вынесено сюда для удобства: это единственный рычаг, которым управляющий
+  // двигает порог безубыточности по ходу месяца, и тянуться для этого вниз
+  // не нужно. Значение одно и то же в обоих местах — сохранение отсюда
+  // обновляет его целиком, и нижняя форма при следующем открытии подхватит
+  // новое значение.
+  const [fixedInput, setFixedInput] = useState("");
   const [loading, setLoading] = useState(true);
 
   const now = new Date();
@@ -461,6 +470,7 @@ function PlanFactPage() {
       const c: CostSettings = await cRes.json();
       setCosts(c);
       setCostsDraft(Object.fromEntries(COST_FIELDS.map((f) => [f.key, String(c[f.key])])));
+      setFixedInput(String(Math.round(c.fixed_monthly)));
     } catch (e) {
       console.error("Finance fetch error", e);
     }
@@ -473,19 +483,36 @@ function PlanFactPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { fetchData(); }, []);
 
-  const savePlan = async () => {
-    const val = parseFloat(planInput);
-    if (isNaN(val) || val <= 0) return;
+  // Сохраняет план и «Фикс» одной кнопкой — обе цифры относятся к одному и
+  // тому же месяцу, и вводить их по отдельности незачем.
+  const saveHeader = async () => {
+    const planVal = parseFloat(planInput);
+    const fixedVal = parseFloat(fixedInput);
+    if (isNaN(planVal) || planVal <= 0) return;
+    if (!costs || isNaN(fixedVal) || fixedVal < 0) return;
     try {
-      await fetch("/api/finance/plan", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ period: currentPeriod, profit_target: val, margin_target_pct: plan.margin_target_pct }),
-      });
-      setPlan({ ...plan, profit_target: val });
+      await Promise.all([
+        fetch("/api/finance/plan", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            period: currentPeriod,
+            profit_target: planVal,
+            margin_target_pct: plan.margin_target_pct,
+          }),
+        }),
+        // Остальные поля расходов берём как есть — эндпоинт принимает их все
+        // разом, меняем в нём только fixed_monthly.
+        fetch("/api/finance/costs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...costs, fixed_monthly: fixedVal }),
+        }),
+      ]);
+      setPlan({ ...plan, profit_target: planVal });
       await fetchData();
     } catch (e) {
-      console.error("Plan save error", e);
+      console.error("Header save error", e);
     }
   };
 
@@ -603,6 +630,21 @@ function PlanFactPage() {
               className="w-40 bg-milk-deep dark:bg-panel border border-milk-line dark:border-line rounded-lg px-3 py-2 text-sm text-right focus:outline-none focus:border-bronze dark:focus:border-gold"
             />
           </div>
+          <div>
+            {/* Тот же fixed_monthly, что и в «Структуре расходов» ниже — см.
+                комментарий у useState(fixedInput). Меняется здесь по ходу
+                месяца, когда прогноз требует поправить порог безубыточности. */}
+            <label className="block text-[11px] uppercase tracking-wider text-muted-light dark:text-muted mb-1">
+              Фикс, ₽ / мес
+            </label>
+            <input
+              type="number"
+              value={fixedInput}
+              onChange={(e) => setFixedInput(e.target.value)}
+              placeholder="например, 389117"
+              className="w-40 bg-milk-deep dark:bg-panel border border-milk-line dark:border-line rounded-lg px-3 py-2 text-sm text-right focus:outline-none focus:border-bronze dark:focus:border-gold"
+            />
+          </div>
           <button
             onClick={fetchData}
             disabled={loading}
@@ -612,7 +654,7 @@ function PlanFactPage() {
             Обновить данные
           </button>
           <button
-            onClick={savePlan}
+            onClick={saveHeader}
             className="flex items-center gap-1.5 bg-bronze dark:bg-gold hover:bg-bronze/90 dark:hover:bg-gold/90 text-ink-soft font-semibold px-4 py-2 rounded-lg text-sm transition-all"
           >
             <Save size={14} />
@@ -1189,15 +1231,25 @@ const ШТ = (n: number | null): string => (n === null ? "—" : String(n));
  */
 function BookingsPage() {
   const [data, setData] = useState<MonthReport | null>(null);
+  // Фикс — тот же fixed_monthly, что редактируется на «План-факте»: нужен
+  // здесь только для блока «Прибыль» ниже таблицы.
+  const [fixedMonthly, setFixedMonthly] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState("");
 
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch("/api/barbers/future");
-        if (!r.ok) throw new Error(`сервер ответил ${r.status}`);
-        setData(await r.json());
+        const [bRes, cRes] = await Promise.all([
+          fetch("/api/barbers/future"),
+          fetch("/api/finance/costs"),
+        ]);
+        if (!bRes.ok) throw new Error(`сервер ответил ${bRes.status}`);
+        setData(await bRes.json());
+        if (cRes.ok) {
+          const c = await cRes.json();
+          setFixedMonthly(c.fixed_monthly ?? null);
+        }
       } catch (e) {
         setFailed(e instanceof Error ? e.message : "не удалось получить данные");
       }
@@ -1383,6 +1435,48 @@ function BookingsPage() {
         </table>
       </div>
 
+      {/* Прибыль по итогам месяца: прогнозная выручка минус Фикс. Фикс
+          редактируется на «План-факте» — тот же параметр, что двигает порог
+          безубыточности везде на этой странице; значение одно на оба места. */}
+      {(() => {
+        const выручка = итог.expected_revenue;
+        const прибыль =
+          выручка !== null && fixedMonthly !== null ? выручка - fixedMonthly : null;
+        const цветПрибыли =
+          прибыль === null
+            ? "text-ink-soft dark:text-cream"
+            : прибыль < 0
+              ? "text-loss"
+              : "text-profit";
+        return (
+          <div className="mt-4 bg-milk-card dark:bg-panel border border-milk-line dark:border-line rounded-2xl overflow-hidden">
+            <div className="px-5 pt-4 pb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-bronze dark:text-gold">
+              Прибыль
+            </div>
+            <div className="grid grid-cols-3 divide-x divide-milk-line dark:divide-line">
+              <div className="px-5 py-4 text-center">
+                <div className="text-[11px] text-muted-light dark:text-muted mb-1">
+                  Расчётная выручка на конец месяца
+                </div>
+                <div className="text-xl font-bold text-ink-soft dark:text-cream">
+                  {РУБ(выручка)}
+                </div>
+              </div>
+              <div className="px-5 py-4 text-center">
+                <div className="text-[11px] text-muted-light dark:text-muted mb-1">Фикс</div>
+                <div className="text-xl font-bold text-ink-soft dark:text-cream">
+                  {РУБ(fixedMonthly)}
+                </div>
+              </div>
+              <div className="px-5 py-4 text-center">
+                <div className="text-[11px] text-muted-light dark:text-muted mb-1">Прибыль</div>
+                <div className={`text-xl font-bold ${цветПрибыли}`}>{РУБ(прибыль)}</div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       <div className="mt-3 space-y-1.5 text-xs text-muted-light dark:text-muted">
         <p>
           Строки отсортированы по прогнозу с косметикой — по тому числу, по
@@ -1396,12 +1490,19 @@ function BookingsPage() {
           ещё не оплатили.
         </p>
         <p>
-          Это{" "}
+          «Принесено» у каждого мастера —{" "}
           <span className="text-ink-soft dark:text-cream">
             не чистая прибыль салона
           </span>
           : постоянные расходы, расходники и эквайринг по мастерам не делятся и
-          здесь не вычтены. Прибыль салона — на вкладке «План-факт».
+          здесь не вычтены.
+        </p>
+        <p>
+          Блок <span className="text-ink-soft dark:text-cream">«Прибыль»</span>{" "}
+          ниже вычитает из прогнозной выручки только Фикс — постоянные
+          расходы. Расходники, эквайринг и то, что ещё не начислено мастерам
+          за будущие записи, в это число не входят; полный расчёт — на
+          вкладке «План-факт».
         </p>
       </div>
     </div>

@@ -27,6 +27,8 @@ import {
   FileSpreadsheet,
   Upload,
   Download,
+  StickyNote,
+  Save,
 } from "lucide-react";
 import { useDark, палитраГрафика, шкалаСегментов } from "./тема";
 
@@ -97,6 +99,10 @@ interface Task {
   goal: string;
   phone_script: string;
   message_script: string;
+  /** Заметка администратора, например «перезвонить завтра». Живёт на
+   *  клиенте, а не на этой конкретной задаче: задачи обзвона пересобираются
+   *  каждый день заново, а заметка должна это пережить. */
+  admin_note: string | null;
 }
 
 const PERIODS: { id: Period; label: string }[] = [
@@ -451,6 +457,24 @@ function AdminView({ role }: { role: "owner" | "operator" | "master" }) {
     setBusy(null);
   };
 
+  // Заметка живёт на клиенте (см. модель), не на задаче — но обновляем её
+  // локально по id задачи: с этой карточки её и правят.
+  const saveNote = async (id: number, clientId: number, note: string): Promise<boolean> => {
+    try {
+      const r = await fetch(`/api/client-base/clients/${clientId}/note`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note }),
+      });
+      if (!r.ok) return false;
+      const body = await r.json();
+      setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, admin_note: body.admin_note } : t)));
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
   const groups = ["due", "risk", "late", "lost"];
   const filtered = filter === "all" ? tasks : tasks.filter((t) => t.group_code === filter);
 
@@ -493,7 +517,13 @@ function AdminView({ role }: { role: "owner" | "operator" | "master" }) {
       ) : (
         <div className="space-y-3">
           {filtered.map((t) => (
-            <TaskCard key={t.id} task={t} busy={busy === t.id} onOutcome={(o, c) => recordOutcome(t.id, o, c)} />
+            <TaskCard
+              key={t.id}
+              task={t}
+              busy={busy === t.id}
+              onOutcome={(o, c) => recordOutcome(t.id, o, c)}
+              onSaveNote={(note) => saveNote(t.id, t.client_id, note)}
+            />
           ))}
         </div>
       )}
@@ -505,12 +535,25 @@ function TaskCard({
   task,
   busy,
   onOutcome,
+  onSaveNote,
 }: {
   task: Task;
   busy: boolean;
   onOutcome: (outcome: string, channel: string) => void;
+  onSaveNote: (note: string) => Promise<boolean>;
 }) {
   const тёмная = useDark();
+  const [noteDraft, setNoteDraft] = useState(task.admin_note ?? "");
+  const [noteSaving, setNoteSaving] = useState(false);
+  const [noteSaved, setNoteSaved] = useState(false);
+  const noteChanged = noteDraft !== (task.admin_note ?? "");
+
+  const handleSaveNote = async () => {
+    setNoteSaving(true);
+    const ok = await onSaveNote(noteDraft);
+    setNoteSaving(false);
+    setNoteSaved(ok);
+  };
   // Цвет точки — шаг шкалы сегментов. Незнакомый сегмент получает цвет
   // подписей: он ничего не утверждает, а выдумывать шестой шаг нельзя.
   const color = шкалаСегментов(тёмная)[task.group_code] || палитраГрафика(тёмная).ось;
@@ -549,6 +592,35 @@ function TaskCard({
             <MessageSquare size={12} /> Вариант сообщения
           </div>
           <p className="text-sm text-ink-soft dark:text-cream leading-relaxed">{task.message_script}</p>
+        </div>
+      </div>
+
+      {/* Заметка администратора: не привязана к сегодняшнему звонку, живёт на
+          клиенте и переживает завтрашнюю пересборку очереди — «перезвонить
+          завтра», написанное сегодня, снова окажется здесь. */}
+      <div className="mt-3 bg-milk dark:bg-panel/60 border border-milk-line dark:border-line rounded-xl p-3">
+        <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-widest text-muted-light dark:text-muted mb-1.5">
+          <StickyNote size={12} /> Комментарий администратора
+        </div>
+        <textarea
+          value={noteDraft}
+          onChange={(e) => {
+            setNoteDraft(e.target.value);
+            setNoteSaved(false);
+          }}
+          placeholder="например, перезвонить завтра"
+          rows={2}
+          className="w-full bg-milk-card dark:bg-panel border border-milk-line dark:border-line rounded-lg px-3 py-2 text-sm text-ink-soft dark:text-cream placeholder:text-muted-light dark:placeholder:text-muted focus:outline-none focus:border-bronze dark:focus:border-gold resize-none"
+        />
+        <div className="mt-2 flex items-center gap-2">
+          <button
+            disabled={noteSaving || !noteChanged}
+            onClick={handleSaveNote}
+            className="flex items-center gap-1.5 border border-milk-line dark:border-line hover:border-bronze dark:hover:border-gold px-3 py-1.5 rounded-lg text-xs transition-all disabled:opacity-40"
+          >
+            <Save size={12} /> {noteSaving ? "Сохраняю…" : "Сохранить"}
+          </button>
+          {!noteChanged && noteSaved && <span className="text-xs text-profit">Сохранено</span>}
         </div>
       </div>
 
