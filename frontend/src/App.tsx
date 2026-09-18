@@ -1267,6 +1267,8 @@ interface ReturnRateRow {
   clients_returned: number;
   /** Последний визит или запись к этому мастеру старше 60 дней. */
   clients_lost: number;
+  /** Первый завершённый визит к этому мастеру был в пределах 60 дней. */
+  clients_new: number;
   /** null — у мастера пока нет ни одного клиента в базе. */
   return_rate_pct: number | null;
 }
@@ -1553,6 +1555,7 @@ function BookingsPage() {
               <tr className="text-muted-light dark:text-muted">
                 <th className="px-5 pb-2 pt-1 text-left text-[11px] font-normal">Мастер</th>
                 <th className="px-3 pb-2 pt-1 text-right text-[11px] font-normal">потерянные</th>
+                <th className="px-3 pb-2 pt-1 text-right text-[11px] font-normal">новые</th>
                 <th className="px-3 pb-2 pt-1 text-right text-[11px] font-normal">
                   уникальные клиенты
                 </th>
@@ -1568,6 +1571,9 @@ function BookingsPage() {
                   <td className="px-3 py-2.5 text-right text-loss font-medium">
                     {row.clients_lost}
                   </td>
+                  <td className="px-3 py-2.5 text-right text-profit font-medium">
+                    {row.clients_new}
+                  </td>
                   <td className="px-3 py-2.5 text-right text-ink-soft dark:text-cream">
                     {row.clients_total}
                   </td>
@@ -1581,7 +1587,8 @@ function BookingsPage() {
           <p className="px-5 pb-4 pt-2 text-xs text-muted-light dark:text-muted">
             Уникальные клиенты — все, у кого хотя бы один завершённый визит к
             этому мастеру. Возвращаемость = клиенты с двумя и более визитами
-            ÷ уникальные клиенты × 100%. Потерянные — из них те, чей
+            ÷ уникальные клиенты × 100%. Новые — те, чей первый визит к этому
+            мастеру был в пределах последних 60 дней. Потерянные — те, чей
             последний визит или запись к этому мастеру старше 60 дней;
             будущая запись снимает статус, даже если предыдущий визит был
             давно.

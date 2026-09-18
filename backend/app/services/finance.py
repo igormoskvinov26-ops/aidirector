@@ -1226,6 +1226,15 @@ async def get_return_rate(session: AsyncSession) -> dict:
     даже если предыдущий визит был давно, — учитывается самая свежая дата
     среди completed и scheduled, а не только прошлое.
 
+    «Новые» (та же правка) — те, у кого первый завершённый визит к этому
+    мастеру был в пределах последних LOST_AFTER_DAYS дней. Смотрим именно
+    на первый визит, а не на последний: клиент, пришедший год назад и
+    вернувшийся вчера, — не новый, он вернувшийся, это другая строка учёта.
+    Один и тот же порог в 60 дней для «потерянных» и «новых» не совпадение,
+    а симметрия одного определения: пока клиент внутри этого окна — он
+    активный, снаружи с одного края — ещё не пришёл (условно не в счёт),
+    снаружи с другого — уже потерян.
+
     Считается по всей истории визитов, что лежит в локальной базе, — не по
     календарному месяцу. У обычной синхронизации глубина всего
     settings.sync_window_days (90 дней): для «за всё время» этого не
@@ -1243,19 +1252,24 @@ async def get_return_rate(session: AsyncSession) -> dict:
                 "completed"
             ),
             func.max(Visit.datetime).label("last_activity"),
+            func.min(
+                case((Visit.status.in_(COMPLETED_STATUSES), Visit.datetime), else_=None)
+            ).label("first_completed"),
         )
         .join(Employee, Employee.id == Visit.employee_id)
         .where(Visit.status.in_(COUNTED_STATUSES))
         .group_by(Employee.yclients_id, Visit.client_id)
     )
-    by_staff: dict[int, list[tuple[int, datetime]]] = {}
+    by_staff: dict[int, list[tuple[int, datetime, datetime]]] = {}
     for row in rows:
         completed = int(row.completed or 0)
         if completed == 0:
             # Клиент только записан, но ни разу не пришёл — это пока не «его
-            # клиент» ни для возвращаемости, ни для потерянных.
+            # клиент» ни для возвращаемости, ни для потерянных, ни для новых.
             continue
-        by_staff.setdefault(int(row.yclients_id), []).append((completed, row.last_activity))
+        by_staff.setdefault(int(row.yclients_id), []).append(
+            (completed, row.last_activity, row.first_completed)
+        )
 
     threshold = datetime.now(UTC) - timedelta(days=LOST_AFTER_DAYS)
     masters = []
@@ -1263,14 +1277,21 @@ async def get_return_rate(session: AsyncSession) -> dict:
         ident = int(rule["staff_id"])
         client_rows = by_staff.get(ident, [])
         total = len(client_rows)
-        returned = sum(1 for completed, _ in client_rows if completed >= 2)
-        lost = sum(1 for _, last_activity in client_rows if _ensure_utc(last_activity) < threshold)
+        returned = sum(1 for completed, _, _ in client_rows if completed >= 2)
+        lost = sum(
+            1 for _, last_activity, _ in client_rows if _ensure_utc(last_activity) < threshold
+        )
+        new = sum(
+            1 for _, _, first_completed in client_rows
+            if _ensure_utc(first_completed) >= threshold
+        )
         masters.append({
             "staff_id": ident,
             "name": rule["name"],
             "clients_total": total,
             "clients_returned": returned,
             "clients_lost": lost,
+            "clients_new": new,
             "return_rate_pct": (
                 float((Decimal(returned) / Decimal(total) * 100).quantize(Decimal("0.1")))
                 if total > 0

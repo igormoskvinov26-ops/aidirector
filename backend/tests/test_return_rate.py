@@ -85,7 +85,7 @@ async def test_визиты_к_разным_мастерам_не_считают
     арташ = next(m for m in итог["masters"] if m["staff_id"] == АРТАШ)
     assert ксения == {
         "staff_id": КСЕНИЯ, "name": ксения["name"],
-        "clients_total": 1, "clients_returned": 0, "clients_lost": 0,
+        "clients_total": 1, "clients_returned": 0, "clients_lost": 0, "clients_new": 1,
         "return_rate_pct": 0.0,
     }
     assert арташ["clients_returned"] == 0
@@ -205,3 +205,60 @@ async def test_потерянные_считаются_в_разрезе_мас�
     арташ = next(m for m in итог["masters"] if m["staff_id"] == АРТАШ)
     assert ксения["clients_lost"] == 1
     assert арташ["clients_lost"] == 0
+
+
+# --------------------------------------------------------------------------- #
+# Новые: первый завершённый визит к мастеру в пределах последних 60 дней
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_первый_визит_в_пределах_60_дней_это_новый(session: AsyncSession):
+    await _seed(session, [(1, КСЕНИЯ)], clients=1)
+    await _visit(session, 1, 1, 1, days_ago=30)
+    await session.commit()
+
+    итог = await get_return_rate(session)
+    ксения = next(m for m in итог["masters"] if m["staff_id"] == КСЕНИЯ)
+    assert ксения["clients_new"] == 1
+
+
+@pytest.mark.asyncio
+async def test_первый_визит_больше_60_дней_назад_не_новый(session: AsyncSession):
+    await _seed(session, [(1, КСЕНИЯ)], clients=1)
+    await _visit(session, 1, 1, 1, days_ago=90)
+    await session.commit()
+
+    итог = await get_return_rate(session)
+    ксения = next(m for m in итог["masters"] if m["staff_id"] == КСЕНИЯ)
+    assert ксения["clients_new"] == 0
+
+
+@pytest.mark.asyncio
+async def test_старый_клиент_вернувшийся_недавно_это_не_новый(session: AsyncSession):
+    """Смотрим на первый визит, а не на последний: год назад пришёл впервые,
+    вчера вернулся — это вернувшийся клиент, не новый."""
+    await _seed(session, [(1, КСЕНИЯ)], clients=1)
+    await _visit(session, 1, 1, 1, days_ago=365)
+    await _visit(session, 2, 1, 1, days_ago=1)
+    await session.commit()
+
+    итог = await get_return_rate(session)
+    ксения = next(m for m in итог["masters"] if m["staff_id"] == КСЕНИЯ)
+    assert ксения["clients_new"] == 0
+    assert ксения["clients_returned"] == 1
+
+
+@pytest.mark.asyncio
+async def test_новые_считаются_в_разрезе_мастера(session: AsyncSession):
+    """Тот же клиент — старый у Ксении, но впервые пришёл к Арташу."""
+    await _seed(session, [(1, КСЕНИЯ), (2, АРТАШ)], clients=1)
+    await _visit(session, 1, 1, 1, days_ago=200)
+    await _visit(session, 2, 2, 1, days_ago=10)
+    await session.commit()
+
+    итог = await get_return_rate(session)
+    ксения = next(m for m in итог["masters"] if m["staff_id"] == КСЕНИЯ)
+    арташ = next(m for m in итог["masters"] if m["staff_id"] == АРТАШ)
+    assert ксения["clients_new"] == 0
+    assert арташ["clients_new"] == 1
