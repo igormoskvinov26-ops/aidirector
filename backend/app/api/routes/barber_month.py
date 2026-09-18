@@ -200,9 +200,6 @@ async def future(request: Request) -> dict:
     # Мастеру своя очередь чужая выручка не нужна — как и остальной салон,
     # она видна только тому, кто видит весь салон.
     admin_sales = result.pop("admin_sales", None)
-    return_rate_month = result.pop("return_rate_month", None)
-    if role != ROLE_MASTER and return_rate_month is not None:
-        result["return_rate_month"] = return_rate_month
 
     company_revenue = None
     if role != ROLE_MASTER and admin_sales is not None:

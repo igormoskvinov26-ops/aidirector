@@ -25,6 +25,7 @@ import {
 import { useDark, палитраГрафика } from "./тема";
 import ClientBasePage from "./ClientBasePage";
 import BarberMonthPage from "./BarberMonthPage";
+import { ClientCounters } from "./ClientCounters";
 import logo from "./assets/logo.png";
 import { Аватар } from "./мастера";
 
@@ -1256,24 +1257,18 @@ interface MonthTotals extends MonthRow {
   company_revenue: number | null;
 }
 
-/** Возвращаемость — доля клиентов, пришедших к мастеру повторно.
- *
- *  Два показателя, решение владельца 18.09.2026:
- *   1) за текущий месяц — та же строка ReturnRateRow, приходит вместе
- *      с /future (return_rate_month), знаменатель — клиенты мастера за месяц;
- *   2) за всё время — те же поля, но отдельным медленным запросом
- *      /return-rate: считается по году истории в базе. */
+/** Возвращаемость — доля клиентов, пришедших к мастеру повторно, и сколько
+ *  из них уже потерянные. Считается по всей истории визитов в базе, не по
+ *  календарному месяцу — решение владельца 18.09.2026, уточнено там же. */
 interface ReturnRateRow {
   staff_id: number;
   name: string;
   clients_total: number;
   clients_returned: number;
-  /** null — у мастера пока нет ни одного клиента в базе за этот период. */
+  /** Последний визит или запись к этому мастеру старше 60 дней. */
+  clients_lost: number;
+  /** null — у мастера пока нет ни одного клиента в базе. */
   return_rate_pct: number | null;
-}
-
-interface MonthReturnRateBlock {
-  masters: ReturnRateRow[];
 }
 
 interface MonthReport {
@@ -1285,8 +1280,6 @@ interface MonthReport {
   totals: MonthTotals;
   /** Только владельцу и управляющему — мастеру чужая выручка не нужна. */
   admin_sales?: AdminSalesBlock;
-  /** Возвращаемость за текущий месяц. Тоже только владельцу и управляющему. */
-  return_rate_month?: MonthReturnRateBlock;
   warnings: string[];
   scope: "all" | "own";
 }
@@ -1474,6 +1467,8 @@ function BookingsPage() {
         </div>
       ))}
 
+      <ClientCounters />
+
       <div className="bg-milk-card dark:bg-panel border border-milk-line dark:border-line rounded-2xl overflow-x-auto">
         <table className="w-full min-w-[1150px] border-collapse">
           {/* Фон блоков — на столбцах. Полоса идёт на всю высоту таблицы и не
@@ -1542,15 +1537,13 @@ function BookingsPage() {
 
       {/* Возвращаемость: доля клиентов, пришедших к мастеру повторно —
           решение владельца 18.09.2026, «самый важный показатель для
-          мастеров». Отсортирована по месячному столбцу от лучшей к худшей:
-          чтобы мастера соревновались, отставание должно быть видно сразу,
-          без пересчёта в голове.
-          Два столбца процента — два разных расчёта, уточнено владельцем в
-          том же разговоре: «за месяц» — по записям текущего месяца, тем же
-          пулом клиентов, что и таблица выше; «за всё время» — по году
-          истории в базе, отдельным более медленным запросом, поэтому может
-          прийти позже или не прийти вовсе (тогда клетка — «—»). */}
-      {data.return_rate_month && (
+          мастеров», уточнено в том же разговоре. Считается по всей истории
+          визитов в базе — не по календарному месяцу: месячный расчёт (был
+          здесь раньше) давал заниженный и мало о чём говорящий процент.
+          Отдельный, более медленный запрос: может прийти позже или не
+          прийти вовсе, если база ещё не досинхронизирована на нужную
+          глубину — тогда блок просто не появится. */}
+      {returnRate && (
         <div className="mt-4 bg-milk-card dark:bg-panel border border-milk-line dark:border-line rounded-2xl overflow-hidden">
           <div className="px-5 pt-4 pb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-bronze dark:text-gold">
             Возвращаемость
@@ -1559,42 +1552,39 @@ function BookingsPage() {
             <thead>
               <tr className="text-muted-light dark:text-muted">
                 <th className="px-5 pb-2 pt-1 text-left text-[11px] font-normal">Мастер</th>
-                <th className="px-3 pb-2 pt-1 text-right text-[11px] font-normal">клиентов</th>
-                <th className="px-3 pb-2 pt-1 text-right text-[11px] font-normal">вернулись</th>
-                <th className="px-3 pb-2 pt-1 text-right text-[11px] font-normal">за месяц</th>
-                <th className="px-5 pb-2 pt-1 text-right text-[11px] font-normal">за всё время</th>
+                <th className="px-3 pb-2 pt-1 text-right text-[11px] font-normal">потерянные</th>
+                <th className="px-3 pb-2 pt-1 text-right text-[11px] font-normal">
+                  уникальные клиенты
+                </th>
+                <th className="px-5 pb-2 pt-1 text-right text-[11px] font-normal">
+                  возвращаемость
+                </th>
               </tr>
             </thead>
             <tbody>
-              {data.return_rate_month.masters.map((row) => {
-                const заВсеВремя = returnRate?.find((r) => r.staff_id === row.staff_id) ?? null;
-                return (
-                  <tr key={row.staff_id} className="border-t border-milk-line/70 dark:border-line/70">
-                    <td className="px-5 py-2.5 text-ink-soft dark:text-cream">{row.name}</td>
-                    <td className="px-3 py-2.5 text-right text-ink-soft dark:text-cream">
-                      {row.clients_total}
-                    </td>
-                    <td className="px-3 py-2.5 text-right text-ink-soft dark:text-cream">
-                      {row.clients_returned}
-                    </td>
-                    <td className="px-3 py-2.5 text-right text-[15px] font-bold text-bronze dark:text-gold">
-                      {row.return_rate_pct === null ? "—" : `${row.return_rate_pct}%`}
-                    </td>
-                    <td className="px-5 py-2.5 text-right text-sm font-medium text-ink-soft dark:text-cream">
-                      {заВсеВремя?.return_rate_pct == null ? "—" : `${заВсеВремя.return_rate_pct}%`}
-                    </td>
-                  </tr>
-                );
-              })}
+              {returnRate.map((row) => (
+                <tr key={row.staff_id} className="border-t border-milk-line/70 dark:border-line/70">
+                  <td className="px-5 py-2.5 text-ink-soft dark:text-cream">{row.name}</td>
+                  <td className="px-3 py-2.5 text-right text-loss font-medium">
+                    {row.clients_lost}
+                  </td>
+                  <td className="px-3 py-2.5 text-right text-ink-soft dark:text-cream">
+                    {row.clients_total}
+                  </td>
+                  <td className="px-5 py-2.5 text-right text-[15px] font-bold text-bronze dark:text-gold">
+                    {row.return_rate_pct === null ? "—" : `${row.return_rate_pct}%`}
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
           <p className="px-5 pb-4 pt-2 text-xs text-muted-light dark:text-muted">
-            Возврат — клиент с двумя и более завершёнными визитами к этому
-            мастеру (отменённые и неявки не в счёт). «За месяц» — по записям
-            текущего месяца: выполненным с начала месяца и подтверждённым
-            впереди до его конца, знаменатель — клиенты этого мастера за
-            месяц. «За всё время» — по всей истории визитов в базе, без
-            ограничения по срокам между визитами.
+            Уникальные клиенты — все, у кого хотя бы один завершённый визит к
+            этому мастеру. Возвращаемость = клиенты с двумя и более визитами
+            ÷ уникальные клиенты × 100%. Потерянные — из них те, чей
+            последний визит или запись к этому мастеру старше 60 дней;
+            будущая запись снимает статус, даже если предыдущий визит был
+            давно.
           </p>
         </div>
       )}

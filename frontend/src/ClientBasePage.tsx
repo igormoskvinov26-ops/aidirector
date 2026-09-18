@@ -31,6 +31,7 @@ import {
   Save,
 } from "lucide-react";
 import { useDark, палитраГрафика, шкалаСегментов } from "./тема";
+import { ClientCounters } from "./ClientCounters";
 
 // ── Types ──
 type Period = "day" | "week" | "month" | "quarter" | "year";
@@ -268,6 +269,11 @@ function ManagerView() {
           Синхронизировать
         </button>
       </div>
+
+      {/* Те же два счётчика, что на «Записях за месяц» — решение владельца
+          18.09.2026. Отдельно от плиток сегментации ниже: «Потеряны» там —
+          другая методика (личный цикл клиента), а не тот же показатель. */}
+      <ClientCounters />
 
       <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
         {cards.map((c) => (

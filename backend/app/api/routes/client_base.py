@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.main_roles import ROLE_OWNER
-from app.services import call_journal, client_base
+from app.services import call_journal, client_base, finance
 from app.services.client_base import moscow_today
 
 router = APIRouter(prefix="/api/client-base", tags=["client-base"])
@@ -30,6 +30,16 @@ async def dashboard(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     return await client_base.build_dashboard(db, period)
+
+
+@router.get("/counters")
+async def counters(db: AsyncSession = Depends(get_db)) -> dict:
+    """Повторные и потерянные клиенты — на весь салон, без привязки к мастеру.
+
+    Показывается и здесь, и на «Записях за месяц» — решение владельца
+    18.09.2026. Подробности расчёта: app/services/finance.py:get_repeat_and_lost_clients.
+    """
+    return await finance.get_repeat_and_lost_clients(db)
 
 
 @router.get("/snapshots")

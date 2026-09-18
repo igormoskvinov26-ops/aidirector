@@ -3,7 +3,7 @@
 import calendar
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_CEILING, Decimal
 
 from sqlalchemy import case, func, select
@@ -21,6 +21,13 @@ COMPLETED_STATUSES = {"completed"}
 # складывать несостоявшийся визит с записью на завтра нельзя.
 SCHEDULED_STATUSES = {"scheduled"}
 COUNTED_STATUSES = COMPLETED_STATUSES | SCHEDULED_STATUSES
+
+# Решение владельца 18.09.2026: клиент — «потерянный», если его последний
+# визит или запись (включая ещё не наступившую) старше этого числа дней.
+# Будущая запись сама по себе снимает статус, даже если предыдущий визит был
+# давно, — не важно, куда смотреть, в прошлое или в будущее, важна только
+# самая свежая дата.
+LOST_AFTER_DAYS = 60
 
 
 @dataclass(frozen=True)
@@ -1198,8 +1205,14 @@ async def _get_masters_count(session: AsyncSession, target_date: date) -> int:
     return int(row or 0)
 
 
+def _ensure_utc(dt: datetime) -> datetime:
+    """SQLite (тесты) может отдать datetime без tzinfo, хотя колонка — с ним."""
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+
+
 async def get_return_rate(session: AsyncSession) -> dict:
-    """Возвращаемость: доля клиентов мастера, пришедших к нему повторно.
+    """Возвращаемость: доля клиентов мастера, пришедших к нему повторно, и
+    сколько из них уже потерянные.
 
     Решение владельца 18.09.2026: возврат — это второй (и любой следующий)
     завершённый визит к тому же самому мастеру, без ограничения по срокам
@@ -1207,9 +1220,15 @@ async def get_return_rate(session: AsyncSession) -> dict:
     вернулся ни к одной из них: это два разных мастера, каждый со своим
     единственным визитом.
 
-    Считается по всей истории завершённых визитов, что лежит в локальной
-    базе, — не по календарному месяцу. У обычной синхронизации глубина
-    всего settings.sync_window_days (90 дней): для «за всё время» этого не
+    «Потерянные» (уточнено в том же разговоре) — из тех же клиентов мастера
+    те, чей последний визит или запись к нему (включая ещё не наступившую)
+    старше LOST_AFTER_DAYS дней. Будущая запись снимает статус потерянного,
+    даже если предыдущий визит был давно, — учитывается самая свежая дата
+    среди completed и scheduled, а не только прошлое.
+
+    Считается по всей истории визитов, что лежит в локальной базе, — не по
+    календарному месяцу. У обычной синхронизации глубина всего
+    settings.sync_window_days (90 дней): для «за всё время» этого не
     хватит, а другого стало на клиентов, вернувшихся через полгода. Чтобы
     расчёт не занижал возвращаемость молча, базу нужно один раз досин-
     хронизировать на нужную глубину — POST /api/sync/trigger?date_from=...
@@ -1220,27 +1239,38 @@ async def get_return_rate(session: AsyncSession) -> dict:
         select(
             Employee.yclients_id,
             Visit.client_id,
-            func.count(Visit.id).label("visits"),
+            func.sum(case((Visit.status.in_(COMPLETED_STATUSES), 1), else_=0)).label(
+                "completed"
+            ),
+            func.max(Visit.datetime).label("last_activity"),
         )
         .join(Employee, Employee.id == Visit.employee_id)
-        .where(Visit.status.in_(COMPLETED_STATUSES))
+        .where(Visit.status.in_(COUNTED_STATUSES))
         .group_by(Employee.yclients_id, Visit.client_id)
     )
-    by_staff: dict[int, list[int]] = {}
+    by_staff: dict[int, list[tuple[int, datetime]]] = {}
     for row in rows:
-        by_staff.setdefault(int(row.yclients_id), []).append(int(row.visits))
+        completed = int(row.completed or 0)
+        if completed == 0:
+            # Клиент только записан, но ни разу не пришёл — это пока не «его
+            # клиент» ни для возвращаемости, ни для потерянных.
+            continue
+        by_staff.setdefault(int(row.yclients_id), []).append((completed, row.last_activity))
 
+    threshold = datetime.now(UTC) - timedelta(days=LOST_AFTER_DAYS)
     masters = []
     for rule in settings.barber_payroll_rules:
         ident = int(rule["staff_id"])
-        visits_per_client = by_staff.get(ident, [])
-        total = len(visits_per_client)
-        returned = sum(1 for v in visits_per_client if v >= 2)
+        client_rows = by_staff.get(ident, [])
+        total = len(client_rows)
+        returned = sum(1 for completed, _ in client_rows if completed >= 2)
+        lost = sum(1 for _, last_activity in client_rows if _ensure_utc(last_activity) < threshold)
         masters.append({
             "staff_id": ident,
             "name": rule["name"],
             "clients_total": total,
             "clients_returned": returned,
+            "clients_lost": lost,
             "return_rate_pct": (
                 float((Decimal(returned) / Decimal(total) * 100).quantize(Decimal("0.1")))
                 if total > 0
@@ -1256,3 +1286,42 @@ async def get_return_rate(session: AsyncSession) -> dict:
         reverse=True,
     )
     return {"masters": masters}
+
+
+async def get_repeat_and_lost_clients(session: AsyncSession) -> dict:
+    """Два счётчика на весь салон, независимо от того, к какому мастеру.
+
+    «Повторные» — клиенты, у которых уже два и более завершённых визита:
+    счётчик увеличивается один раз, в момент закрытия второго визита, и
+    дальше не имеет значения, сколько между визитами прошло времени.
+
+    «Потерянные» — из тех же клиентов (хотя бы один визит был завершён) те,
+    чей последний визит или запись старше LOST_AFTER_DAYS дней. Будущая
+    запись снимает статус, даже если предыдущий визит был давно, — та же
+    логика, что и в get_return_rate, но без привязки к мастеру.
+    """
+    rows = await session.execute(
+        select(
+            Visit.client_id,
+            func.sum(case((Visit.status.in_(COMPLETED_STATUSES), 1), else_=0)).label(
+                "completed"
+            ),
+            func.max(Visit.datetime).label("last_activity"),
+        )
+        .where(Visit.status.in_(COUNTED_STATUSES))
+        .group_by(Visit.client_id)
+    )
+
+    threshold = datetime.now(UTC) - timedelta(days=LOST_AFTER_DAYS)
+    repeat_clients = 0
+    lost_clients = 0
+    for row in rows:
+        completed = int(row.completed or 0)
+        if completed == 0:
+            continue
+        if completed >= 2:
+            repeat_clients += 1
+        if _ensure_utc(row.last_activity) < threshold:
+            lost_clients += 1
+
+    return {"repeat_clients": repeat_clients, "lost_clients": lost_clients}

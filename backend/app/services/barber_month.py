@@ -232,64 +232,6 @@ def calculate(records, schedule, products, now, rules):
             'as_of': now.isoformat(), 'masters': masters}
 
 
-def calculate_month_return_rate(records, now, rules):
-    """Возвращаемость за текущий месяц: доля клиентов мастера, пришедших от 2 раз.
-
-    Решение владельца 18.09.2026: считаем по тем же записям, что показывает
-    таблица выше на этой же странице, — выполненные с начала месяца плюс ещё
-    не наступившие подтверждённые записи до конца месяца. Ровно тот же
-    фильтр, что и в calculate(): отменённые и неявки не в счёт.
-
-    Клиент — «вернувшийся» целиком, если таких записей к этому мастеру за
-    месяц у него две или больше, а не начиная со второго визита: одно и то же
-    решение, что и в общем расчёте за всё время (finance.get_return_rate).
-    Знаменатель — все клиенты этого мастера за месяц, то есть у каждого
-    мастера свой процент, а не один на весь салон.
-    """
-    start, end = period(now)
-    now = now.astimezone(MOSCOW)
-    masters = []
-    for rule in rules:
-        ident = int(rule['staff_id'])
-        visits_by_client: dict[int, int] = {}
-        seen = set()
-        for record in records:
-            if record.get('id') in seen:
-                continue
-            seen.add(record.get('id'))
-            record_staff = record.get('staff_id') or (record.get('staff') or {}).get('id') or 0
-            if record.get('deleted') or int(record_staff) != ident:
-                continue
-            dt = timestamp(record.get('datetime') or record.get('date'))
-            if not start <= dt < end:
-                continue
-            attendance = visit_attendance(record)
-            valid = (dt <= now and attendance == 1) or (dt > now and attendance in (0, 2))
-            if not valid:
-                continue
-            client_id = int((record.get('client') or {}).get('id') or 0)
-            if not client_id:
-                continue
-            visits_by_client[client_id] = visits_by_client.get(client_id, 0) + 1
-
-        total = len(visits_by_client)
-        returned = sum(1 for count in visits_by_client.values() if count >= 2)
-        masters.append({
-            'staff_id': ident,
-            'name': rule['name'],
-            'clients_total': total,
-            'clients_returned': returned,
-            'return_rate_pct': round(returned / total * 100, 1) if total else None,
-        })
-
-    # Неизвестное (нет клиентов) — в конец, не в начало: это не «0%».
-    masters.sort(
-        key=lambda m: m['return_rate_pct'] if m['return_rate_pct'] is not None else -1,
-        reverse=True,
-    )
-    return {'masters': masters}
-
-
 def calculate_admin_sales(records, products, now, admin_staff):
     """Деньги, которые прошли не через трёх зарегистрированных барберов.
 
@@ -374,9 +316,6 @@ async def report():
     barber_ids = {int(r['staff_id']) for r in settings.barber_payroll_rules}
     admin_staff = [s for s in (staff or []) if int(s.get('id') or 0) not in barber_ids]
     result['admin_sales'] = calculate_admin_sales(records, products, now, admin_staff)
-    result['return_rate_month'] = calculate_month_return_rate(
-        records, now, settings.barber_payroll_rules
-    )
 
     result.update(warnings=warnings, updated_at=updated)
     return result

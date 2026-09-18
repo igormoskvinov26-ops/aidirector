@@ -1,9 +1,14 @@
-"""Возвращаемость мастера: доля клиентов, пришедших к нему повторно.
+"""Возвращаемость мастера: доля клиентов, пришедших к нему повторно, и
+сколько из них уже потерянные.
 
 Решение владельца 18.09.2026: возврат — второй и любой следующий завершённый
 визит к тому же самому мастеру, без ограничения по срокам между визитами.
 Клиент, сходивший раз к одному мастеру и раз к другому, — не вернулся ни к
 одному из них.
+
+Потерянный (уточнено в том же разговоре) — из клиентов мастера тот, чей
+последний визит или запись к нему старше LOST_AFTER_DAYS (60) дней. Будущая
+запись снимает статус, даже если предыдущий визит был давно.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -80,7 +85,8 @@ async def test_визиты_к_разным_мастерам_не_считают
     арташ = next(m for m in итог["masters"] if m["staff_id"] == АРТАШ)
     assert ксения == {
         "staff_id": КСЕНИЯ, "name": ксения["name"],
-        "clients_total": 1, "clients_returned": 0, "return_rate_pct": 0.0,
+        "clients_total": 1, "clients_returned": 0, "clients_lost": 0,
+        "return_rate_pct": 0.0,
     }
     assert арташ["clients_returned"] == 0
 
@@ -143,3 +149,59 @@ async def test_все_настроенные_барберы_присутству
     имена = {m["staff_id"] for m in итог["masters"]}
     ожидается = {int(r["staff_id"]) for r in settings.barber_payroll_rules}
     assert имена == ожидается
+
+
+# --------------------------------------------------------------------------- #
+# Потерянные: последний визит/запись к мастеру старше 60 дней
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_последний_визит_больше_60_дней_назад_это_потерянный(session: AsyncSession):
+    await _seed(session, [(1, КСЕНИЯ)], clients=1)
+    await _visit(session, 1, 1, 1, days_ago=90)
+    await session.commit()
+
+    итог = await get_return_rate(session)
+    ксения = next(m for m in итог["masters"] if m["staff_id"] == КСЕНИЯ)
+    assert ксения["clients_lost"] == 1
+
+
+@pytest.mark.asyncio
+async def test_визит_в_пределах_60_дней_не_потерянный(session: AsyncSession):
+    await _seed(session, [(1, КСЕНИЯ)], clients=1)
+    await _visit(session, 1, 1, 1, days_ago=30)
+    await session.commit()
+
+    итог = await get_return_rate(session)
+    ксения = next(m for m in итог["masters"] if m["staff_id"] == КСЕНИЯ)
+    assert ксения["clients_lost"] == 0
+
+
+@pytest.mark.asyncio
+async def test_будущая_запись_снимает_статус_потерянного(session: AsyncSession):
+    """Последний визит был давно, но на следующей неделе уже есть запись —
+    клиент не потерян, он возвращается."""
+    await _seed(session, [(1, КСЕНИЯ)], clients=1)
+    await _visit(session, 1, 1, 1, days_ago=200, status="completed")
+    await _visit(session, 2, 1, 1, days_ago=-7, status="scheduled")  # через неделю
+    await session.commit()
+
+    итог = await get_return_rate(session)
+    ксения = next(m for m in итог["masters"] if m["staff_id"] == КСЕНИЯ)
+    assert ксения["clients_lost"] == 0
+
+
+@pytest.mark.asyncio
+async def test_потерянные_считаются_в_разрезе_мастера(session: AsyncSession):
+    """Клиент потерян для Ксении, но не для Арташа — у него был недавно."""
+    await _seed(session, [(1, КСЕНИЯ), (2, АРТАШ)], clients=1)
+    await _visit(session, 1, 1, 1, days_ago=100)
+    await _visit(session, 2, 2, 1, days_ago=10)
+    await session.commit()
+
+    итог = await get_return_rate(session)
+    ксения = next(m for m in итог["masters"] if m["staff_id"] == КСЕНИЯ)
+    арташ = next(m for m in итог["masters"] if m["staff_id"] == АРТАШ)
+    assert ксения["clients_lost"] == 1
+    assert арташ["clients_lost"] == 0
