@@ -406,7 +406,10 @@ async def backfill_metric_history(session: AsyncSession, days: int = 90) -> dict
 # считается заодно и лояльным, иначе столбцы в сумме дадут больше, чем есть
 # клиентов, и гистограмме нельзя будет верить.
 LOYAL_MIN_VISITS = 2
-REGULAR_MIN_VISITS = 4
+# Порог постоянного — пять визитов (решение владельца 23.09.2026). То же
+# число действует в модуле смены: определение у постоянного клиента одно на
+# всё приложение.
+REGULAR_MIN_VISITS = 5
 
 PULSE_SEGMENTS = ("new", "loyal", "regular", "lost")
 PULSE_LABELS = {
