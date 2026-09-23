@@ -25,6 +25,7 @@ from app.services.shift import (
     проверки,
     разложить_записанных,
     разложить_пришедших,
+    стали_потерянными,
     текст_закрытия,
     текст_открытия,
 )
@@ -245,6 +246,56 @@ def test_вечером_постоянным_становится_тот_у_ко
 def test_не_пришедший_вечером_никуда_не_попадает():
     """Утром он был в прогнозе, вечером его в факте нет."""
     assert разложить_пришедших(set(), {100: 4}) == {"new": 0, "became_regular": 0}
+
+
+# --------------------------------------------------------------------------- #
+# Стали потерянными сегодня (§24, §25 ТЗ)
+# --------------------------------------------------------------------------- #
+
+
+def _давно(дней: int) -> datetime:
+    return datetime(ДЕНЬ.year, ДЕНЬ.month, ДЕНЬ.day, 12, 0, tzinfo=MOSCOW) - timedelta(days=дней)
+
+
+def test_пересёк_рубеж_именно_сегодня():
+    """Вчера было 59 дней, сегодня 60 — вот сегодня он и потерян."""
+    окно = [запись(ident=1, client_id=100, посещение=1, когда=_давно(60))]
+    assert стали_потерянными(окно, [], ДЕНЬ) == 1
+
+
+def test_пересёк_рубеж_неделю_назад_сегодня_не_считается():
+    """Иначе один и тот же человек попадал бы в отчёт каждый вечер."""
+    окно = [запись(ident=1, client_id=100, посещение=1, когда=_давно(67))]
+    assert стали_потерянными(окно, [], ДЕНЬ) == 0
+
+
+def test_будущая_запись_снимает_статус_потерянного():
+    окно = [запись(ident=1, client_id=100, посещение=1, когда=_давно(60))]
+    будущие = [
+        запись(
+            ident=2,
+            client_id=100,
+            когда=datetime(2026, 10, 2, 12, 0, tzinfo=MOSCOW),
+        )
+    ]
+    assert стали_потерянными(окно, будущие, ДЕНЬ) == 0
+
+
+def test_приходил_после_рубежа_значит_не_потерян():
+    окно = [
+        запись(ident=1, client_id=100, посещение=1, когда=_давно(60)),
+        запись(ident=2, client_id=100, посещение=1, когда=_давно(20)),
+    ]
+    assert стали_потерянными(окно, [], ДЕНЬ) == 0
+
+
+def test_несостоявшийся_визит_на_рубеже_не_продлевает_жизнь():
+    """Не пришёл — значит и не был: рубеж считается от выполненного визита."""
+    окно = [
+        запись(ident=1, client_id=100, посещение=1, когда=_давно(60)),
+        запись(ident=2, client_id=100, посещение=-1, когда=_давно(30)),
+    ]
+    assert стали_потерянными(окно, [], ДЕНЬ) == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -486,12 +537,18 @@ class ПодставнойYClients:
             return {"data": []}
         начало = date.fromisoformat(params["start_date"])
         конец = date.fromisoformat(params["end_date"])
+        кого = params.get("client_id")
         свои = [
             з
             for з in self.записи
             if начало <= datetime.fromisoformat(з["datetime"]).date() <= конец
+            and (кого is None or (з.get("client") or {}).get("id") == кого)
         ]
         return {"data": свои, "meta": {"total_count": len(свои)}}
+
+
+def не_про_историю(предупреждения: list[str]) -> bool:
+    return not any("История визитов" in w for w in предупреждения)
 
 
 @pytest.mark.asyncio
@@ -510,9 +567,9 @@ async def test_открытие_собирается_из_ответа_yclients(
     assert снимок["plan"] == 3500
     assert снимок["masters_working"] == 1
     assert снимок["masters"][0]["staff_id"] == КСЕНИЯ
-    # История визитов ещё не подключена — не нули, а прямое «нет данных».
-    assert снимок["clients"] == {"new": None, "second": None, "will_be_regular": None}
-    assert any("История визитов" in w for w in снимок["warnings"])
+    # У обоих записанных прошлых визитов в истории нет — оба новые.
+    assert снимок["clients"] == {"new": 2, "second": 0, "will_be_regular": 0}
+    assert не_про_историю(снимок["warnings"])
 
 
 @pytest.mark.asyncio
@@ -539,4 +596,76 @@ async def test_закрытие_считает_факт_и_следующую_з
     assert снимок["services_revenue"] == 3500
     assert снимок["products_revenue"] == 0
     assert снимок["clients"] == {"booked_next": 1, "not_booked": 1}
+    assert снимок["completed"] == {"new": 2, "became_regular": 0}
+    assert снимок["lost_today"] == 0
     assert снимок["integrity_failures"] == []
+
+
+@pytest.mark.asyncio
+async def test_история_клиента_берётся_поимённо(monkeypatch):
+    """Прошлые визиты считаются по его собственной истории, а не по окну базы."""
+    from app.services import shift
+
+    прошлые = [
+        запись(
+            ident=10 + i,
+            client_id=100,
+            посещение=1,
+            когда=datetime(2026, 3 + i, 10, 12, 0, tzinfo=MOSCOW),
+        )
+        for i in range(4)
+    ]
+    записи = [*прошлые, запись(ident=1, client_id=100)]
+    monkeypatch.setattr(shift, "YClientsClient", lambda: ПодставнойYClients(записи))
+
+    снимок = await shift.собрать_открытие(ДЕНЬ)
+
+    # Четыре визита до сегодняшнего — сегодня может стать пятым.
+    assert снимок["clients"] == {"new": 0, "second": 0, "will_be_regular": 1}
+
+
+@pytest.mark.asyncio
+async def test_проигнорированный_фильтр_client_id_не_даёт_чужих_визитов(monkeypatch):
+    """Если YCLIENTS перестанет отбирать по client_id, счёт станет ложным.
+
+    Молча принять чужие визиты нельзя: клиент с первым визитом получил бы
+    пятый и уехал бы в «постоянные». Лучше честное «данные недоступны».
+    """
+    from app.services import shift
+
+    class БезФильтра(ПодставнойYClients):
+        async def _get(self, path, params=None):
+            params = dict(params or {})
+            params.pop("client_id", None)
+            return await super()._get(path, params)
+
+    записи = [
+        запись(ident=1, client_id=100),
+        запись(ident=2, client_id=999, посещение=1, когда=_давно(30)),
+    ]
+    monkeypatch.setattr(shift, "YClientsClient", lambda: БезФильтра(записи))
+
+    снимок = await shift.собрать_открытие(ДЕНЬ)
+
+    assert снимок["clients"] == {"new": None, "second": None, "will_be_regular": None}
+
+
+@pytest.mark.asyncio
+async def test_упавший_запрос_истории_даёт_нет_данных_а_не_нули(monkeypatch):
+    """§33 ТЗ: недосчитанная история хуже её отсутствия — цифры выйдут ложными."""
+    from app.services import shift
+
+    class Падающий(ПодставнойYClients):
+        async def _get(self, path, params=None):
+            if (params or {}).get("client_id"):
+                raise RuntimeError("YCLIENTS не ответил")
+            return await super()._get(path, params)
+
+    monkeypatch.setattr(
+        shift, "YClientsClient", lambda: Падающий([запись(ident=1, client_id=100)])
+    )
+
+    снимок = await shift.собрать_открытие(ДЕНЬ)
+
+    assert снимок["clients"] == {"new": None, "second": None, "will_be_regular": None}
+    assert any("История визитов" in w for w in снимок["warnings"])
