@@ -152,3 +152,14 @@ table {
 .dark ::-webkit-scrollbar-thumb {
   background: var(--color-line);
 }
+
+/* Recharts вешает tabindex на svg графика, и по клику браузер обводит чёрной
+   рамкой всю область — не тот столбец, по которому щёлкнули, а весь блок.
+   Подсказки такая рамка не даёт, только мешает; значения столбцов подписаны
+   прямо на них, так что без неё ничего не теряется. */
+.recharts-wrapper:focus,
+.recharts-surface:focus,
+.recharts-wrapper:focus-visible,
+.recharts-surface:focus-visible {
+  outline: none;
+}

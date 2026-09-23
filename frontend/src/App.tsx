@@ -26,6 +26,7 @@ import {
 import { useDark, палитраГрафика } from "./тема";
 import ClientBasePage from "./ClientBasePage";
 import BarberMonthPage from "./BarberMonthPage";
+import BasePulsePage from "./BasePulsePage";
 import { ClientCounters } from "./ClientCounters";
 import { MetricChart, type MetricPoint, type ТонГрафика } from "./MetricChart";
 import logo from "./assets/logo.png";
@@ -137,7 +138,7 @@ interface PlanFactSummary {
 // прятать пункты меню — это удобство, а не защита. Мастер, зашедший по
 // прямому адресу, всё равно получит от сервера только свою строку.
 const PAGES_BY_ROLE: Record<string, string[]> = {
-  owner: ["planfact", "bookings", "payroll", "clients"],
+  owner: ["planfact", "bookings", "payroll", "pulse", "clients"],
   // Расчёт ЗП администратору не показываем — это дело управляющего.
   // Решение владельца 18.09.2026.
   operator: ["clients"],
@@ -148,6 +149,7 @@ const NAV = [
   { id: "planfact", label: "План-факт", icon: CreditCard },
   { id: "bookings", label: "Записи за месяц", icon: CalendarClock },
   { id: "payroll", label: "Расчёт ЗП", icon: Wallet },
+  { id: "pulse", label: "Пульс базы", icon: Activity },
   { id: "clients", label: "Клиенты", icon: Users },
 ];
 
@@ -1933,6 +1935,7 @@ export default function App() {
               {page === "planfact" && <PlanFactPage />}
               {page === "bookings" && <BookingsPage />}
               {page === "payroll" && <BarberMonthPage payroll />}
+              {page === "pulse" && <BasePulsePage />}
               {page === "clients" && <ClientBasePage role={role} />}
             </PageBoundary>
           )}

@@ -72,6 +72,26 @@ async def metric_history(
     return await client_base.backfill_metric_history(db, days)
 
 
+@router.get("/pulse")
+async def pulse(db: AsyncSession = Depends(get_db)) -> dict:
+    """Четыре сегмента базы в разрезе мастеров — данные для гистограмм.
+
+    Решение владельца 23.09.2026. Подробности разбивки:
+    app/services/client_base.py:classify_client.
+    """
+    return await client_base.build_base_pulse(db)
+
+
+@router.get("/pulse-clients")
+async def pulse_clients(
+    segment: str = Query(..., description="new|loyal|regular|lost"),
+    staff_id: int = Query(..., description="yclients_id мастера, 0 — без своего мастера"),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """Поимённо те, кто стоит за одним столбцом гистограммы «Пульса базы»."""
+    return await client_base.get_pulse_clients(db, segment, staff_id)
+
+
 @router.get("/clients")
 async def clients_by_segment(
     segment: str = Query(..., description="active|due|risk|late|lost"),
