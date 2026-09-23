@@ -71,6 +71,12 @@ DOMAIN=director.rublbarber.ru ./deploy.sh
 | GET | `/api/client-base/*` | Сегменты, снапшоты, очередь контактов |
 | GET | `/api/finance/*` | Час / день / месяц, план |
 | POST | `/api/ai/report` | Управленческий отчёт за период (расчёт по правилам) |
+| GET | `/api/shift/today` | Состояние смены: открыта, закрыта, что ушло в Telegram |
+| POST | `/api/shift/open` | Снимок на утро: план, мастера, клиенты |
+| POST | `/api/shift/close` | Факт за день — пересчитывается заново |
+| POST | `/api/shift/times` | Время прихода или ухода мастеров (только вручную) |
+| GET | `/api/shift/preview` | Текст сообщения перед отправкой |
+| POST | `/api/shift/send` | Отправить открытие или закрытие в Telegram |
 | GET | `/api/stories/generate` | Отрисовать сторис |
 | POST | `/api/stories/send` | Отправить сторис в Telegram |
 | POST | `/api/sync/trigger` | Запустить синхронизацию |
@@ -147,6 +153,7 @@ rubl-director/
 │   │   │   ├── slots.py           # расчёт свободных окон
 │   │   │   ├── sync.py            # YCLIENTS → PostgreSQL
 │   │   │   ├── kpi.py, finance.py, client_base.py, ai.py
+│   │   │   ├── shift.py, shift_store.py, telegram.py  # смена: расчёт, хранение, отправка
 │   │   │   └── stories.py, story_preview.py
 │   │   ├── models/, repositories/, schemas/
 │   │   ├── config.py              # валидация настроек

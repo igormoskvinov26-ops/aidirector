@@ -48,6 +48,10 @@ def client() -> TestClient:
     async def payroll() -> dict:
         return {"masters": []}
 
+    @app.get("/api/shift/today")
+    async def shift_today() -> dict:
+        return {"exists": False}
+
     @app.get("/api/brand-new-route")
     async def brand_new() -> dict:
         return {"ok": True}
@@ -115,6 +119,22 @@ def test_owner_reaches_everything(client):
 
 def test_operator_reaches_call_base(client):
     assert client.get("/api/client-base/tasks", headers=OPERATOR).status_code == 200
+
+
+def test_operator_reaches_shift(client):
+    """Смену открывает и закрывает администратор. Решение владельца 23.09.2026."""
+    assert client.get("/api/shift/today", headers=OPERATOR).status_code == 200
+
+
+def test_master_denied_shift(client, monkeypatch):
+    """Мастер заходит только за своими деньгами — смена не его дело."""
+    monkeypatch.setattr(
+        settings,
+        "master_accounts",
+        [{"login": "ksenia", "password": "master-password-x", "staff_id": 5659614}],
+    )
+    master = _auth("ksenia", "master-password-x")
+    assert client.get("/api/shift/today", headers=master).status_code == 403
 
 
 def test_operator_denied_finance(client):

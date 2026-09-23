@@ -4,6 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
     Boolean,
     Date,
@@ -341,6 +342,56 @@ class DailySegmentSnapshot(Base):
     snapshot_date: Mapped[date] = mapped_column(Date, primary_key=True)
     segment_code: Mapped[str] = mapped_column(String(40), primary_key=True)
     clients_count: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class Shift(Base):
+    """Одна смена барбершопа: утренний план и вечерний факт.
+
+    Снимки хранятся разобранными по показателям, а не готовым текстом
+    сообщения: по тексту потом нельзя построить ни одного отчёта, а вопрос
+    «как менялся план по дням» задаётся первым.
+
+    На дату — ровно одна смена: повторное нажатие «Открыть смену» должно
+    показывать уже открытую, а не заводить вторую (§31 ТЗ).
+    """
+
+    __tablename__ = "shifts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    shift_date: Mapped[date] = mapped_column(Date, unique=True, index=True)
+    opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    opening_snapshot: Mapped[dict | None] = mapped_column(JSON)
+    closing_snapshot: Mapped[dict | None] = mapped_column(JSON)
+    opening_telegram_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    opening_telegram_message_id: Mapped[int | None] = mapped_column(BigInteger)
+    closing_telegram_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    closing_telegram_message_id: Mapped[int | None] = mapped_column(BigInteger)
+
+    employees: Mapped[list["ShiftEmployee"]] = relationship(back_populates="shift")
+
+
+class ShiftEmployee(Base):
+    """Мастер в смене: во сколько пришёл и во сколько ушёл.
+
+    Имя сохраняется отдельной копией: сотрудника могут переименовать или
+    уволить, а отчёт за прошлый вторник должен остаться читаемым.
+
+    Время прихода и ухода вводит администратор вручную (§29 ТЗ). Вычислять
+    его по первой записи или расписанию запрещено: это разные вещи.
+    """
+
+    __tablename__ = "shift_employees"
+    __table_args__ = (UniqueConstraint("shift_id", "staff_id", name="uq_shift_employee"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    shift_id: Mapped[int] = mapped_column(ForeignKey("shifts.id"), index=True)
+    staff_id: Mapped[int] = mapped_column(Integer, index=True)
+    staff_name_snapshot: Mapped[str] = mapped_column(String(255))
+    arrival_time: Mapped[str | None] = mapped_column(String(5))
+    departure_time: Mapped[str | None] = mapped_column(String(5))
+
+    shift: Mapped["Shift"] = relationship(back_populates="employees")
 
 
 class SyncRun(Base):

@@ -26,6 +26,7 @@ from app.api.routes.dashboard import router as dashboard_router
 from app.api.routes.employees import router as employees_router
 from app.api.routes.finance import router as finance_router
 from app.api.routes.operations import router as operations_router
+from app.api.routes.shift import router as shift_router
 from app.api.routes.stories import router as stories_router
 from app.api.routes.sync import router as sync_router
 from app.config import settings
@@ -46,7 +47,9 @@ PUBLIC_PATHS = {"/health"}
 # Запуск выгрузки (/api/sync/trigger) остаётся только у владельца.
 SYNC_STATE_PREFIX = "/api/sync/status"
 
-OPERATOR_API_PREFIXES = ("/api/client-base", "/api/me", SYNC_STATE_PREFIX)
+# Смену открывает и закрывает администратор — значит, раздел смены ему открыт.
+# Решение владельца 23.09.2026.
+OPERATOR_API_PREFIXES = ("/api/client-base", "/api/shift", "/api/me", SYNC_STATE_PREFIX)
 
 # Мастер заходит только за своими деньгами. Внутри /api/barbers ответ ещё и
 # урезается до его собственной строки — одного лишь доступа к пути мало.
@@ -188,6 +191,7 @@ for r in (
     employees_router,
     finance_router,
     operations_router,
+    shift_router,
     stories_router,
     sync_router,
 ):
