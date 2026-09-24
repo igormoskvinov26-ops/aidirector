@@ -56,6 +56,22 @@ OPERATOR_API_PREFIXES = ("/api/client-base", "/api/shift", "/api/me", SYNC_STATE
 MASTER_API_PREFIXES = ("/api/barbers", "/api/me", SYNC_STATE_PREFIX)
 
 
+def _same(введено: str, ожидается: str) -> bool:
+    """Сравнение пары строк за одинаковое время, при любых символах.
+
+    Сравниваются байты, а не строки. secrets.compare_digest со строками
+    отказывается работать, если в любой из них есть хоть один символ вне
+    латиницы: он поднимает TypeError. На живой установке это означало, что
+    достаточно одной кириллической буквы в пароле — своём или просто
+    набранном в русской раскладке, — и вход переставал работать вообще у
+    всех, причём с ошибкой сервера вместо отказа в пароле.
+
+    Байты сравниваются за то же постоянное время, так что защита от подбора
+    по времени ответа остаётся.
+    """
+    return secrets.compare_digest(введено.encode("utf-8"), ожидается.encode("utf-8"))
+
+
 def _resolve_identity(login: str, password: str) -> tuple[str, int | None] | None:
     """Роль и привязка к мастеру по паре логин-пароль, либо None.
 
@@ -64,10 +80,10 @@ def _resolve_identity(login: str, password: str) -> tuple[str, int | None] | Non
     """
     matched: tuple[str, int | None] | None = None
 
-    owner_login_ok = secrets.compare_digest(login, settings.owner_login)
-    owner_password_ok = secrets.compare_digest(password, settings.owner_password)
-    operator_login_ok = secrets.compare_digest(login, settings.operator_login)
-    operator_password_ok = secrets.compare_digest(password, settings.operator_password)
+    owner_login_ok = _same(login, settings.owner_login)
+    owner_password_ok = _same(password, settings.owner_password)
+    operator_login_ok = _same(login, settings.operator_login)
+    operator_password_ok = _same(password, settings.operator_password)
 
     if owner_login_ok and owner_password_ok:
         matched = (ROLE_OWNER, None)
@@ -75,8 +91,8 @@ def _resolve_identity(login: str, password: str) -> tuple[str, int | None] | Non
         matched = (ROLE_OPERATOR, None)
 
     for account in settings.master_accounts:
-        login_ok = secrets.compare_digest(login, str(account.get("login", "")))
-        password_ok = secrets.compare_digest(password, str(account.get("password", "")))
+        login_ok = _same(login, str(account.get("login", "")))
+        password_ok = _same(password, str(account.get("password", "")))
         if login_ok and password_ok and matched is None:
             matched = (ROLE_MASTER, int(account["staff_id"]))
 

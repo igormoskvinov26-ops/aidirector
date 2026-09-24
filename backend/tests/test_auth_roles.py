@@ -96,6 +96,29 @@ def test_master_account_carries_its_staff_id(monkeypatch):
     assert _resolve_identity("ksenia", "wrong-password") is None
 
 
+def test_кириллица_в_пароле_не_ломает_вход(monkeypatch):
+    """Один символ вне латиницы — и вход переставал работать у всех.
+
+    secrets.compare_digest со строками поднимает TypeError, если в любой из
+    них есть не-ASCII. Это не отказ в пароле, а ошибка сервера, и случалась
+    она не только от своего пароля, но и от чужого, набранного в русской
+    раскладке: страдали разом все учётные записи.
+    """
+    monkeypatch.setattr(settings, "owner_login", "Хозяин")
+    monkeypatch.setattr(settings, "owner_password", "пароль-с-кириллицей")
+
+    assert _resolve_identity("Хозяин", "пароль-с-кириллицей") == (ROLE_OWNER, None)
+    assert _resolve_identity("Хозяин", "не тот пароль") is None
+    assert _resolve_identity("Хозяин", "ascii-password") is None
+
+
+def test_набранное_в_русской_раскладке_отклоняется_а_не_роняет(client, monkeypatch):
+    """Вводят «gfhjkm» вместо пароля — должен быть отказ, а не ошибка 500."""
+    monkeypatch.setattr(settings, "owner_password", "latin-password")
+    r = client.get("/api/client-base/tasks", headers=_auth(settings.owner_login, "пароль"))
+    assert r.status_code == 401
+
+
 def test_health_is_public(client):
     assert client.get("/health").status_code == 200
 
