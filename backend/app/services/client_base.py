@@ -399,92 +399,102 @@ async def backfill_metric_history(session: AsyncSession, days: int = 90) -> dict
 
 
 # --------------------------------------------------------------------------- #
-# Пульс базы: четыре сегмента в разрезе мастеров
+# Пульс базы: пять сегментов, столбец — последний мастер клиента
 # --------------------------------------------------------------------------- #
 
-# Решение владельца 23.09.2026. Сегменты непересекающиеся: постоянный не
-# считается заодно и лояльным, иначе столбцы в сумме дадут больше, чем есть
+# Решение владельца 25.09.2026. Сегмент — по числу визитов клиента во всём
+# салоне, не к одному мастеру: прежняя приписка «к своему мастеру по частоте
+# визитов» с отдельным столбцом для «разрозненных» была источником путаницы
+# и двойного счёта. Столбец гистограммы теперь — просто тот, кто вёл
+# последний завершённый визит: одно значение на клиента, без вычислений.
+#
+# Сегменты непересекающиеся и покрывают всю базу без остатка: постоянный не
+# считается заодно лояльным, иначе столбцы в сумме дадут больше, чем есть
 # клиентов, и гистограмме нельзя будет верить.
-LOYAL_MIN_VISITS = 2
-# Порог постоянного — пять визитов (решение владельца 23.09.2026). То же
-# число действует в модуле смены: определение у постоянного клиента одно на
-# всё приложение.
-REGULAR_MIN_VISITS = 5
+SECOND_VISITS = 2
+LOYAL_MAX_VISITS = 9
 
-PULSE_SEGMENTS = ("new", "loyal", "regular", "lost")
+PULSE_SEGMENTS = ("new", "second", "loyal", "vip", "lost")
 PULSE_LABELS = {
     "new": "Новые",
+    "second": "Второй визит",
     "loyal": "Лояльные",
-    "regular": "Постоянные",
+    "vip": "VIP",
     "lost": "Потерянные",
 }
 
-# Столбец «без своего мастера»: клиент ходит в салон, но ни к одному барберу
-# не набрал даже двух визитов. Ноль, а не None, — чтобы ключ ячейки был одного
-# типа и в счётчиках, и в адресе запроса за списком клиентов.
+# Столбец «без своего мастера»: последний визит клиента вёл не барбер
+# (администратор) либо мастер уже не значится в штате. Ноль, а не None, —
+# чтобы ключ ячейки был одного типа и в счётчиках, и в адресе запроса за
+# списком клиентов.
 NO_MASTER = 0
 NO_MASTER_LABEL = "Без своего мастера"
 
 
 def classify_client(
-    visits_by_master: dict[int, list[date]],
+    visits: list[date],
+    last_master: int | None,
     barber_ids: set[int],
     has_future_booking: bool,
     today: date,
 ) -> tuple[str, int] | None:
     """Сегмент клиента и столбец, в который он попадает.
 
-    Правило приписки (решение владельца 23.09.2026): клиент идёт к тому
-    мастеру, у которого был чаще; при равенстве — к тому, у кого был
-    последним, это его нынешний мастер. Если ни у одного барбера не набрал
-    двух визитов, а в салоне их два и больше, — попадает в столбец
-    NO_MASTER: ходит в салон, но ничей. Туда же клиент, которого обслуживал
-    не барбер (администратор) — своего мастера у него тоже нет.
+    Столбец — последний мастер, который вёл завершённый визит клиента.
+    Если это был не барбер (администратор) или мастер не найден в штате —
+    столбец NO_MASTER. Никакой приписки «по частоте» и разбора разрозненных
+    визитов: одно значение, вычисленное заранее в SQL-запросе, а не здесь.
 
-    Один визит — исключение: такой клиент приписан к тому, кто его принял,
-    даже если визит единственный. Не удержать пришедшего — это про мастера,
-    и прятать такой случай в «ничьих» значило бы снять с него вопрос.
+    Сегмент — по общему числу визитов, независимо от того, к какому мастеру
+    они были: 1 → новый, 2 → второй визит, 3–9 → лояльный, 10 и больше →
+    VIP. Свежесть последнего визита это переопределяет: 60 дней и больше без
+    визита и без записи вперёд — потерянный, каким бы ни было число визитов.
 
     Возвращает None для клиента без единого завершённого визита: он ещё не
     часть базы, считать его не в чем.
     """
-    all_dates = [d for dates in visits_by_master.values() for d in dates]
-    if not all_dates:
+    if not visits:
         return None
 
-    у_барберов = {sid: ds for sid, ds in visits_by_master.items() if sid in barber_ids}
-    if у_барберов:
-        свой, визиты_к_своему = max(у_барберов.items(), key=lambda p: (len(p[1]), max(p[1])))
-    else:
-        свой, визиты_к_своему = NO_MASTER, []
+    столбец = last_master if last_master in barber_ids else NO_MASTER
 
-    разрознены = len(визиты_к_своему) < LOYAL_MIN_VISITS and len(all_dates) >= LOYAL_MIN_VISITS
-    столбец = NO_MASTER if разрознены else свой
-
-    if max(all_dates) < today - timedelta(days=LOST_AFTER_DAYS) and not has_future_booking:
+    if max(visits) < today - timedelta(days=LOST_AFTER_DAYS) and not has_future_booking:
         return "lost", столбец
-    if len(all_dates) == 1:
+
+    n = len(visits)
+    if n == 1:
         return "new", столбец
+    if n == SECOND_VISITS:
+        return "second", столбец
+    if n <= LOYAL_MAX_VISITS:
+        return "loyal", столбец
+    return "vip", столбец
 
-    визитов = len(all_dates) if столбец == NO_MASTER else len(визиты_к_своему)
-    return ("regular" if визитов >= REGULAR_MIN_VISITS else "loyal"), столбец
 
-
-async def _visits_by_client_and_master(
+async def _client_visit_summary(
     session: AsyncSession,
-) -> dict[int, dict[int, list[date]]]:
-    """client_id → yclients_id мастера → даты завершённых визитов."""
+) -> tuple[dict[int, list[date]], dict[int, int]]:
+    """client_id → даты завершённых визитов, и client_id → мастер последнего из них.
+
+    Одним запросом вместо группировки по мастеру: строки идут по возрастанию
+    datetime внутри каждого клиента, поэтому последняя строка на клиента —
+    это и есть его последний визит, а её мастер — «последний мастер» без
+    дополнительных вычислений.
+    """
     rows = await session.execute(
         select(Visit.client_id, Employee.yclients_id, Visit.datetime)
         .join(Employee, Employee.id == Visit.employee_id)
         .where(Visit.status == "completed")
         .order_by(Visit.client_id, Visit.datetime)
     )
-    result: dict[int, dict[int, list[date]]] = defaultdict(lambda: defaultdict(list))
+    даты: dict[int, list[date]] = defaultdict(list)
+    последний_мастер: dict[int, int] = {}
     for client_id, staff_id, dt in rows:
-        if dt is not None:
-            result[client_id][int(staff_id)].append(_to_moscow_date(dt))
-    return result
+        if dt is None:
+            continue
+        даты[client_id].append(_to_moscow_date(dt))
+        последний_мастер[client_id] = int(staff_id)  # строки идут по возрастанию datetime
+    return даты, последний_мастер
 
 
 async def _clients_with_future_booking(session: AsyncSession) -> set[int]:
@@ -512,20 +522,22 @@ def _барберы() -> list[dict]:
 
 
 async def build_base_pulse(session: AsyncSession) -> dict:
-    """Четыре сегмента базы в разрезе мастеров — данные для гистограмм.
+    """Пять сегментов базы в разрезе последнего мастера — данные для гистограмм.
 
     Каждый клиент попадает ровно в одну ячейку, поэтому сумма всех столбцов
     всех сегментов равна размеру базы: это и проверяется полем base_total.
     Без такого свойства по гистограмме нельзя судить, растёт база или нет.
     """
-    visits = await _visits_by_client_and_master(session)
+    даты, последний_мастер = await _client_visit_summary(session)
     future = await _clients_with_future_booking(session)
     today = moscow_today()
     barber_ids = {int(rule["staff_id"]) for rule in settings.barber_payroll_rules}
 
     counts: dict[str, dict[int, int]] = {code: defaultdict(int) for code in PULSE_SEGMENTS}
-    for client_id, by_master in visits.items():
-        итог = classify_client(by_master, barber_ids, client_id in future, today)
+    for client_id, visits in даты.items():
+        итог = classify_client(
+            visits, последний_мастер.get(client_id), barber_ids, client_id in future, today
+        )
         if итог is None:
             continue
         segment, column = итог
@@ -560,24 +572,23 @@ async def get_pulse_clients(session: AsyncSession, segment: str, staff_id: int) 
     if segment not in PULSE_SEGMENTS:
         return []
 
-    visits = await _visits_by_client_and_master(session)
+    даты, последний_мастер = await _client_visit_summary(session)
     future = await _clients_with_future_booking(session)
     today = moscow_today()
     barber_ids = {int(rule["staff_id"]) for rule in settings.barber_payroll_rules}
     имена = {int(r["staff_id"]): r["name"] for r in settings.barber_payroll_rules}
 
     отобранные: dict[int, dict] = {}
-    for client_id, by_master in visits.items():
-        итог = classify_client(by_master, barber_ids, client_id in future, today)
+    for client_id, visits in даты.items():
+        итог = classify_client(
+            visits, последний_мастер.get(client_id), barber_ids, client_id in future, today
+        )
         if итог is None or итог != (segment, staff_id):
             continue
-        все_даты = [d for dates in by_master.values() for d in dates]
-        последний = max(все_даты)
-        свои = by_master.get(staff_id, []) if staff_id != NO_MASTER else []
+        последний = max(visits)
         отобранные[client_id] = {
             "client_id": client_id,
-            "visits_total": len(все_даты),
-            "visits_to_master": len(свои),
+            "visits_total": len(visits),
             "master": имена.get(staff_id),
             "last_visit": последний.isoformat(),
             "days_since": (today - последний).days,
