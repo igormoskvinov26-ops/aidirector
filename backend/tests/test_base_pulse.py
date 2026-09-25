@@ -27,6 +27,7 @@ from app.services.client_base import (
     classify_client,
     get_pulse_clients,
     moscow_today,
+    в_зоне_риска,
 )
 
 КСЕНИЯ = 5659614  # settings.barber_payroll_rules в тестовом .env
@@ -250,3 +251,69 @@ async def test_список_ничейных_клиентов_доступен_�
     список = await get_pulse_clients(session, "new", NO_MASTER)
     assert [c["name"] for c in список] == ["Обслуживал администратор"]
     assert список[0]["master"] is None
+
+
+# --------------------------------------------------------------------------- #
+# Зона риска: не потерян, но пора напомнить (решение владельца 25.09.2026)
+# --------------------------------------------------------------------------- #
+
+
+def test_29_дней_это_уже_зона_риска():
+    assert в_зоне_риска(moscow_today() - timedelta(days=29), False, moscow_today()) is True
+
+
+def test_28_дней_ещё_не_риск():
+    """Порог строгий: «более 28» — значит 28 самих ещё не считаются."""
+    assert в_зоне_риска(moscow_today() - timedelta(days=28), False, moscow_today()) is False
+
+
+def test_59_дней_ещё_риск_60_уже_потерянный_а_не_риск():
+    assert в_зоне_риска(moscow_today() - timedelta(days=59), False, moscow_today()) is True
+    assert в_зоне_риска(moscow_today() - timedelta(days=60), False, moscow_today()) is False
+
+
+def test_будущая_запись_снимает_зону_риска():
+    assert в_зоне_риска(moscow_today() - timedelta(days=40), True, moscow_today()) is False
+
+
+@pytest.mark.asyncio
+async def test_риск_не_входит_в_base_total_пяти_сегментов(session: AsyncSession):
+    """Зона риска пересекается с сегментами (не важно число визитов), поэтому
+    она не должна прибавляться к сумме, иначе появятся клиенты сверх базы."""
+    await _seed(session)
+    await _клиент(session, 1, "В зоне риска, но новый")
+    await _визит(session, 1, 1, days_ago=40)
+    await session.commit()
+
+    итог = await build_base_pulse(session)
+    assert итог["base_total"] == 1
+    assert итог["risk_zone"]["total"] == 1
+    по_столбцам = sum(c["count"] for s in итог["segments"] for c in s["columns"])
+    assert по_столбцам == 1
+
+
+@pytest.mark.asyncio
+async def test_клик_по_зоне_риска_отдаёт_клиента(session: AsyncSession):
+    await _seed(session)
+    await _клиент(session, 1, "Давно не было")
+    await _визит(session, 1, 1, days_ago=45)
+    await _клиент(session, 2, "Был недавно")
+    await _визит(session, 2, 1, days_ago=5)
+    await session.commit()
+
+    список = await get_pulse_clients(session, "risk", КСЕНИЯ)
+    assert [c["name"] for c in список] == ["Давно не было"]
+    assert список[0]["days_since"] == 45
+
+
+@pytest.mark.asyncio
+async def test_зона_риска_сортирована_ближе_к_порогу_вперёд(session: AsyncSession):
+    await _seed(session)
+    await _клиент(session, 1, "35 дней")
+    await _визит(session, 1, 1, days_ago=35)
+    await _клиент(session, 2, "55 дней")
+    await _визит(session, 2, 1, days_ago=55)
+    await session.commit()
+
+    список = await get_pulse_clients(session, "risk", КСЕНИЯ)
+    assert [c["name"] for c in список] == ["55 дней", "35 дней"]

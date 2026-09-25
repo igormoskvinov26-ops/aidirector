@@ -423,12 +423,32 @@ PULSE_LABELS = {
     "lost": "Потерянные",
 }
 
+# Зона риска (решение владельца 25.09.2026): клиент ещё не потерян, но
+# последний визит был давно — самое время напомнить о записи, пока он не
+# перешёл в потерянные. Отдельный блок, а не сегмент: он пересекается с
+# любым из пяти выше (новый или VIP — не важно, важна только свежесть
+# визита), поэтому в base_total не входит.
+RISK_ZONE_MIN_DAYS = 28
+RISK_ZONE_CODE = "risk"
+RISK_ZONE_LABEL = "Зона риска"
+
 # Столбец «без своего мастера»: последний визит клиента вёл не барбер
 # (администратор) либо мастер уже не значится в штате. Ноль, а не None, —
 # чтобы ключ ячейки был одного типа и в счётчиках, и в адресе запроса за
 # списком клиентов.
 NO_MASTER = 0
 NO_MASTER_LABEL = "Без своего мастера"
+
+
+def _столбец_мастера(last_master: int | None, barber_ids: set[int]) -> int:
+    """Последний мастер клиента, если это барбер, иначе NO_MASTER.
+
+    Общая точка для сегментов «Пульса базы» и для «Зоны риска»: и там, и там
+    столбец гистограммы — один и тот же последний мастер, определённый
+    одинаково, чтобы клиент не оказывался в разных столбцах на соседних
+    графиках.
+    """
+    return last_master if last_master in barber_ids else NO_MASTER
 
 
 def classify_client(
@@ -456,7 +476,7 @@ def classify_client(
     if not visits:
         return None
 
-    столбец = last_master if last_master in barber_ids else NO_MASTER
+    столбец = _столбец_мастера(last_master, barber_ids)
 
     if max(visits) < today - timedelta(days=LOST_AFTER_DAYS) and not has_future_booking:
         return "lost", столбец
@@ -469,6 +489,23 @@ def classify_client(
     if n <= LOYAL_MAX_VISITS:
         return "loyal", столбец
     return "vip", столбец
+
+
+def в_зоне_риска(last_visit: date, has_future_booking: bool, today: date) -> bool:
+    """Клиент не потерян, но давно не был — самое время напомнить о записи.
+
+    Порог владельца 25.09.2026: больше 28 и меньше 60 дней с последнего
+    визита. Нижняя граница отделяет зону риска от тех, кто был недавно и
+    напоминание ещё не нужно; верхняя — LOST_AFTER_DAYS, тот же порог, что
+    и у «потерянных»: после него звонить поздно, клиент уже в другом списке.
+
+    Запись вперёд снимает необходимость напоминать — как и для «потерянных»:
+    звать в салон того, кто уже записан, незачем.
+    """
+    if has_future_booking:
+        return False
+    дней = (today - last_visit).days
+    return RISK_ZONE_MIN_DAYS < дней < LOST_AFTER_DAYS
 
 
 async def _client_visit_summary(
@@ -522,54 +559,72 @@ def _барберы() -> list[dict]:
 
 
 async def build_base_pulse(session: AsyncSession) -> dict:
-    """Пять сегментов базы в разрезе последнего мастера — данные для гистограмм.
+    """Пять сегментов базы плюс зона риска, в разрезе последнего мастера.
 
-    Каждый клиент попадает ровно в одну ячейку, поэтому сумма всех столбцов
-    всех сегментов равна размеру базы: это и проверяется полем base_total.
-    Без такого свойства по гистограмме нельзя судить, растёт база или нет.
+    Каждый клиент попадает ровно в одну ячейку из пяти сегментов, поэтому
+    сумма их столбцов равна размеру базы: это и проверяется полем
+    base_total. Без такого свойства по гистограмме нельзя судить, растёт
+    база или нет. Зона риска в этот подсчёт не входит: она пересекается с
+    любым из пяти сегментов (важна только свежесть визита, а не их число).
     """
     даты, последний_мастер = await _client_visit_summary(session)
     future = await _clients_with_future_booking(session)
     today = moscow_today()
     barber_ids = {int(rule["staff_id"]) for rule in settings.barber_payroll_rules}
+    столбцы = _столбцы(_барберы())
 
     counts: dict[str, dict[int, int]] = {code: defaultdict(int) for code in PULSE_SEGMENTS}
+    risk_counts: dict[int, int] = defaultdict(int)
     for client_id, visits in даты.items():
-        итог = classify_client(
-            visits, последний_мастер.get(client_id), barber_ids, client_id in future, today
-        )
-        if итог is None:
-            continue
-        segment, column = итог
-        counts[segment][column] += 1
+        has_future = client_id in future
+        мастер = последний_мастер.get(client_id)
+        столбец = _столбец_мастера(мастер, barber_ids)
 
-    столбцы = _столбцы(_барберы())
+        итог = classify_client(visits, мастер, barber_ids, has_future, today)
+        if итог is not None:
+            segment, column = итог
+            counts[segment][column] += 1
+
+        if в_зоне_риска(max(visits), has_future, today):
+            risk_counts[столбец] += 1
+
     segments = [
         {
             "code": code,
             "label": PULSE_LABELS[code],
             "total": sum(counts[code].values()),
             "columns": [
-                {**столбец, "count": counts[code].get(столбец["staff_id"], 0)}
-                for столбец in столбцы
+                {**с, "count": counts[code].get(с["staff_id"], 0)} for с in столбцы
             ],
         }
         for code in PULSE_SEGMENTS
     ]
+    risk_zone = {
+        "code": RISK_ZONE_CODE,
+        "label": RISK_ZONE_LABEL,
+        "total": sum(risk_counts.values()),
+        "columns": [
+            {**с, "count": risk_counts.get(с["staff_id"], 0)} for с in столбцы
+        ],
+    }
     return {
         "segments": segments,
+        "risk_zone": risk_zone,
         "base_total": sum(s["total"] for s in segments),
         "lost_after_days": LOST_AFTER_DAYS,
+        "risk_zone_min_days": RISK_ZONE_MIN_DAYS,
     }
 
 
 async def get_pulse_clients(session: AsyncSession, segment: str, staff_id: int) -> list[dict]:
     """Поимённо те, кто стоит за одним столбцом гистограммы.
 
-    Потерянные отсортированы по числу визитов: вернуть постоянного клиента
-    важнее, чем того, кто был однажды. Остальные — по свежести визита.
+    Потерянные отсортированы по числу визитов: вернуть VIP важнее, чем
+    того, кто был однажды. Зона риска — по свежести визита наоборот: чем
+    ближе к порогу потерянных, тем срочнее звонить, такие идут первыми.
+    Остальные — по свежести визита, недавние впереди.
     """
-    if segment not in PULSE_SEGMENTS:
+    if segment not in (*PULSE_SEGMENTS, RISK_ZONE_CODE):
         return []
 
     даты, последний_мастер = await _client_visit_summary(session)
@@ -580,12 +635,20 @@ async def get_pulse_clients(session: AsyncSession, segment: str, staff_id: int) 
 
     отобранные: dict[int, dict] = {}
     for client_id, visits in даты.items():
-        итог = classify_client(
-            visits, последний_мастер.get(client_id), barber_ids, client_id in future, today
-        )
-        if итог is None or итог != (segment, staff_id):
-            continue
+        has_future = client_id in future
         последний = max(visits)
+
+        if segment == RISK_ZONE_CODE:
+            столбец = _столбец_мастера(последний_мастер.get(client_id), barber_ids)
+            if not в_зоне_риска(последний, has_future, today) or столбец != staff_id:
+                continue
+        else:
+            итог = classify_client(
+                visits, последний_мастер.get(client_id), barber_ids, has_future, today
+            )
+            if итог is None or итог != (segment, staff_id):
+                continue
+
         отобранные[client_id] = {
             "client_id": client_id,
             "visits_total": len(visits),
@@ -611,6 +674,8 @@ async def get_pulse_clients(session: AsyncSession, segment: str, staff_id: int) 
     порядок = (
         (lambda c: (-c["visits_total"], c["days_since"]))
         if segment == "lost"
+        else (lambda c: -c["days_since"])
+        if segment == RISK_ZONE_CODE
         else (lambda c: c["days_since"])
     )
     return sorted(отобранные.values(), key=порядок)

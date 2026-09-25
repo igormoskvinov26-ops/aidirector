@@ -74,17 +74,17 @@ async def metric_history(
 
 @router.get("/pulse")
 async def pulse(db: AsyncSession = Depends(get_db)) -> dict:
-    """Четыре сегмента базы в разрезе мастеров — данные для гистограмм.
+    """Пять сегментов базы плюс зона риска, в разрезе мастеров — для гистограмм.
 
-    Решение владельца 23.09.2026. Подробности разбивки:
-    app/services/client_base.py:classify_client.
+    Решение владельца 25.09.2026. Подробности разбивки:
+    app/services/client_base.py:classify_client, :в_зоне_риска.
     """
     return await client_base.build_base_pulse(db)
 
 
 @router.get("/pulse-clients")
 async def pulse_clients(
-    segment: str = Query(..., description="new|loyal|regular|lost"),
+    segment: str = Query(..., description="new|second|loyal|vip|lost|risk"),
     staff_id: int = Query(..., description="yclients_id мастера, 0 — без своего мастера"),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:

@@ -8,8 +8,18 @@ import {
   Tooltip,
   XAxis,
 } from "recharts";
-import { Activity, Phone, X } from "lucide-react";
-import { useDark, палитраГрафика, шкалаСегментов } from "./тема";
+import {
+  BellRing,
+  Crown,
+  Heart,
+  Phone,
+  Repeat2,
+  Sparkles,
+  UserX,
+  X,
+  type LucideIcon,
+} from "lucide-react";
+import { useDark, палитраГрафика, палитраПульса } from "./тема";
 
 /** Ответ /api/client-base/pulse. */
 interface PulseColumn {
@@ -27,8 +37,10 @@ interface PulseSegment {
 
 interface PulseData {
   segments: PulseSegment[];
+  risk_zone: PulseSegment;
   base_total: number;
   lost_after_days: number;
+  risk_zone_min_days: number;
 }
 
 /** Ответ /api/client-base/pulse-clients. */
@@ -45,6 +57,17 @@ interface PulseClient {
 }
 
 const NO_MASTER = 0;
+
+/** Значок на каждую плитку — решение владельца 25.09.2026: опознаётся с
+ *  одного взгляда, раньше, чем прочитана подпись. */
+const ЗНАЧОК: Record<string, LucideIcon> = {
+  new: Sparkles,
+  second: Repeat2,
+  loyal: Heart,
+  vip: Crown,
+  lost: UserX,
+  risk: BellRing,
+};
 
 /** Пояснение под каждым блоком: из чего состоит сегмент. */
 const ПОЯСНЕНИЯ: Record<string, string> = {
@@ -66,28 +89,135 @@ function подписьСтолбца(c: PulseColumn): string {
   return c.staff_id === NO_MASTER ? "Без мастера" : c.name;
 }
 
-/** Пульс базы: пять сегментов, столбец — последний мастер — решение владельца
- *  25.09.2026.
+/** Одна плитка сегмента: значок, число, гистограмма по мастерам.
  *
- *  Каждый клиент попадает ровно в один столбец одного блока, поэтому сумма
- *  всех столбцов равна базе. Без этого по гистограмме нельзя было бы судить,
- *  растёт база или сжимается, — а это главный вопрос, ради которого страница.
+ *  Цветной левый кант и залитый значок — общий язык «профессиональных»
+ *  дашбордов: сегмент опознаётся по трём независимым каналам сразу (значок,
+ *  подпись, цвет), а не только по цвету, который часть читателей не
+ *  различает.
+ */
+function ПлиткаСегмента({
+  segment,
+  цвет,
+  доляБазы,
+  тёмная,
+  onColumnClick,
+}: {
+  segment: PulseSegment;
+  цвет: string;
+  /** Доля от базы в процентах — null для зоны риска, она не часть базы. */
+  доляБазы: number | null;
+  тёмная: boolean;
+  onColumnClick: (column: PulseColumn) => void;
+}) {
+  // Тема приходит пропсом, а не через свой useDark(): шесть плиток на
+  // странице иначе завели бы шесть собственных MutationObserver на один и
+  // тот же document.documentElement — родитель уже следит за ним один раз.
+  const цвета = палитраГрафика(тёмная);
+  const Значок = ЗНАЧОК[segment.code];
+
+  return (
+    <div
+      className="relative overflow-hidden rounded-2xl border border-milk-line dark:border-line bg-milk-card dark:bg-panel p-5 pl-6 transition-shadow hover:shadow-lg hover:shadow-black/5 dark:hover:shadow-black/30"
+      style={{ borderLeftColor: цвет, borderLeftWidth: 3 }}
+    >
+      <div className="flex items-start justify-between gap-3 mb-1">
+        <div className="flex items-center gap-2.5">
+          <div
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl"
+            style={{ background: `${цвет}1f`, color: цвет }}
+          >
+            <Значок size={17} strokeWidth={2.25} />
+          </div>
+          <h2 className="text-sm font-semibold uppercase tracking-widest text-muted-light dark:text-muted">
+            {segment.label}
+          </h2>
+        </div>
+        {доляБазы !== null && (
+          <span className="mt-0.5 text-[11px] font-medium tabular-nums text-muted-light dark:text-muted">
+            {доляБазы}%
+          </span>
+        )}
+      </div>
+      <div className="flex items-baseline gap-2 mb-1">
+        <span className="text-2xl font-bold" style={{ color: цвет }}>
+          {segment.total}
+        </span>
+      </div>
+      <p className="text-xs text-muted-light dark:text-muted mb-3">
+        {ПОЯСНЕНИЯ[segment.code] ?? ""}
+      </p>
+
+      <ResponsiveContainer width="100%" height={190}>
+        <BarChart
+          data={segment.columns}
+          margin={{ top: 22, right: 8, left: 8, bottom: 0 }}
+          barCategoryGap="28%"
+        >
+          <XAxis
+            dataKey={подписьСтолбца}
+            tick={{ fontSize: 12, fill: цвета.ось }}
+            tickLine={false}
+            axisLine={false}
+          />
+          <Tooltip
+            cursor={{ fill: тёмная ? "#ffffff0d" : "#0000000a" }}
+            contentStyle={{
+              background: цвета.подсказкаФон,
+              border: `1px solid ${цвета.подсказкаРамка}`,
+              borderRadius: "12px",
+              fontSize: 12,
+            }}
+            formatter={(value) => [`${value}`, segment.label]}
+          />
+          <Bar
+            dataKey="count"
+            radius={[4, 4, 0, 0]}
+            cursor="pointer"
+            onClick={(bar: unknown) => {
+              const точка = bar as { payload?: PulseColumn };
+              if (точка.payload) onColumnClick(точка.payload);
+            }}
+          >
+            {segment.columns.map((column) => (
+              <Cell
+                key={column.staff_id}
+                fill={цвет}
+                // «Без своего мастера» — тот же показатель, но не мастер:
+                // приглушением отделяем его от трёх настоящих столбцов.
+                fillOpacity={column.staff_id === NO_MASTER ? 0.45 : 1}
+              />
+            ))}
+            <LabelList
+              dataKey="count"
+              position="top"
+              style={{ fontSize: 13, fontWeight: 600, fill: цвета.сейчас }}
+            />
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+/** Пульс базы: пять сегментов плюс зона риска, столбец — последний мастер —
+ *  решение владельца 25.09.2026.
+ *
+ *  Каждый клиент попадает ровно в один столбец одного из пяти сегментов,
+ *  поэтому сумма их столбцов равна базе. Без этого по гистограмме нельзя
+ *  было бы судить, растёт база или сжимается, — а это главный вопрос, ради
+ *  которого страница. Зона риска — отдельный, шестой блок: она
+ *  пересекается с любым из пяти (важна только свежесть визита), поэтому в
+ *  сумму базы не входит и оформлена отдельно, как список на звонок, а не
+ *  как часть разбиения.
+ *
  *  Сегмент считается по общему числу визитов клиента во всём салоне, а
  *  столбец — просто тот, кто вёл его последний визит: без приписки «по
- *  частоте» и без отдельного разбора разрозненных визитов, это было
- *  источником путаницы.
- *
- *  Цвет: четыре растущих сегмента — один брендовый тон светлотой от светлого
- *  к тёмному (новый → второй визит → лояльный → VIP), потому что это
- *  упорядоченный ряд, а не разные категории. Потерянные — красным: здесь
- *  цвет означает прямой вердикт, как в числах убытка по всему приложению.
- *  Шаги взяты из уже проверенной шкалы сегментов в тема.ts, новых цветов не
- *  заводится.
+ *  частоте» и без отдельного разбора разрозненных визитов.
  */
 export default function BasePulsePage() {
   const тёмная = useDark();
-  const цвета = палитраГрафика(тёмная);
-  const шкала = шкалаСегментов(тёмная);
+  const палитра = палитраПульса(тёмная);
 
   const [data, setData] = useState<PulseData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -137,14 +267,9 @@ export default function BasePulsePage() {
     );
   }
 
-  // Четыре растущих сегмента — шаги одной шкалы, от светлого к тёмному.
-  const ЦВЕТ: Record<string, string> = {
-    new: шкала.active,
-    second: шкала.due,
-    loyal: шкала.risk,
-    vip: шкала.late,
-    lost: цвета.убыток,
-  };
+  const цветЯчейки = ячейка
+    ? (палитра[ячейка.segment.code] ?? палитра.new)
+    : палитра.new;
 
   return (
     <div className="animate-in">
@@ -159,83 +284,51 @@ export default function BasePulsePage() {
         </p>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-2">
+      <div className="grid gap-4 xl:grid-cols-2 2xl:grid-cols-3">
         {data.segments.map((segment) => (
-          <div
+          <ПлиткаСегмента
             key={segment.code}
-            className="bg-milk-card dark:bg-panel border border-milk-line dark:border-line rounded-2xl p-5"
-          >
-            <div className="flex items-baseline gap-3 mb-1">
-              <h2 className="text-sm font-semibold uppercase tracking-widest text-muted-light dark:text-muted">
-                {segment.label}
-              </h2>
-              <span
-                className="text-2xl font-bold"
-                style={{ color: ЦВЕТ[segment.code] }}
-              >
-                {segment.total}
-              </span>
-            </div>
-            <p className="text-xs text-muted-light dark:text-muted mb-3">
-              {ПОЯСНЕНИЯ[segment.code]}
-            </p>
-
-            <ResponsiveContainer width="100%" height={190}>
-              <BarChart
-                data={segment.columns}
-                margin={{ top: 22, right: 8, left: 8, bottom: 0 }}
-                barCategoryGap="28%"
-              >
-                <XAxis
-                  dataKey={подписьСтолбца}
-                  tick={{ fontSize: 12, fill: цвета.ось }}
-                  tickLine={false}
-                  axisLine={false}
-                />
-                <Tooltip
-                  cursor={{ fill: тёмная ? "#ffffff0d" : "#0000000a" }}
-                  contentStyle={{
-                    background: цвета.подсказкаФон,
-                    border: `1px solid ${цвета.подсказкаРамка}`,
-                    borderRadius: "12px",
-                    fontSize: 12,
-                  }}
-                  formatter={(value) => [`${value}`, segment.label]}
-                />
-                <Bar
-                  dataKey="count"
-                  radius={[4, 4, 0, 0]}
-                  cursor="pointer"
-                  onClick={(bar: unknown) => {
-                    const точка = bar as { payload?: PulseColumn };
-                    if (точка.payload) открыть(segment, точка.payload);
-                  }}
-                >
-                  {segment.columns.map((column) => (
-                    <Cell
-                      key={column.staff_id}
-                      fill={ЦВЕТ[segment.code]}
-                      // «Без своего мастера» — тот же показатель, но не мастер:
-                      // приглушением отделяем его от трёх настоящих столбцов.
-                      fillOpacity={column.staff_id === NO_MASTER ? 0.45 : 1}
-                    />
-                  ))}
-                  <LabelList
-                    dataKey="count"
-                    position="top"
-                    style={{ fontSize: 13, fontWeight: 600, fill: цвета.сейчас }}
-                  />
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+            segment={segment}
+            цвет={палитра[segment.code]}
+            доляБазы={
+              data.base_total > 0 ? Math.round((segment.total / data.base_total) * 100) : 0
+            }
+            тёмная={тёмная}
+            onColumnClick={(column) => открыть(segment, column)}
+          />
         ))}
+      </div>
+
+      <div className="mt-6 mb-3">
+        <div className="flex items-center gap-2">
+          <BellRing size={16} style={{ color: палитра.risk }} />
+          <h2 className="text-sm font-semibold uppercase tracking-widest text-ink-soft dark:text-cream">
+            Зона риска
+          </h2>
+        </div>
+        <p className="text-muted-light dark:text-muted text-sm mt-1">
+          Не потерян, но не был от {data.risk_zone_min_days + 1} до {data.lost_after_days - 1}{" "}
+          дней — самое время напомнить о записи, пока не перешёл в потерянные. Пересекается с
+          сегментами выше, поэтому в базу отдельной строкой не суммируется.
+        </p>
+      </div>
+      <div className="grid gap-4 xl:grid-cols-2 2xl:grid-cols-3">
+        <ПлиткаСегмента
+          segment={data.risk_zone}
+          цвет={палитра.risk}
+          доляБазы={null}
+          тёмная={тёмная}
+          onColumnClick={(column) => открыть(data.risk_zone, column)}
+        />
       </div>
 
       {ячейка && (
         <div className="mt-4 bg-milk-card dark:bg-panel border border-milk-line dark:border-line rounded-2xl overflow-hidden">
           <div className="flex items-center gap-2 px-5 pt-4 pb-3">
-            <Activity size={16} style={{ color: ЦВЕТ[ячейка.segment.code] }} />
+            {(() => {
+              const Значок = ЗНАЧОК[ячейка.segment.code];
+              return Значок ? <Значок size={16} style={{ color: цветЯчейки }} /> : null;
+            })()}
             <h2 className="text-sm font-semibold uppercase tracking-widest text-muted-light dark:text-muted">
               {ячейка.segment.label} · {ячейка.column.name}
             </h2>
@@ -261,10 +354,13 @@ export default function BasePulsePage() {
                   <th className="px-5 pb-2 text-left text-[11px] font-normal">Клиент</th>
                   <th className="px-3 pb-2 text-left text-[11px] font-normal">Телефон</th>
                   <th className="px-3 pb-2 text-right text-[11px] font-normal">визитов</th>
-                  <th className="px-3 pb-2 text-right text-[11px] font-normal">последний</th>
-                  <th className="px-5 pb-2 text-right text-[11px] font-normal">
-                    {ячейка.segment.code === "lost" ? "потерян с" : "дней назад"}
+                  <th className="px-3 pb-2 text-right text-[11px] font-normal">
+                    дней с визита
                   </th>
+                  <th className="px-3 pb-2 text-right text-[11px] font-normal">последний</th>
+                  {ячейка.segment.code === "lost" && (
+                    <th className="px-5 pb-2 text-right text-[11px] font-normal">потерян с</th>
+                  )}
                 </tr>
               </thead>
               <tbody>
@@ -292,12 +388,17 @@ export default function BasePulsePage() {
                     <td className="px-3 py-2.5 text-right tabular-nums text-ink-soft dark:text-cream">
                       {c.visits_total}
                     </td>
+                    <td className="px-3 py-2.5 text-right tabular-nums text-ink-soft dark:text-cream">
+                      {c.days_since}
+                    </td>
                     <td className="px-3 py-2.5 text-right tabular-nums text-muted-light dark:text-muted">
                       {дата(c.last_visit)}
                     </td>
-                    <td className="px-5 py-2.5 text-right tabular-nums text-ink-soft dark:text-cream">
-                      {c.lost_since ? дата(c.lost_since) : c.days_since}
-                    </td>
+                    {ячейка.segment.code === "lost" && (
+                      <td className="px-5 py-2.5 text-right tabular-nums text-ink-soft dark:text-cream">
+                        {c.lost_since ? дата(c.lost_since) : "—"}
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
