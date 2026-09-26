@@ -834,3 +834,65 @@ async def test_закрытие_без_остатков_предупреждае
     деньги = итог["closing_snapshot"]["money"]
     assert деньги["cash_register_estimate"] is None
     assert any("не внесены" in w for w in итог["closing_snapshot"]["warnings"])
+
+
+# --------------------------------------------------------------------------- #
+# Старый снимок без блока «Деньги» не должен ронять страницу
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_старый_отправленный_снимок_без_денег_открывается(session: AsyncSession):
+    """До появления блока «Деньги» закрытие хранилось без него. Отправленное
+    в Telegram закрытие не пересчитывается больше никогда (§32 ТЗ) — значит,
+    такой снимок остаётся в базе навсегда и должен открываться, а не падать."""
+    from app.models.models import Shift
+    from app.services import shift_store
+
+    старый_снимок = {
+        "shift_date": ДЕНЬ.isoformat(), "records_total": 10, "records_completed": 8,
+        "services_revenue": 5000.0, "products_revenue": 500.0,
+        "clients": {"booked_next": 3, "not_booked": 5},
+        "created_today_for_future": None, "completed": {"new": None, "became_regular": None},
+        "lost_today": None, "masters": [], "warnings": [], "integrity_failures": [],
+        # намеренно без ключа "money" — так выглядели снимки до его появления
+    }
+    session.add(Shift(shift_date=ДЕНЬ, closing_snapshot=старый_снимок))
+    await session.commit()
+
+    итог = await shift_store.текущая(session, ДЕНЬ)
+
+    деньги = итог["closing_snapshot"]["money"]
+    assert деньги == {
+        "total_earned": None, "non_cash": None, "cash": None, "spent": None,
+        "cash_register_estimate": None, "settlement_account_estimate": None,
+        "other_account_debt": None,
+    }
+    # Остальное содержимое старого снимка не тронуто.
+    assert итог["closing_snapshot"]["services_revenue"] == 5000.0
+
+
+@pytest.mark.asyncio
+async def test_снимок_с_деньгами_без_долга_дополняется(session: AsyncSession):
+    """Снимок между появлением «Деньги» и появлением «Долг по другому счёту»
+    (§ 26.09.2026, вторая часть) — тоже должен открыться с долгом = None."""
+    from app.models.models import Shift
+    from app.services import shift_store
+
+    снимок_без_долга = {
+        "shift_date": ДЕНЬ.isoformat(), "records_total": 1, "records_completed": 1,
+        "services_revenue": 100.0, "products_revenue": 0.0,
+        "money": {"total_earned": 100.0, "non_cash": None, "cash": None, "spent": None,
+                  "cash_register_estimate": 500.0, "settlement_account_estimate": 0.0},
+        "clients": {"booked_next": 0, "not_booked": 1},
+        "created_today_for_future": None, "completed": {"new": None, "became_regular": None},
+        "lost_today": None, "masters": [], "warnings": [], "integrity_failures": [],
+    }
+    session.add(Shift(shift_date=ДЕНЬ, closing_snapshot=снимок_без_долга))
+    await session.commit()
+
+    итог = await shift_store.текущая(session, ДЕНЬ)
+
+    деньги = итог["closing_snapshot"]["money"]
+    assert деньги["cash_register_estimate"] == 500.0
+    assert деньги["other_account_debt"] is None

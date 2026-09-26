@@ -47,7 +47,10 @@ interface ClosingSnapshot {
   records_completed: number;
   services_revenue: number;
   products_revenue: number | null;
-  money: ДеньгиСмены;
+  /** Необязательно: снимок, отправленный до появления блока «Деньги» (или до
+   *  появления в нём поля долга), навсегда остался без него — §32 ТЗ смены
+   *  запрещает пересчитывать отправленное закрытие задним числом. */
+  money?: ДеньгиСмены;
   clients: { booked_next: number; not_booked: number };
   created_today_for_future: number | null;
   completed: { new: number | null; became_regular: number | null };
@@ -81,8 +84,8 @@ interface СтрокаДенег {
 type Вид = "opening" | "closing";
 type РазделДенег = "services" | "products";
 
-const РУБ = (n: number | null): string =>
-  n === null ? "данные недоступны" : Math.round(n).toLocaleString("ru-RU") + " ₽";
+const РУБ = (n: number | null | undefined): string =>
+  n === null || n === undefined ? "данные недоступны" : Math.round(n).toLocaleString("ru-RU") + " ₽";
 
 /** Показатель, который не удалось посчитать, пишется словами.
  *  Ноль на его месте — это уже утверждение, и притом ложное (§33 ТЗ). */
@@ -690,11 +693,11 @@ export default function ShiftPage({ role }: { role: "owner" | "operator" | "mast
               <div className="grid gap-3 grid-cols-2 sm:grid-cols-3">
                 <Плитка
                   label="Заработано всего"
-                  value={РУБ(закрытие.money.total_earned)}
+                  value={РУБ(закрытие.money?.total_earned)}
                   крупно
                 />
-                <Плитка label="Из них безнал" value={РУБ(закрытие.money.non_cash)} />
-                <Плитка label="Наличка" value={РУБ(закрытие.money.cash)} />
+                <Плитка label="Из них безнал" value={РУБ(закрытие.money?.non_cash)} />
+                <Плитка label="Наличка" value={РУБ(закрытие.money?.cash)} />
                 <Плитка
                   label="Услуги"
                   value={РУБ(закрытие.services_revenue)}
@@ -705,20 +708,20 @@ export default function ShiftPage({ role }: { role: "owner" | "operator" | "mast
                   value={РУБ(закрытие.products_revenue)}
                   onClick={() => переключитьДеньги("products")}
                 />
-                <Плитка label="Потрачено" value={РУБ(закрытие.money.spent)} тон="negative" />
+                <Плитка label="Потрачено" value={РУБ(закрытие.money?.spent)} тон="negative" />
                 <Плитка
                   label="В кассе (расчётно)"
-                  value={РУБ(закрытие.money.cash_register_estimate)}
+                  value={РУБ(закрытие.money?.cash_register_estimate)}
                 />
                 <Плитка
                   label="На расчётном счёте (расчётно)"
-                  value={РУБ(закрытие.money.settlement_account_estimate)}
+                  value={РУБ(закрытие.money?.settlement_account_estimate)}
                 />
                 <Плитка
                   label="Долг по другому счёту"
-                  value={РУБ(закрытие.money.other_account_debt)}
+                  value={РУБ(закрытие.money?.other_account_debt)}
                   тон={
-                    закрытие.money.other_account_debt && закрытие.money.other_account_debt > 0
+                    закрытие.money?.other_account_debt && закрытие.money?.other_account_debt > 0
                       ? "negative"
                       : undefined
                   }

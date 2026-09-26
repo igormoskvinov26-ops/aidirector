@@ -79,6 +79,33 @@ def времена(смена: Shift | None, поле: str) -> dict[int, str]:
     }
 
 
+ДЕНЬГИ_ПО_УМОЛЧАНИЮ = {
+    "total_earned": None,
+    "non_cash": None,
+    "cash": None,
+    "spent": None,
+    "cash_register_estimate": None,
+    "settlement_account_estimate": None,
+    "other_account_debt": None,
+}
+
+
+def _нормализовать_закрытие(снимок: dict | None) -> dict | None:
+    """Достроить блок «Деньги» в снимке, сохранённом до его появления.
+
+    Отправленное в Telegram закрытие не пересчитывается больше никогда
+    (§32 ТЗ) — значит, снимок, сохранённый до того, как в нём завёлся блок
+    «Деньги» (или до того, как в нём завёлся «Долг по другому счёту»), так
+    и останется без этих ключей навсегда. Фронтенд ждёт их всегда — без
+    подстановки такой старый снимок не открывался бы вовсе.
+    """
+    if снимок is None:
+        return None
+    снимок = dict(снимок)
+    снимок["money"] = {**ДЕНЬГИ_ПО_УМОЛЧАНИЮ, **(снимок.get("money") or {})}
+    return снимок
+
+
 def состояние(смена: Shift | None) -> dict:
     """Что показывать на экране до нажатия кнопок."""
     if смена is None:
@@ -107,7 +134,7 @@ def состояние(смена: Shift | None) -> dict:
             else None
         ),
         "opening_snapshot": смена.opening_snapshot,
-        "closing_snapshot": смена.closing_snapshot,
+        "closing_snapshot": _нормализовать_закрытие(смена.closing_snapshot),
         "employees": [
             {
                 "staff_id": м.staff_id,
