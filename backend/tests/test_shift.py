@@ -742,8 +742,89 @@ async def test_закрытие_считает_заработано_всего_�
     снимок = await shift.собрать_закрытие(ДЕНЬ)
 
     assert снимок["money"]["total_earned"] == 1000  # товаров не было — продажи пустые, 0
-    assert снимок["money"]["non_cash"] is None
-    assert снимок["money"]["spent"] is None
+    # Транзакций за день нет вовсе — YCLIENTS ответил пустым списком, это
+    # настоящий ноль, а не «данные недоступны» (§33 ТЗ).
+    assert снимок["money"]["non_cash"] == 0
+    assert снимок["money"]["cash"] == 0
+    assert снимок["money"]["spent"] == 0
+
+
+class _СТранзакциямиДенег(ПодставнойYClients):
+    """Фейк с настоящими транзакциями — для проверки разбивки нал/безнал/расход."""
+
+    def __init__(self, записи, транзакции):
+        super().__init__(записи)
+        self._транзакции = транзакции
+
+    async def _get(self, path: str, params: dict | None = None) -> dict:
+        params = params or {}
+        if "transactions" in path and "storage_operations" not in path:
+            if params.get("page", 1) > 1:
+                return {"data": []}
+            return {"data": self._транзакции}
+        return await super()._get(path, params)
+
+
+@pytest.mark.asyncio
+async def test_деньги_за_день_делит_по_account_is_cash():
+    from app.services import shift
+
+    транзакции = [
+        {"sold_item_type": "service", "amount": 1900, "account": {"is_cash": False}},
+        {"sold_item_type": "service", "amount": 500, "account": {"is_cash": True}},
+        {"sold_item_type": "goods_transaction", "amount": 300, "account": {"is_cash": True}},
+    ]
+    итог = await shift._деньги_за_день(_СТранзакциямиДенег([], транзакции), ДЕНЬ)
+
+    assert итог == {"non_cash": 1900.0, "cash": 800.0, "spent": 0.0}
+
+
+@pytest.mark.asyncio
+async def test_деньги_за_день_считает_расход_по_отрицательной_сумме():
+    from app.services import shift
+
+    транзакции = [
+        {"sold_item_type": None, "amount": -40000, "account": {"is_cash": False},
+         "expense": {"title": "Зарплата персонала"}},
+        # Продажа с sold_item_type=None не встречается в жизни, но если бы
+        # сумма была положительной — это не трата, и в «Потрачено» не идёт.
+        {"sold_item_type": None, "amount": 100, "account": {"is_cash": True}},
+    ]
+    итог = await shift._деньги_за_день(_СТранзакциямиДенег([], транзакции), ДЕНЬ)
+
+    assert итог["spent"] == 40000.0
+
+
+@pytest.mark.asyncio
+async def test_деньги_за_день_пропускает_удалённые_транзакции():
+    from app.services import shift
+
+    транзакции = [
+        {"sold_item_type": "service", "amount": 5000, "account": {"is_cash": False},
+         "deleted": True},
+    ]
+    итог = await shift._деньги_за_день(_СТранзакциямиДенег([], транзакции), ДЕНЬ)
+
+    assert итог == {"non_cash": 0.0, "cash": 0.0, "spent": 0.0}
+
+
+@pytest.mark.asyncio
+async def test_закрытие_предупреждает_если_нал_безнал_не_сходится_с_заработано(monkeypatch):
+    from app.services import shift
+
+    # Записано на 1000 ₽ услуг, а транзакция в тот же день — только на 100 ₽:
+    # похоже, что оплата прошла другим днём или сумму поправили после визита.
+    записи = [запись(ident=1, client_id=100, посещение=1, цена=1000)]
+    транзакции = [{"sold_item_type": "service", "amount": 100, "account": {"is_cash": True}}]
+    monkeypatch.setattr(
+        shift, "YClientsClient", lambda: _СТранзакциямиДенег(записи, транзакции)
+    )
+
+    снимок = await shift.собрать_закрытие(ДЕНЬ)
+
+    assert снимок["money"]["total_earned"] == 1000
+    assert снимок["money"]["cash"] == 100
+    assert any("не совпадает" in w for w in снимок["warnings"])
 
 
 @pytest.mark.asyncio
