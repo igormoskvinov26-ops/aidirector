@@ -103,9 +103,14 @@ async def load_products(client, start, end):
         if detail.get('deleted') or int(detail.get('type_id') or 0) != 1:
             continue
         seller = detail.get('master_id') or (detail.get('master') or {}).get('id') or 0
+        # Название — только подпись для человека, на сумму не влияет. Поле не
+        # подтверждено на живом API (в отличие от amount и type_id выше), поэтому
+        # при любом раскладе есть запасной вариант с номером товара.
+        title = (detail.get('good') or {}).get('title') or f'Товар №{ident}'
         sales.append({'staff_id': int(seller),
                       'date': str(detail.get('create_date') or payment['date'])[:10],
-                      'amount': payment['amount']})
+                      'amount': payment['amount'],
+                      'title': title})
         await asyncio.sleep(0.15)
     return sales
 

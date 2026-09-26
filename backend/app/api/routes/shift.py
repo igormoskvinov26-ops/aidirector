@@ -75,6 +75,19 @@ async def времена(
         raise HTTPException(status_code=400, detail=str(сбой)) from None
 
 
+@router.get("/money/{раздел}")
+async def деньги(
+    раздел: str,
+    day: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """Расшифровка плитки «Услуги» (services) или «Товары» (products)."""
+    try:
+        return await shift_store.деньги_детали(db, раздел, _день(day))
+    except ValueError as сбой:
+        raise HTTPException(status_code=400, detail=str(сбой)) from None
+
+
 @router.get("/preview")
 async def предпросмотр(
     kind: str = Query(...),

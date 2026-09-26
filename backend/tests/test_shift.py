@@ -15,6 +15,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.database import Base
+from app.models.models import Client
 from app.services.shift import (
     MOSCOW,
     актуальная,
@@ -33,6 +34,7 @@ from app.services.shift_store import ОТКРЫТИЕ, проверить_вре
 
 ДЕНЬ = date(2026, 9, 23)
 КСЕНИЯ = 5659614
+АРТАШ = 5659611
 
 
 def запись(
@@ -669,3 +671,102 @@ async def test_упавший_запрос_истории_даёт_нет_дан
 
     assert снимок["clients"] == {"new": None, "second": None, "will_be_regular": None}
     assert any("История визитов" in w for w in снимок["warnings"])
+
+
+# --------------------------------------------------------------------------- #
+# Деньги: расшифровка выручки по услугам и товарам
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_детали_услуг_по_одной_строке_на_визит(monkeypatch):
+    from app.services import shift
+
+    записи = [
+        запись(ident=1, client_id=100, посещение=1, цена=1500),
+        запись(ident=2, client_id=200, посещение=1, цена=2000, staff_id=АРТАШ),
+        запись(ident=3, client_id=300, посещение=0, цена=9000),  # ожидание — не выполнена
+    ]
+    записи[0]["services"] = [{"title": "Стрижка", "cost_to_pay": 1500}]
+    записи[1]["services"] = [{"title": "Борода", "cost_to_pay": 2000}]
+    monkeypatch.setattr(shift, "YClientsClient", lambda: ПодставнойYClients(записи))
+
+    строки = await shift.собрать_детали_услуг(ДЕНЬ)
+
+    assert len(строки) == 2
+    assert {с["client_id"] for с in строки} == {100, 200}
+    ксенина = next(с for с in строки if с["client_id"] == 100)
+    assert ксенина["title"] == "Стрижка"
+    assert ксенина["amount"] == 1500
+    assert ксенина["master"] == "Ксения"
+
+
+@pytest.mark.asyncio
+async def test_детали_товаров_подставляет_запасное_название(monkeypatch):
+    from app.services import shift
+
+    class СТоварами(ПодставнойYClients):
+        async def _get(self, path, params=None):
+            params = params or {}
+            if "transactions" in path and "storage_operations" not in path:
+                if params.get("page", 1) > 1:
+                    return {"data": []}
+                return {"data": [{
+                    "sold_item_type": "goods_transaction", "sold_item_id": 55,
+                    "deleted": False, "amount": 800, "date": ДЕНЬ.isoformat(),
+                }]}
+            if "storage_operations" in path:
+                return {"data": {
+                    "deleted": False, "type_id": 1, "master_id": КСЕНИЯ,
+                    "create_date": ДЕНЬ.isoformat(),
+                }}
+            return await super()._get(path, params)
+
+    monkeypatch.setattr(shift, "YClientsClient", lambda: СТоварами([]))
+
+    строки = await shift.собрать_детали_товаров(ДЕНЬ)
+
+    assert len(строки) == 1
+    assert строки[0]["title"] == "Товар №55"
+    assert строки[0]["amount"] == 800
+    assert строки[0]["master"] == "Ксения"
+
+
+@pytest.mark.asyncio
+async def test_закрытие_считает_заработано_всего_только_когда_известны_оба(monkeypatch):
+    from app.services import shift
+
+    записи = [запись(ident=1, client_id=100, посещение=1, цена=1000)]
+    monkeypatch.setattr(shift, "YClientsClient", lambda: ПодставнойYClients(записи))
+
+    снимок = await shift.собрать_закрытие(ДЕНЬ)
+
+    assert снимок["money"]["total_earned"] == 1000  # товаров не было — продажи пустые, 0
+    assert снимок["money"]["non_cash"] is None
+    assert снимок["money"]["spent"] is None
+
+
+@pytest.mark.asyncio
+async def test_деньги_детали_услуг_подставляет_имя_из_локальной_базы(session, monkeypatch):
+    from app.services import shift, shift_store
+
+    session.add(Client(id=100, yclients_id=100, name="Иван Тестовый", phone="+79990000100"))
+    await session.commit()
+
+    async def собрать_детали_услуг(день=None):
+        return [{"client_id": 100, "master": "Ксения", "title": "Стрижка", "amount": 1500.0,
+                 "time": "10:00"}]
+
+    monkeypatch.setattr(shift, "собрать_детали_услуг", собрать_детали_услуг)
+
+    строки = await shift_store.деньги_детали(session, shift_store.УСЛУГИ, ДЕНЬ)
+    assert строки == [{"time": "10:00", "client": "Иван Тестовый", "master": "Ксения",
+                        "title": "Стрижка", "amount": 1500.0}]
+
+
+@pytest.mark.asyncio
+async def test_деньги_детали_неизвестный_раздел_ошибка(session):
+    from app.services import shift_store
+
+    with pytest.raises(ValueError):
+        await shift_store.деньги_детали(session, "чушь", ДЕНЬ)

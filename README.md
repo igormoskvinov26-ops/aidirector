@@ -75,6 +75,7 @@ DOMAIN=director.rublbarber.ru ./deploy.sh
 | POST | `/api/shift/open` | Снимок на утро: план, мастера, клиенты |
 | POST | `/api/shift/close` | Факт за день — пересчитывается заново |
 | POST | `/api/shift/times` | Время прихода или ухода мастеров (только вручную) |
+| GET | `/api/shift/money/{services\|products}` | Расшифровка плитки «Услуги»/«Товары» в закрытии |
 | GET | `/api/shift/preview` | Текст сообщения перед отправкой |
 | POST | `/api/shift/send` | Отправить открытие или закрытие в Telegram |
 | GET | `/api/stories/generate` | Отрисовать сторис |

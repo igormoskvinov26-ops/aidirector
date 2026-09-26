@@ -14,9 +14,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.models import Shift, ShiftEmployee
+from app.models.models import Client, Shift, ShiftEmployee
 from app.services import shift as расчёт
 from app.services.telegram import отправить_сообщение
+
+УСЛУГИ = "services"
+ТОВАРЫ = "products"
 
 ОТКРЫТИЕ = "opening"
 ЗАКРЫТИЕ = "closing"
@@ -202,6 +205,38 @@ async def предпросмотр(session: AsyncSession, вид: str, день:
     if смена is None:
         raise ValueError("Смена на этот день не открыта")
     return {"text": текст(вид, смена)}
+
+
+async def деньги_детали(session: AsyncSession, вид: str, день: date | None = None) -> list[dict]:
+    """Из чего сложилась плитка «Услуги» или «Товары» в блоке «Деньги».
+
+    Клиент — не бизнес-правило, а справочная подпись, поэтому имя ищем в
+    локальной базе по client_id (тот же путь, что и всюду в проекте: имени из
+    самой записи YCLIENTS не доверяем, только стабильному id — §26 ТЗ смены).
+    Не нашли клиента в базе — оставляем пусто, а не гадаем.
+    """
+    if вид == УСЛУГИ:
+        строки = await расчёт.собрать_детали_услуг(день)
+        client_ids = {с["client_id"] for с in строки if с["client_id"] is not None}
+        имена: dict[int, str] = {}
+        if client_ids:
+            найденные = await session.execute(
+                select(Client.yclients_id, Client.name).where(Client.yclients_id.in_(client_ids))
+            )
+            имена = dict(найденные.all())
+        return [
+            {
+                "time": с["time"],
+                "client": имена.get(с["client_id"]) if с["client_id"] else None,
+                "master": с["master"],
+                "title": с["title"],
+                "amount": с["amount"],
+            }
+            for с in строки
+        ]
+    if вид == ТОВАРЫ:
+        return await расчёт.собрать_детали_товаров(день)
+    raise ValueError("Раздел должен быть services или products")
 
 
 async def отправить(session: AsyncSession, вид: str, день: date | None = None) -> dict:

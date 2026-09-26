@@ -31,11 +31,23 @@ async def отправить_сообщение(текст: str) -> int | None:
             "TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID не настроены в .env"
         )
 
-    async with httpx.AsyncClient(timeout=ТАЙМАУТ) as http:
-        ответ = await http.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            data={"chat_id": chat_id, "text": текст, "disable_web_page_preview": "true"},
-        )
+    try:
+        async with httpx.AsyncClient(timeout=ТАЙМАУТ) as http:
+            ответ = await http.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                data={"chat_id": chat_id, "text": текст, "disable_web_page_preview": "true"},
+            )
+    except httpx.TimeoutException as сбой:
+        logger.error(f"telegram sendMessage timeout: {сбой}")
+        raise TelegramSendError("Telegram не ответил вовремя — попробуйте ещё раз") from сбой
+    except httpx.TransportError as сбой:
+        # Сюда попадают обрыв сети, отказ DNS, недоступный прокси — то, что
+        # раньше всплывало наверх нераспознанной ошибкой 500 и с точки зрения
+        # кнопки в интерфейсе выглядело как «просто не работает».
+        logger.error(f"telegram sendMessage: сеть недоступна: {сбой}")
+        raise TelegramSendError(
+            "Не удалось связаться с Telegram — проверьте интернет-соединение"
+        ) from сбой
 
     if ответ.status_code != 200:
         # Только код: в теле ответа может быть токен бота.
