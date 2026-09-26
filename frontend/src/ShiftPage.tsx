@@ -124,12 +124,16 @@ function Плитка({
   label,
   value,
   крупно,
+  малая,
   тон,
   onClick,
 }: {
   label: string;
   value: string;
   крупно?: boolean;
+  /** Уменьшенный вариант — для слагаемых, из которых складывается сумма в
+   *  плитке над ними: сама сумма должна оставаться заметно крупнее. */
+  малая?: boolean;
   /** Смысловая окраска: positive — хорошая новость, negative — плохая. Без
    *  значения плитка нейтральна — это факт, а не оценка. */
   тон?: "positive" | "negative";
@@ -147,16 +151,29 @@ function Плитка({
   return (
     <div
       onClick={onClick}
-      className={`rounded-xl border border-milk-line dark:border-line bg-milk dark:bg-ink/40 px-4 py-3 ${
+      className={`rounded-xl border border-milk-line dark:border-line bg-milk dark:bg-ink/40 ${
+        малая ? "px-3 py-2" : "px-4 py-3"
+      } ${
         onClick ? "cursor-pointer transition-colors hover:border-bronze/50 dark:hover:border-gold/50" : ""
       }`}
     >
       <div className="text-[11px] uppercase tracking-widest text-muted-light dark:text-muted">
         {label}
       </div>
-      <div className={`${крупно ? "text-2xl" : "text-xl"} font-bold mt-0.5 ${цвет}`}>
+      <div
+        className={`${крупно ? "text-2xl" : малая ? "text-base" : "text-xl"} font-bold mt-0.5 ${цвет}`}
+      >
         {value}
       </div>
+    </div>
+  );
+}
+
+/** Подпись подгруппы внутри блока «Деньги»: «из чего складывается сумма выше». */
+function ПодзаголовокДенег({ children }: { children: ReactNode }) {
+  return (
+    <div className="text-[10px] uppercase tracking-widest text-muted-light dark:text-muted mb-1.5">
+      {children}
     </div>
   );
 }
@@ -703,42 +720,67 @@ export default function ShiftPage({ role }: { role: "owner" | "operator" | "mast
                   </button>
                 )}
               </div>
-              <div className="grid gap-3 grid-cols-2 sm:grid-cols-3">
-                <Плитка
-                  label="Заработано всего"
-                  value={РУБ(закрытие.money?.total_earned)}
-                  крупно
-                />
-                <Плитка label="Из них безнал" value={РУБ(закрытие.money?.non_cash)} />
-                <Плитка label="Наличка" value={РУБ(закрытие.money?.cash)} />
-                <Плитка
-                  label="Услуги"
-                  value={РУБ(закрытие.services_revenue)}
-                  onClick={() => переключитьДеньги("services")}
-                />
-                <Плитка
-                  label="Товары"
-                  value={РУБ(закрытие.products_revenue)}
-                  onClick={() => переключитьДеньги("products")}
-                />
+              {/* Заработано всего — главная цифра блока, крупнее и в своей
+                  строке. Дальше — не отдельные факты, а её же разложение
+                  двумя разными способами (по типу продажи и по способу
+                  оплаты): визуально мельче и с подписью, что это слагаемые. */}
+              <Плитка
+                label="Заработано всего"
+                value={РУБ(закрытие.money?.total_earned)}
+                крупно
+              />
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <div>
+                  <ПодзаголовокДенег>По типу</ПодзаголовокДенег>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Плитка
+                      label="Услуги"
+                      value={РУБ(закрытие.services_revenue)}
+                      малая
+                      onClick={() => переключитьДеньги("services")}
+                    />
+                    <Плитка
+                      label="Товары"
+                      value={РУБ(закрытие.products_revenue)}
+                      малая
+                      onClick={() => переключитьДеньги("products")}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <ПодзаголовокДенег>По способу оплаты</ПодзаголовокДенег>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Плитка label="Безнал" value={РУБ(закрытие.money?.non_cash)} малая />
+                    <Плитка label="Наличка" value={РУБ(закрытие.money?.cash)} малая />
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-4">
                 <Плитка label="Потрачено" value={РУБ(закрытие.money?.spent)} тон="negative" />
-                <Плитка
-                  label="В кассе (расчётно)"
-                  value={РУБ(закрытие.money?.cash_register_estimate)}
-                />
-                <Плитка
-                  label="На расчётном счёте (расчётно)"
-                  value={РУБ(закрытие.money?.settlement_account_estimate)}
-                />
-                <Плитка
-                  label="Долг по другому счёту"
-                  value={РУБ(закрытие.money?.other_account_debt)}
-                  тон={
-                    закрытие.money?.other_account_debt && закрытие.money?.other_account_debt > 0
-                      ? "negative"
-                      : undefined
-                  }
-                />
+              </div>
+
+              <div className="mt-4">
+                <ПодзаголовокДенег>Остатки</ПодзаголовокДенег>
+                <div className="grid gap-3 grid-cols-2 sm:grid-cols-3">
+                  <Плитка
+                    label="В кассе (расчётно)"
+                    value={РУБ(закрытие.money?.cash_register_estimate)}
+                  />
+                  <Плитка
+                    label="На расчётном счёте (расчётно)"
+                    value={РУБ(закрытие.money?.settlement_account_estimate)}
+                  />
+                  <Плитка
+                    label="Долг по другому счёту"
+                    value={РУБ(закрытие.money?.other_account_debt)}
+                    тон={
+                      закрытие.money?.other_account_debt && закрытие.money?.other_account_debt > 0
+                        ? "negative"
+                        : undefined
+                    }
+                  />
+                </div>
               </div>
               {формаОстатков && (
                 <ФормаОстатков
