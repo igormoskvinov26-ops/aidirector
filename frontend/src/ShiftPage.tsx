@@ -91,6 +91,12 @@ const РУБ = (n: number | null | undefined): string =>
  *  Ноль на его месте — это уже утверждение, и притом ложное (§33 ТЗ). */
 const ЧИСЛО = (n: number | null): string => (n === null ? "данные недоступны" : String(n));
 
+/** «27.09» из ISO-даты смены — без Date, чтобы часовой пояс не сдвинул день. */
+const датаСмены = (iso: string): string => {
+  const [, м, д] = iso.split("-");
+  return `${д}.${м}`;
+};
+
 /** «в 09:54» из времени отправки. */
 function часы(iso: string): string {
   const д = new Date(iso);
@@ -630,6 +636,13 @@ export default function ShiftPage({ role }: { role: "owner" | "operator" | "mast
           {занято === "close" ? "Считаю…" : "Закрыть смену"}
         </button>
       </div>
+
+      {!открытие && !закрытие && (
+        <p className="mt-4 max-w-2xl rounded-2xl border border-dashed border-milk-line dark:border-line px-5 py-4 text-sm text-muted-light dark:text-muted">
+          Смена на {датаСмены(state.shift_date)} ещё не открыта. Нажмите «Открыть смену» —
+          появятся план на день, мастера и время прихода.
+        </p>
+      )}
 
       {открытие && (
         <div className="grid gap-4 lg:grid-cols-2 items-start mt-4">
