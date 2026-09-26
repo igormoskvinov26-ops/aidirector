@@ -4,6 +4,12 @@ import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  // Время сборки в МСК — по нему на экране ошибки видно, дошло ли обновление.
+  define: {
+    __BUILD__: JSON.stringify(
+      new Date().toLocaleString("ru-RU", { timeZone: "Europe/Moscow" })
+    ),
+  },
   server: {
     port: 3000,
     proxy: {

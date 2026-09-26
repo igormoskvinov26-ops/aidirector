@@ -304,15 +304,30 @@ function SyncBadge() {
  *  Ограждается только область страницы. Боковая панель снаружи и остаётся
  *  на месте: по ней можно уйти в другой раздел, а не перезагружать окно.
  */
-class PageBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
-  state = { failed: false };
+class PageBoundary extends Component<
+  { children: ReactNode },
+  { failed: boolean; причина: string; где: string }
+> {
+  state = { failed: false, причина: "", где: "" };
 
-  static getDerivedStateFromError() {
-    return { failed: true };
+  static getDerivedStateFromError(error: unknown) {
+    return {
+      failed: true,
+      причина: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+    };
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error("Раздел не отрисовался:", error, info.componentStack);
+    // Без текста ошибки на экране причину не узнать, не открывая консоль
+    // браузера, — а владелец её не откроет.
+    const где = (info.componentStack ?? "")
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 4)
+      .join(" ← ");
+    this.setState({ где });
   }
 
   render() {
@@ -328,6 +343,11 @@ class PageBoundary extends Component<{ children: ReactNode }, { failed: boolean 
           загрузка. Если она закончилась, а раздел всё равно не открывается —
           перезапустите Директора и покажите вывод.
         </p>
+        <pre className="mt-3 whitespace-pre-wrap break-words rounded-lg bg-ink/5 dark:bg-ink/40 px-3 py-2 text-xs text-muted-light dark:text-muted select-all">
+          {this.state.причина}
+          {this.state.где && `\n${this.state.где}`}
+          {`\nВерсия: ${__BUILD__}`}
+        </pre>
       </div>
     );
   }
