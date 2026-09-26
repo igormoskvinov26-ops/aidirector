@@ -1940,7 +1940,7 @@ export default function App() {
               {page === "bookings" && <BookingsPage />}
               {page === "payroll" && <BarberMonthPage payroll />}
               {page === "pulse" && <BasePulsePage />}
-              {page === "shift" && <ShiftPage />}
+              {page === "shift" && <ShiftPage role={role} />}
               {page === "clients" && <ClientBasePage role={role} />}
             </PageBoundary>
           )}

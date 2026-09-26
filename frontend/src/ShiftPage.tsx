@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import { LogIn, LogOut, Send, Sunrise, Sunset } from "lucide-react";
+import { LogIn, LogOut, Pencil, Send, Sunrise, Sunset, X } from "lucide-react";
 
 /** Мастер в смене: время вводит администратор, из YCLIENTS оно не берётся. */
 interface ShiftEmployee {
@@ -26,6 +26,19 @@ interface ДеньгиСмены {
   spent: number | null;
   cash_register_estimate: number | null;
   settlement_account_estimate: number | null;
+  other_account_debt: number | null;
+}
+
+/** Ответ /api/shift/money/balances. Все поля null, пока владелец ни разу не
+ *  внёс остатки. */
+interface Остатки {
+  cash_amount: number | null;
+  cash_as_of: string | null;
+  settlement_amount: number | null;
+  settlement_as_of: string | null;
+  other_account_debt: number | null;
+  other_debt_note: string | null;
+  updated_at: string | null;
 }
 
 interface ClosingSnapshot {
@@ -201,13 +214,148 @@ function РасшифровкаДенег({ раздел, строки }: { ра
   );
 }
 
+/** Сегодняшняя дата ГГГГ-ММ-ДД для значения по умолчанию в полях даты. */
+function сегодняISO(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/** Форма остатков — доступна только владельцу (§ решение 26.09.2026).
+ *
+ *  Регистр день-за-днём YCLIENTS вести не позволяет: касса и счёт хранятся
+ *  как известное значение на дату, а не пересчитываются сами. Долг перед
+ *  другим счётом YCLIENTS не видит вовсе — это исключительно ручная цифра.
+ */
+/* oxlint-disable react-hooks/rules-of-hooks -- имя компонента на кириллице,
+   как и весь проект; JSX-компилятор классифицирует его по регистру первого
+   символа (не ASCII a-z), а не по латинице, поэтому это ложное срабатывание
+   линтера — компонент настоящий и вызывается как обычно, см. ПлиткаСегмента
+   в BasePulsePage.tsx с тем же случаем. */
+function ФормаОстатков({
+  остатки,
+  занято,
+  onSave,
+  onCancel,
+}: {
+  остатки: Остатки | null;
+  занято: boolean;
+  onSave: (значения: {
+    cash_amount: string;
+    cash_as_of: string;
+    settlement_amount: string;
+    settlement_as_of: string;
+    other_account_debt: string;
+    other_debt_note: string;
+  }) => void;
+  onCancel: () => void;
+}) {
+  const [cashAmount, setCashAmount] = useState(String(остатки?.cash_amount ?? ""));
+  const [cashAsOf, setCashAsOf] = useState(остатки?.cash_as_of ?? сегодняISO());
+  const [settlementAmount, setSettlementAmount] = useState(
+    String(остатки?.settlement_amount ?? "")
+  );
+  const [settlementAsOf, setSettlementAsOf] = useState(остатки?.settlement_as_of ?? сегодняISO());
+  const [otherDebt, setOtherDebt] = useState(String(остатки?.other_account_debt ?? "0"));
+  const [otherNote, setOtherNote] = useState(остатки?.other_debt_note ?? "");
+
+  const поле = "w-full rounded-lg border border-milk-line dark:border-line bg-milk dark:bg-ink/40 px-3 py-1.5 text-sm text-ink-soft dark:text-cream";
+  const подпись = "text-[11px] uppercase tracking-widest text-muted-light dark:text-muted mb-1";
+
+  return (
+    <div className="mt-3 rounded-xl border border-milk-line dark:border-line bg-milk dark:bg-ink/40 p-3 space-y-3">
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <div className={подпись}>Наличными в кассе</div>
+          <input
+            type="number"
+            value={cashAmount}
+            onChange={(e) => setCashAmount(e.target.value)}
+            className={поле}
+          />
+        </div>
+        <div>
+          <div className={подпись}>На какую дату</div>
+          <input
+            type="date"
+            value={cashAsOf}
+            onChange={(e) => setCashAsOf(e.target.value)}
+            className={поле}
+          />
+        </div>
+        <div>
+          <div className={подпись}>На расчётном счёте</div>
+          <input
+            type="number"
+            value={settlementAmount}
+            onChange={(e) => setSettlementAmount(e.target.value)}
+            className={поле}
+          />
+        </div>
+        <div>
+          <div className={подпись}>На какую дату</div>
+          <input
+            type="date"
+            value={settlementAsOf}
+            onChange={(e) => setSettlementAsOf(e.target.value)}
+            className={поле}
+          />
+        </div>
+        <div>
+          <div className={подпись}>Долг по другому счёту</div>
+          <input
+            type="number"
+            value={otherDebt}
+            onChange={(e) => setOtherDebt(e.target.value)}
+            placeholder="0"
+            className={поле}
+          />
+        </div>
+        <div>
+          <div className={подпись}>Заметка к долгу (необязательно)</div>
+          <input
+            type="text"
+            value={otherNote}
+            onChange={(e) => setOtherNote(e.target.value)}
+            placeholder="например, с какого счёта заняли"
+            className={поле}
+          />
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() =>
+            onSave({
+              cash_amount: cashAmount,
+              cash_as_of: cashAsOf,
+              settlement_amount: settlementAmount,
+              settlement_as_of: settlementAsOf,
+              other_account_debt: otherDebt,
+              other_debt_note: otherNote,
+            })
+          }
+          disabled={занято}
+          className="rounded-lg bg-bronze dark:bg-gold px-3 py-1.5 text-sm font-semibold text-milk dark:text-ink disabled:opacity-50"
+        >
+          Сохранить
+        </button>
+        <button
+          onClick={onCancel}
+          className="rounded-lg border border-milk-line dark:border-line px-3 py-1.5 text-sm text-ink-soft dark:text-cream"
+        >
+          Отмена
+        </button>
+      </div>
+    </div>
+  );
+}
+/* oxlint-enable react-hooks/rules-of-hooks */
+
 /** Смена: открытие утром и закрытие вечером — решение владельца 23.09.2026.
  *
  *  Данные и сообщение для Telegram стоят рядом, а не одно под другим
  *  (решение владельца 26.09.2026): проверил цифры — тут же увидел, что
  *  уйдёт в чат, не листая страницу.
  */
-export default function ShiftPage() {
+export default function ShiftPage({ role }: { role: "owner" | "operator" | "master" }) {
   const [state, setState] = useState<ShiftState | null>(null);
   const [занято, setЗанято] = useState<string>("");
   const [ошибка, setОшибка] = useState<string>("");
@@ -217,6 +365,8 @@ export default function ShiftPage() {
   });
   const [деньгиОткрыто, setДеньгиОткрыто] = useState<РазделДенег | null>(null);
   const [деньгиСтроки, setДеньгиСтроки] = useState<СтрокаДенег[] | null>(null);
+  const [остатки, setОстатки] = useState<Остатки | null>(null);
+  const [формаОстатков, setФормаОстатков] = useState(false);
 
   const обновить = useCallback(async () => {
     try {
@@ -231,6 +381,18 @@ export default function ShiftPage() {
   useEffect(() => {
     обновить();
   }, [обновить]);
+
+  useEffect(() => {
+    if (role !== "owner") return;
+    (async () => {
+      try {
+        const r = await fetch("/api/shift/money/balances");
+        if (r.ok) setОстатки(await r.json());
+      } catch {
+        // форма редактирования просто не подставит старые значения
+      }
+    })();
+  }, [role]);
 
   const запрос = async (путь: string, метка: string, опции?: RequestInit) => {
     setЗанято(метка);
@@ -278,6 +440,38 @@ export default function ShiftPage() {
     if (итог) {
       setState(итог);
       setПревью((п) => ({ ...п, [kind]: null }));
+    }
+  };
+
+  const сохранитьОстатки = async (значения: {
+    cash_amount: string;
+    cash_as_of: string;
+    settlement_amount: string;
+    settlement_as_of: string;
+    other_account_debt: string;
+    other_debt_note: string;
+  }) => {
+    const итог = await запрос("/api/shift/money/balances", "balances", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        cash_amount: Number(значения.cash_amount) || 0,
+        cash_as_of: значения.cash_as_of,
+        settlement_amount: Number(значения.settlement_amount) || 0,
+        settlement_as_of: значения.settlement_as_of,
+        other_account_debt: Number(значения.other_account_debt) || 0,
+        other_debt_note: значения.other_debt_note || null,
+      }),
+    });
+    if (!итог) return;
+    setОстатки(итог);
+    setФормаОстатков(false);
+    // Смена уже закрыта, но ещё не отправлена — цифры в блоке «Деньги»
+    // пересчитываются заново, как и всё закрытие (§32 ТЗ), иначе владелец
+    // внёс остатки и не увидел бы их до завтрашнего закрытия.
+    if (state?.closing_snapshot && !state.closing_sent_at) {
+      const обновлённое = await запрос("/api/shift/close", "close", { method: "POST" });
+      if (обновлённое) setState(обновлённое);
     }
   };
 
@@ -470,34 +664,75 @@ export default function ShiftPage() {
               <Плитка label="Выполнено" value={String(закрытие.records_completed)} />
             </Раздел>
 
-            <Раздел title="Деньги">
-              <Плитка
-                label="Заработано всего"
-                value={РУБ(закрытие.money.total_earned)}
-                крупно
-              />
-              <Плитка label="Из них безнал" value={РУБ(закрытие.money.non_cash)} />
-              <Плитка label="Наличка" value={РУБ(закрытие.money.cash)} />
-              <Плитка
-                label="Услуги"
-                value={РУБ(закрытие.services_revenue)}
-                onClick={() => переключитьДеньги("services")}
-              />
-              <Плитка
-                label="Товары"
-                value={РУБ(закрытие.products_revenue)}
-                onClick={() => переключитьДеньги("products")}
-              />
-              <Плитка label="Потрачено" value={РУБ(закрытие.money.spent)} тон="negative" />
-              <Плитка
-                label="В кассе (расчётно)"
-                value={РУБ(закрытие.money.cash_register_estimate)}
-              />
-              <Плитка
-                label="На расчётном счёте (расчётно)"
-                value={РУБ(закрытие.money.settlement_account_estimate)}
-              />
-            </Раздел>
+            <div className="mt-4 first:mt-0">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-[11px] uppercase tracking-widest text-muted-light dark:text-muted">
+                  Деньги
+                </div>
+                {role === "owner" && !формаОстатков && (
+                  <button
+                    onClick={() => setФормаОстатков(true)}
+                    className="inline-flex items-center gap-1 text-[11px] text-muted-light dark:text-muted hover:text-ink-soft dark:hover:text-cream"
+                  >
+                    <Pencil size={11} />
+                    Остатки
+                  </button>
+                )}
+                {формаОстатков && (
+                  <button
+                    onClick={() => setФормаОстатков(false)}
+                    className="text-muted-light dark:text-muted hover:text-ink-soft dark:hover:text-cream"
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+              <div className="grid gap-3 grid-cols-2 sm:grid-cols-3">
+                <Плитка
+                  label="Заработано всего"
+                  value={РУБ(закрытие.money.total_earned)}
+                  крупно
+                />
+                <Плитка label="Из них безнал" value={РУБ(закрытие.money.non_cash)} />
+                <Плитка label="Наличка" value={РУБ(закрытие.money.cash)} />
+                <Плитка
+                  label="Услуги"
+                  value={РУБ(закрытие.services_revenue)}
+                  onClick={() => переключитьДеньги("services")}
+                />
+                <Плитка
+                  label="Товары"
+                  value={РУБ(закрытие.products_revenue)}
+                  onClick={() => переключитьДеньги("products")}
+                />
+                <Плитка label="Потрачено" value={РУБ(закрытие.money.spent)} тон="negative" />
+                <Плитка
+                  label="В кассе (расчётно)"
+                  value={РУБ(закрытие.money.cash_register_estimate)}
+                />
+                <Плитка
+                  label="На расчётном счёте (расчётно)"
+                  value={РУБ(закрытие.money.settlement_account_estimate)}
+                />
+                <Плитка
+                  label="Долг по другому счёту"
+                  value={РУБ(закрытие.money.other_account_debt)}
+                  тон={
+                    закрытие.money.other_account_debt && закрытие.money.other_account_debt > 0
+                      ? "negative"
+                      : undefined
+                  }
+                />
+              </div>
+              {формаОстатков && (
+                <ФормаОстатков
+                  остатки={остатки}
+                  занято={занято !== ""}
+                  onSave={сохранитьОстатки}
+                  onCancel={() => setФормаОстатков(false)}
+                />
+              )}
+            </div>
             {деньгиОткрыто && (
               <div className="mt-3 rounded-xl border border-milk-line dark:border-line bg-milk dark:bg-ink/40 px-3 py-2">
                 <div className="flex items-center justify-between mb-1">

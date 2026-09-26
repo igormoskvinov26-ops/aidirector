@@ -770,3 +770,67 @@ async def test_деньги_детали_неизвестный_раздел_о�
 
     with pytest.raises(ValueError):
         await shift_store.деньги_детали(session, "чушь", ДЕНЬ)
+
+
+# --------------------------------------------------------------------------- #
+# Остатки денег подставляются в закрытие смены
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_закрытие_подставляет_внесённые_остатки(session: AsyncSession, monkeypatch):
+    from decimal import Decimal
+
+    from app.services import cash_balances, shift, shift_store
+
+    async def собрать_закрытие(день=None):
+        return {
+            "shift_date": ДЕНЬ.isoformat(), "records_total": 0, "records_completed": 0,
+            "services_revenue": 0.0, "products_revenue": 0.0,
+            "money": {"total_earned": 0.0, "non_cash": None, "cash": None, "spent": None,
+                      "cash_register_estimate": None, "settlement_account_estimate": None,
+                      "other_account_debt": None},
+            "clients_came": 0, "clients": {"booked_next": 0, "not_booked": 0},
+            "created_today_for_future": None, "completed": {"new": None, "became_regular": None},
+            "lost_today": None, "masters": [], "warnings": [], "calculated_at": "x",
+        }
+
+    monkeypatch.setattr(shift, "собрать_закрытие", собрать_закрытие)
+    await cash_balances.сохранить(
+        session, cash_amount=Decimal("7446"), cash_as_of=ДЕНЬ,
+        settlement_amount=Decimal("0"), settlement_as_of=ДЕНЬ,
+        other_account_debt=Decimal("40000"), other_debt_note="заняли на расходы",
+    )
+
+    итог = await shift_store.закрыть(session, ДЕНЬ)
+
+    деньги = итог["closing_snapshot"]["money"]
+    assert деньги["cash_register_estimate"] == 7446.0
+    assert деньги["settlement_account_estimate"] == 0.0
+    assert деньги["other_account_debt"] == 40000.0
+    assert not any("не пересчитан" in w for w in итог["closing_snapshot"]["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_закрытие_без_остатков_предупреждает_а_не_молчит(session: AsyncSession, monkeypatch):
+    from app.services import shift, shift_store
+
+    async def собрать_закрытие(день=None):
+        return {
+            "shift_date": ДЕНЬ.isoformat(), "records_total": 0, "records_completed": 0,
+            "services_revenue": 0.0, "products_revenue": 0.0,
+            "money": {"total_earned": 0.0, "non_cash": None, "cash": None, "spent": None,
+                      "cash_register_estimate": None, "settlement_account_estimate": None,
+                      "other_account_debt": None},
+            "clients_came": 0, "clients": {"booked_next": 0, "not_booked": 0},
+            "created_today_for_future": None, "completed": {"new": None, "became_regular": None},
+            "lost_today": None, "masters": [], "warnings": [], "calculated_at": "x",
+        }
+
+    monkeypatch.setattr(shift, "собрать_закрытие", собрать_закрытие)
+
+    итог = await shift_store.закрыть(session, ДЕНЬ)
+
+    деньги = итог["closing_snapshot"]["money"]
+    assert деньги["cash_register_estimate"] is None
+    assert any("не внесены" in w for w in итог["closing_snapshot"]["warnings"])

@@ -76,6 +76,8 @@ DOMAIN=director.rublbarber.ru ./deploy.sh
 | POST | `/api/shift/close` | Факт за день — пересчитывается заново |
 | POST | `/api/shift/times` | Время прихода или ухода мастеров (только вручную) |
 | GET | `/api/shift/money/{services\|products}` | Расшифровка плитки «Услуги»/«Товары» в закрытии |
+| GET | `/api/shift/money/balances` | Остатки в кассе, на счёте и долг по другому счёту |
+| POST | `/api/shift/money/balances` | Внести остатки заново — только владелец |
 | GET | `/api/shift/preview` | Текст сообщения перед отправкой |
 | POST | `/api/shift/send` | Отправить открытие или закрытие в Telegram |
 | GET | `/api/stories/generate` | Отрисовать сторис |

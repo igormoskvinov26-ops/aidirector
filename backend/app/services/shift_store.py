@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.models import Client, Shift, ShiftEmployee
+from app.services import cash_balances
 from app.services import shift as расчёт
 from app.services.telegram import отправить_сообщение
 
@@ -158,6 +159,18 @@ async def закрыть(session: AsyncSession, день: date | None = None) ->
         return await текущая(session, день)
 
     снимок = await расчёт.собрать_закрытие(день)
+    остатки = await cash_balances.получить(session)
+    добавка = cash_balances.в_блок_денег(остатки, день)
+    предупреждение_остатков = добавка.pop("warning", None)
+    снимок["money"].update(добавка)
+    if предупреждение_остатков:
+        снимок["warnings"].append(предупреждение_остатков)
+    if остатки is None:
+        снимок["warnings"].append(
+            "Остатки денег ещё не внесены — касса, счёт и долг по другому счёту "
+            "недоступны, пока владелец не укажет их хотя бы раз."
+        )
+
     if смена is None:
         смена = Shift(shift_date=день)
         session.add(смена)

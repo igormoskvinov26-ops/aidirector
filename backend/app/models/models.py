@@ -394,6 +394,34 @@ class ShiftEmployee(Base):
     shift: Mapped["Shift"] = relationship(back_populates="employees")
 
 
+class CashBalances(Base):
+    """Остатки в кассе и на расчётном счёте — единственная строка, id всегда 1.
+
+    Решение владельца 26.09.2026: вести кассу и счёт как регистр (вчерашний
+    остаток плюс сегодняшние движения) YCLIENTS не позволяет без подтверждённых
+    полей нал/безнал и признака расхода (§39 ТЗ смены — не угадывать). Пока
+    их нет, значение хранится как известный остаток на дату as_of, и в блоке
+    «Деньги» показывается с этой датой, а не пересчитывается вперёд молча.
+
+    Долг перед другим счётом (other_account_debt) YCLIENTS вообще не видит —
+    деньги брали с личного или стороннего счёта на расходы бизнеса. Это
+    исключительно ручная цифра, обновляемая владельцем, когда меняется.
+    """
+
+    __tablename__ = "cash_balances"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    cash_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
+    cash_as_of: Mapped[date] = mapped_column(Date)
+    settlement_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
+    settlement_as_of: Mapped[date] = mapped_column(Date)
+    other_account_debt: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
+    other_debt_note: Mapped[str | None] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class SyncRun(Base):
     """Одна выгрузка из YCLIENTS: когда шла, чем кончилась, сколько привезла.
 

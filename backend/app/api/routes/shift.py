@@ -6,12 +6,14 @@
 """
 
 from datetime import date
+from decimal import Decimal, InvalidOperation
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.services import shift_store
+from app.main_roles import ROLE_OWNER
+from app.services import cash_balances, shift_store
 from app.services.shift_store import ЗАКРЫТИЕ, ОТКРЫТИЕ
 from app.services.telegram import TelegramNotConfiguredError, TelegramSendError
 
@@ -22,6 +24,11 @@ def _вид(kind: str) -> str:
     if kind not in (ОТКРЫТИЕ, ЗАКРЫТИЕ):
         raise HTTPException(status_code=400, detail="kind должен быть opening или closing")
     return kind
+
+
+def _require_owner(request: Request) -> None:
+    if getattr(request.state, "role", None) != ROLE_OWNER:
+        raise HTTPException(status_code=403, detail="Раздел доступен только владельцу")
 
 
 def _день(day: str | None) -> date | None:
@@ -73,6 +80,40 @@ async def времена(
         return await shift_store.записать_времена(db, _вид(kind), разобранные, _день(day))
     except ValueError as сбой:
         raise HTTPException(status_code=400, detail=str(сбой)) from None
+
+
+@router.get("/money/balances")
+async def остатки_денег(db: AsyncSession = Depends(get_db)) -> dict:
+    """Остаток в кассе, на счёте и долг по другому счёту — на дату, когда их
+    в последний раз внёс владелец. None везде, если ещё ни разу не вносил."""
+    сохранённые = await cash_balances.как_словарь(db)
+    return сохранённые or {
+        "cash_amount": None, "cash_as_of": None,
+        "settlement_amount": None, "settlement_as_of": None,
+        "other_account_debt": None, "other_debt_note": None, "updated_at": None,
+    }
+
+
+@router.post("/money/balances")
+async def сохранить_остатки(
+    request: Request,
+    body: dict = Body(...),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Владелец вносит остатки заново. Значения ручные — раздел ему одному."""
+    _require_owner(request)
+    try:
+        return await cash_balances.сохранить(
+            db,
+            cash_amount=Decimal(str(body["cash_amount"])),
+            cash_as_of=date.fromisoformat(body["cash_as_of"]),
+            settlement_amount=Decimal(str(body["settlement_amount"])),
+            settlement_as_of=date.fromisoformat(body["settlement_as_of"]),
+            other_account_debt=Decimal(str(body.get("other_account_debt") or 0)),
+            other_debt_note=(body.get("other_debt_note") or None),
+        )
+    except (KeyError, ValueError, InvalidOperation) as сбой:
+        raise HTTPException(status_code=400, detail=f"Некорректные данные: {сбой}") from None
 
 
 @router.get("/money/{раздел}")
