@@ -291,7 +291,7 @@ async def отправить(session: AsyncSession, вид: str, день: date 
     if смена is None:
         raise ValueError("Смена на этот день не открыта")
 
-    message_id = await отправить_сообщение(текст(вид, смена))
+    message_id = await отправить_сообщение(текст(вид, смена), session)
     сейчас = datetime.now(UTC)
     if вид == ОТКРЫТИЕ:
         смена.opening_telegram_sent_at = сейчас

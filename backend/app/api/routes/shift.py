@@ -11,9 +11,10 @@ from decimal import Decimal, InvalidOperation
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings as конфиг
 from app.database import get_db
 from app.main_roles import ROLE_OWNER
-from app.services import cash_balances, shift_store
+from app.services import cash_balances, shift_store, telegram, telegram_settings
 from app.services.shift_store import ЗАКРЫТИЕ, ОТКРЫТИЕ
 from app.services.telegram import TelegramNotConfiguredError, TelegramSendError
 
@@ -127,6 +128,59 @@ async def деньги(
         return await shift_store.деньги_детали(db, раздел, _день(day))
     except ValueError as сбой:
         raise HTTPException(status_code=400, detail=str(сбой)) from None
+
+
+@router.get("/telegram/settings")
+async def настройки_телеграм(request: Request, db: AsyncSession = Depends(get_db)) -> dict:
+    """Статус настройки: настроено ли, из базы или из .env, без самого токена."""
+    _require_owner(request)
+    return await telegram_settings.как_словарь(
+        db, конфиг.telegram_bot_token, конфиг.telegram_chat_id
+    )
+
+
+@router.post("/telegram/discover")
+async def найти_чаты_телеграм(
+    request: Request, body: dict = Body(...)
+) -> dict:
+    """Первый шаг формы: проверить токен и показать чаты, куда бот уже что-то видел."""
+    _require_owner(request)
+    токен = str(body.get("bot_token") or "").strip()
+    if not токен:
+        raise HTTPException(status_code=400, detail="Вставьте токен бота")
+    try:
+        бот = await telegram.узнать_бота(токен)
+        чаты = await telegram.найти_чаты(токен)
+    except TelegramSendError as сбой:
+        raise HTTPException(status_code=502, detail=str(сбой)) from None
+    return {"bot_username": бот["username"], "chats": чаты}
+
+
+@router.post("/telegram/settings")
+async def сохранить_настройки_телеграм(
+    request: Request, body: dict = Body(...), db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Сохранить бота и чат — только после того, как Telegram подтвердил оба."""
+    _require_owner(request)
+    токен = str(body.get("bot_token") or "").strip()
+    chat_id = str(body.get("chat_id") or "").strip()
+    if not токен or not chat_id:
+        raise HTTPException(status_code=400, detail="Нужны и токен, и chat_id")
+    try:
+        бот = await telegram.узнать_бота(токен)
+        чат = await telegram.проверить_чат(токен, chat_id)
+    except TelegramSendError as сбой:
+        raise HTTPException(status_code=502, detail=str(сбой)) from None
+    await telegram_settings.сохранить(
+        db,
+        bot_token=токен,
+        chat_id=chat_id,
+        bot_username=бот["username"],
+        chat_title=чат["title"],
+    )
+    return await telegram_settings.как_словарь(
+        db, конфиг.telegram_bot_token, конфиг.telegram_chat_id
+    )
 
 
 @router.get("/preview")

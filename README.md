@@ -78,6 +78,9 @@ DOMAIN=director.rublbarber.ru ./deploy.sh
 | GET | `/api/shift/money/{services\|products}` | Расшифровка плитки «Услуги»/«Товары» в закрытии |
 | GET | `/api/shift/money/balances` | Остатки в кассе, на счёте и долг по другому счёту |
 | POST | `/api/shift/money/balances` | Внести остатки заново — только владелец |
+| GET | `/api/shift/telegram/settings` | Статус настройки Telegram — только владелец |
+| POST | `/api/shift/telegram/discover` | Проверить токен и найти чаты бота — только владелец |
+| POST | `/api/shift/telegram/settings` | Сохранить бота и чат для рассылки — только владелец |
 | GET | `/api/shift/preview` | Текст сообщения перед отправкой |
 | POST | `/api/shift/send` | Отправить открытие или закрытие в Telegram |
 | GET | `/api/stories/generate` | Отрисовать сторис |

@@ -422,6 +422,27 @@ class CashBalances(Base):
     )
 
 
+class TelegramSettings(Base):
+    """Токен бота и чат для рассылки — единственная строка, id всегда 1.
+
+    Решение владельца 27.09.2026: настраивается прямо на странице «Смена»,
+    без доступа к серверу. Строка в базе главенствует над TELEGRAM_BOT_TOKEN
+    и TELEGRAM_CHAT_ID из .env — они остаются запасным вариантом для уже
+    развёрнутых установок, где владелец ещё не открывал эту форму.
+    """
+
+    __tablename__ = "telegram_settings"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bot_token: Mapped[str] = mapped_column(Text)
+    chat_id: Mapped[str] = mapped_column(String(64))
+    bot_username: Mapped[str | None] = mapped_column(String(255))
+    chat_title: Mapped[str | None] = mapped_column(String(255))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class SyncRun(Base):
     """Одна выгрузка из YCLIENTS: когда шла, чем кончилась, сколько привезла.
 
