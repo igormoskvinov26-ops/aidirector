@@ -861,6 +861,7 @@ async def record_outcome(
     channel: str,
     comment: str | None,
     actor_id: str | None,
+    admin_staff_id: int | None = None,
 ) -> dict:
     task = await session.get(ContactTask, task_id)
     if task is None:
@@ -872,6 +873,9 @@ async def record_outcome(
         channel=channel,
         comment=comment,
         actor_id=actor_id,
+        admin_staff_id=admin_staff_id,
+        # «Записан» — не результат, а заявка на проверку в YCLIENTS.
+        verification_status="pending" if outcome == "booked" else None,
     )
     session.add(attempt)
     when = datetime.now(MOSCOW)

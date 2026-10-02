@@ -1,7 +1,7 @@
 """Repository pattern — data access layer."""
 
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from loguru import logger
@@ -46,10 +46,15 @@ class EmployeeRepository:
     @staticmethod
     async def upsert_many(session: AsyncSession, data: list[dict]) -> list[int]:
         ids = []
-        for item in data:
+        for item in data or []:
+            # Одна битая строка из API не должна ронять весь шаг: у записи
+            # без идентификатора нечего обновлять, и место ей — в журнале.
+            if not isinstance(item, dict) or item.get("id") is None:
+                logger.warning(f"пропущена строка без id: {str(item)[:120]}")
+                continue
             stmt = pg_insert(Employee).values(
                 yclients_id=item["id"],
-                name=item["name"],
+                name=item.get("name") or f"ID {item['id']}",
                 specialization=item.get("specialization"),
                 position=item.get("position", {}).get("title") if isinstance(item.get("position"), dict) else item.get("position"),
                 avatar_url=item.get("avatar"),
@@ -57,7 +62,7 @@ class EmployeeRepository:
             ).on_conflict_do_update(
                 index_elements=["yclients_id"],
                 set_={
-                    "name": item["name"],
+                    "name": item.get("name") or f"ID {item['id']}",
                     "specialization": item.get("specialization"),
                     "avatar_url": item.get("avatar"),
                     "rating": item.get("rating"),
@@ -81,7 +86,12 @@ class ClientRepository:
     @staticmethod
     async def upsert_many(session: AsyncSession, data: list[dict]) -> int:
         count = 0
-        for item in data:
+        for item in data or []:
+            # Одна битая строка из API не должна ронять весь шаг: у записи
+            # без идентификатора нечего обновлять, и место ей — в журнале.
+            if not isinstance(item, dict) or item.get("id") is None:
+                logger.warning(f"пропущена строка без id: {str(item)[:120]}")
+                continue
             birthday = _parse_date(item.get("birthday")) or _parse_date(item.get("birth_date"))
             last_visit = _parse_date(item.get("last_visit_date")) or _parse_date(item.get("last_visit"))
             first_visit = _parse_date(item.get("first_visit_date")) or _parse_date(item.get("created_at"))
@@ -152,6 +162,47 @@ def _parse_datetime(val: Any) -> datetime | None:
     return None
 
 
+# ── Чтение полей ответа YCLIENTS ──────────────────────────────────────────
+#
+# YCLIENTS отличает «поля нет» от «поле есть, но пустое» и во втором случае
+# присылает null. Запись item.get("client", {}) спасает только от первого:
+# при "client": null get возвращает None, и следующий .get(...) роняет весь
+# шаг. Так 28.09.2026 в 16:41 и встала выгрузка визитов — на одной записи
+# без клиента (перерыв мастера или гость без записи), и двое суток данные
+# не обновлялись. Эти четыре функции — единственный способ читать такие поля.
+
+
+def _словарь(значение: Any) -> dict:
+    """Вложенный объект или пустой словарь — для null, строки, числа."""
+    return значение if isinstance(значение, dict) else {}
+
+
+def _записи(значение: Any) -> list[dict]:
+    """Список объектов без null и мусора внутри. null целиком — пустой список."""
+    if not isinstance(значение, list):
+        return []
+    return [x for x in значение if isinstance(x, dict)]
+
+
+def _деньги(значение: Any) -> Decimal:
+    """Сумма из ответа. null, пустая строка и мусор — ноль, а не падение шага."""
+    if значение is None or значение == "":
+        return Decimal("0")
+    try:
+        return Decimal(str(значение))
+    except (InvalidOperation, ValueError):
+        logger.warning(f"сумма не разобрана, считаю нулём: {str(значение)[:40]}")
+        return Decimal("0")
+
+
+def _целое(значение: Any) -> int:
+    """Целое из ответа. null и мусор — ноль."""
+    try:
+        return int(значение or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _visit_amount(services: list[dict]) -> Decimal:
     """Сумма визита по его строкам услуг.
 
@@ -163,12 +214,12 @@ def _visit_amount(services: list[dict]) -> Decimal:
     по-разному.
     """
     total = Decimal("0")
-    for svc in services or []:
+    for svc in _записи(services):
         value = next(
             (svc[k] for k in ("cost_to_pay", "cost", "first_cost") if svc.get(k) is not None),
             0,
         )
-        total += Decimal(str(value))
+        total += _деньги(value)
     return total
 
 
@@ -267,15 +318,21 @@ class VisitRepository:
         чужие_мастера: set[int] = set()
         чужие_клиенты: set[int] = set()
 
-        for item in data:
-            client_db_id = client_map.get(item.get("client", {}).get("id", 0))
-            employee_db_id = employee_map.get(item.get("staff_id", 0))
+        for item in data or []:
+            # Одна битая строка из API не должна ронять весь шаг: у записи
+            # без идентификатора нечего обновлять, и место ей — в журнале.
+            if not isinstance(item, dict) or item.get("id") is None:
+                logger.warning(f"пропущена строка без id: {str(item)[:120]}")
+                continue
+            клиент = _словарь(item.get("client"))
+            client_db_id = client_map.get(_целое(клиент.get("id")))
+            employee_db_id = employee_map.get(_целое(item.get("staff_id")))
             if not client_db_id:
                 # Законно для заблокированного времени в журнале записи: там
                 # клиента нет вовсе. Но так же выглядит и клиент, которого не
                 # довезла выгрузка клиентской базы, — а это уже потеря.
                 без_клиента += 1
-                чужие_клиенты.add(int(item.get("client", {}).get("id") or 0))
+                чужие_клиенты.add(_целое(клиент.get("id")))
                 continue
             if not employee_db_id:
                 # Решение владельца 17.09.2026: такие визиты пропускать.
@@ -295,11 +352,11 @@ class VisitRepository:
                 # выгрузка сотрудников, и это уже потеря сегодняшних денег.
                 без_мастера += 1
                 чужие_мастера.add(
-                    int(item.get("staff_id") or (item.get("staff") or {}).get("id") or 0)
+                    _целое(item.get("staff_id") or _словарь(item.get("staff")).get("id"))
                 )
                 continue
 
-            total_amount = _visit_amount(item.get("services", []))
+            total_amount = _visit_amount(item.get("services"))
 
             raw_status = item.get("visit_attendance") if item.get("visit_attendance") is not None else item.get("status")
             normalized_status = _normalize_visit_status(raw_status)
@@ -314,21 +371,21 @@ class VisitRepository:
                 client_id=client_db_id,
                 employee_id=employee_db_id,
                 datetime=visit_datetime,
-                length_minutes=int((item.get("seance_length") or item.get("length", 0)) / 60),
+                length_minutes=_целое(item.get("seance_length") or item.get("length")) // 60,
                 status=normalized_status,
                 comment=item.get("comment"),
                 total_amount=total_amount,
-                paid_amount=Decimal(str(item.get("paid_full", 0))),
-                is_paid=bool(item.get("paid_full", 0)),
-                is_new_client=item.get("client", {}).get("is_new", False),
+                paid_amount=_деньги(item.get("paid_full")),
+                is_paid=bool(item.get("paid_full")),
+                is_new_client=bool(клиент.get("is_new")),
             ).on_conflict_do_update(
                 index_elements=["yclients_id"],
                 set_={
                     "datetime": visit_datetime,
                     "status": normalized_status,
                     "total_amount": total_amount,
-                    "paid_amount": Decimal(str(item.get("paid_full", 0))),
-                    "is_paid": bool(item.get("paid_full", 0)),
+                    "paid_amount": _деньги(item.get("paid_full")),
+                    "is_paid": bool(item.get("paid_full")),
                 },
             ).returning(Visit.id)
             result = await session.execute(stmt)
@@ -338,17 +395,17 @@ class VisitRepository:
 
             visit_db_id = visit_row[0]
 
-            for svc in item.get("services", []):
+            for svc in _записи(item.get("services")):
                 svc_db_id = await _услуга_под_ссылку(session, service_map, svc)
                 if svc_db_id is None:
                     continue
                 svc_stmt = pg_insert(VisitService).values(
                     visit_id=visit_db_id,
                     service_id=svc_db_id,
-                    title=svc.get("title", ""),
-                    quantity=svc.get("amount", 1),
-                    price=Decimal(str(svc.get("cost", 0))),
-                    discount=Decimal(str(svc.get("discount", 0))),
+                    title=svc.get("title") or "",
+                    quantity=_целое(svc.get("amount")) or 1,
+                    price=_деньги(svc.get("cost")),
+                    discount=_деньги(svc.get("discount")),
                 ).on_conflict_do_nothing()
                 await session.execute(svc_stmt)
 
@@ -384,7 +441,12 @@ class ServiceRepository:
     @staticmethod
     async def upsert_many(session: AsyncSession, data: list[dict]) -> int:
         count = 0
-        for item in data:
+        for item in data or []:
+            # Одна битая строка из API не должна ронять весь шаг: у записи
+            # без идентификатора нечего обновлять, и место ей — в журнале.
+            if not isinstance(item, dict) or item.get("id") is None:
+                logger.warning(f"пропущена строка без id: {str(item)[:120]}")
+                continue
             stmt = pg_insert(Service).values(
                 yclients_id=item["id"],
                 title=item.get("title", ""),
@@ -484,7 +546,12 @@ class ProductRepository:
     @staticmethod
     async def upsert_many(session: AsyncSession, data: list[dict]) -> int:
         count = 0
-        for item in data:
+        for item in data or []:
+            # Одна битая строка из API не должна ронять весь шаг: у записи
+            # без идентификатора нечего обновлять, и место ей — в журнале.
+            if not isinstance(item, dict) or item.get("id") is None:
+                logger.warning(f"пропущена строка без id: {str(item)[:120]}")
+                continue
             stmt = pg_insert(Product).values(
                 yclients_id=item["id"],
                 title=item.get("title", ""),
@@ -514,24 +581,29 @@ class SaleRepository:
         product_map: dict[int, int],
     ) -> int:
         count = 0
-        for item in data:
+        for item in data or []:
+            # Одна битая строка из API не должна ронять весь шаг: у записи
+            # без идентификатора нечего обновлять, и место ей — в журнале.
+            if not isinstance(item, dict) or item.get("id") is None:
+                logger.warning(f"пропущена строка без id: {str(item)[:120]}")
+                continue
             tid = item.get("type_id")
             if tid not in (2, 4):
                 continue
 
-            amount = abs(int(item.get("amount", 0)))
+            amount = abs(_целое(item.get("amount")))
             if amount <= 0:
                 continue
 
             client_db_id = None
-            client_data = item.get("client") or []
-            if isinstance(client_data, list) and client_data:
-                client_db_id = client_map.get(client_data[0].get("id", 0))
+            client_data = _записи(item.get("client"))
+            if client_data:
+                client_db_id = client_map.get(_целое(client_data[0].get("id")))
 
             master_db_id = None
-            master_data = item.get("master") or []
-            if isinstance(master_data, list) and master_data:
-                master_db_id = employee_map.get(master_data[0].get("id", 0))
+            master_data = _записи(item.get("master"))
+            if master_data:
+                master_db_id = employee_map.get(_целое(master_data[0].get("id")))
 
             sale_datetime = _parse_datetime(item.get("create_date"))
 
@@ -539,11 +611,12 @@ class SaleRepository:
             # чужое число здесь либо отвергается базой, либо указывает на
             # посторонний товар. Поле допускает пустоту, а название и цена
             # строки продажи хранятся рядом и не теряются.
-            product_yid = item.get("good", {}).get("id", 0)
+            товар = _словарь(item.get("good"))
+            product_yid = _целое(товар.get("id"))
             product_db_id = product_map.get(product_yid)
 
             sale_id = item["id"]
-            sale_cost = abs(Decimal(str(item.get("cost", 0))))
+            sale_cost = abs(_деньги(item.get("cost")))
 
             stmt = pg_insert(Sale).values(
                 yclients_id=sale_id,
@@ -566,9 +639,9 @@ class SaleRepository:
             item_stmt = pg_insert(SaleItem).values(
                 sale_id=sale_db_id,
                 product_id=product_db_id,
-                title=item.get("good", {}).get("title", ""),
+                title=товар.get("title") or "",
                 quantity=amount,
-                price=Decimal(str(item.get("cost_per_unit", 0))),
+                price=_деньги(item.get("cost_per_unit")),
             ).on_conflict_do_nothing()
             await session.execute(item_stmt)
 

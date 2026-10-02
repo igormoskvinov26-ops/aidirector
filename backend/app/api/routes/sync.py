@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.schemas.schemas import SyncStatusResponse
 from app.services.kpi import calculate_all_daily
-from app.services.sync import get_sync_state, sync_all
+from app.services.sync import get_sync_state, проверка_связи, sync_all
 
 router = APIRouter(prefix="/api/sync", tags=["sync"])
 
@@ -31,6 +31,16 @@ async def trigger_sync(
 ) -> dict:
     background_tasks.add_task(sync_all, date_from=date_from, date_to=date_to)
     return {"status": "started", "message": "Sync started in background"}
+
+
+@router.get("/checkup")
+async def проверить_связь() -> dict:
+    """Самопроверка связи с YCLIENTS — только владельцу.
+
+    Отвечает на вопрос «почему не обновляется» без чтения журналов: по каждому
+    адресу видно, ответил он или отказал, и сколько строк вернул.
+    """
+    return await проверка_связи()
 
 
 @router.post("/calculate-kpi")

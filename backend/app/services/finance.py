@@ -1210,7 +1210,7 @@ def _ensure_utc(dt: datetime) -> datetime:
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
 
 
-async def get_return_rate(session: AsyncSession) -> dict:
+async def get_return_rate(session: AsyncSession, as_of: datetime | None = None) -> dict:
     """Возвращаемость: доля клиентов мастера, пришедших к нему повторно, и
     сколько из них уже потерянные.
 
@@ -1243,7 +1243,14 @@ async def get_return_rate(session: AsyncSession) -> dict:
     хронизировать на нужную глубину — POST /api/sync/trigger?date_from=...
     Само число это не проверяет и не может: у него нет способа узнать,
     сколько НЕ приехавших в базу визитов было на самом деле.
+
+    ``as_of`` — состояние «на момент»: визиты с этого момента и позже не
+    учитываются, а пороги «потерянных» и «новых» отсчитываются от него. Нужен
+    месячному отчёту завершённого месяца; без параметра расчёт прежний.
     """
+    where = [Visit.status.in_(COUNTED_STATUSES)]
+    if as_of is not None:
+        where.append(Visit.datetime < as_of)
     rows = await session.execute(
         select(
             Employee.yclients_id,
@@ -1257,7 +1264,7 @@ async def get_return_rate(session: AsyncSession) -> dict:
             ).label("first_completed"),
         )
         .join(Employee, Employee.id == Visit.employee_id)
-        .where(Visit.status.in_(COUNTED_STATUSES))
+        .where(*where)
         .group_by(Employee.yclients_id, Visit.client_id)
     )
     by_staff: dict[int, list[tuple[int, datetime, datetime]]] = {}
@@ -1271,7 +1278,7 @@ async def get_return_rate(session: AsyncSession) -> dict:
             (completed, row.last_activity, row.first_completed)
         )
 
-    threshold = datetime.now(UTC) - timedelta(days=LOST_AFTER_DAYS)
+    threshold = (as_of or datetime.now(UTC)) - timedelta(days=LOST_AFTER_DAYS)
     masters = []
     for rule in settings.barber_payroll_rules:
         ident = int(rule["staff_id"])

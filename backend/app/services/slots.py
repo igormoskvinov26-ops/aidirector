@@ -90,7 +90,8 @@ def _booked_times(records: list[dict], staff_id: int) -> set[str]:
         minutes = int(seconds // 60) if seconds else 0
         if not minutes:
             minutes = sum(
-                int(s.get("seance_length", 0) or 0) // 60 for s in r.get("services", [])
+                int(s.get("seance_length") or 0) // 60
+                for s in (r.get("services") or []) if isinstance(s, dict)
             )
         minutes = max(minutes, step)
 

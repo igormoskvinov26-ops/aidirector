@@ -34,7 +34,9 @@ async def salary(
         if sid not in staff_map:
             continue
 
-        revenue = sum(s.get("cost", 0) for s in r.get("services", []))
+        revenue = sum(
+            (s.get("cost") or 0) for s in (r.get("services") or []) if isinstance(s, dict)
+        )
         status = str(r.get("visit_attendance", r.get("status", "")))
 
         entry = by_master.setdefault(

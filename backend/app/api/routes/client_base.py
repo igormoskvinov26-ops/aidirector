@@ -159,7 +159,23 @@ async def task_outcome(
     channel = str(body.get("channel", "phone"))
     comment = body.get("comment")
     actor_id = body.get("actor_id")
-    return await client_base.record_outcome(db, task_id, outcome, channel, comment, actor_id)
+    admin_staff_id = body.get("admin_staff_id")
+    try:
+        admin_staff_id = int(admin_staff_id) if admin_staff_id not in (None, "") else None
+    except (TypeError, ValueError):
+        admin_staff_id = None
+    return await client_base.record_outcome(
+        db, task_id, outcome, channel, comment, actor_id, admin_staff_id
+    )
+
+
+@router.get("/admins")
+async def call_admins(db: AsyncSession = Depends(get_db)) -> list[dict]:
+    """Кто может звонить: список из настроек отчёта. Нужен для выбора имени."""
+    from app.services import monthly_report
+
+    cfg = await monthly_report.load_settings(db)
+    return [{"staff_id": a["staff_id"], "name": a["name"]} for a in cfg["admins"]]
 
 
 # --------------------------------------------------------------------------- #

@@ -29,12 +29,22 @@ from app.api.routes.operations import router as operations_router
 from app.api.routes.shift import router as shift_router
 from app.api.routes.stories import router as stories_router
 from app.api.routes.sync import router as sync_router
+from app.api.routes.monthly_report import router as monthly_report_router
+from app.api.routes.settings import router as settings_router
+from app.api.yclients import YclientsНеНастроен
 from app.config import settings
 from app.database import check_db, init_db
 from app.main_roles import ROLE_MASTER, ROLE_OPERATOR, ROLE_OWNER
+from app.services import configuration, credentials
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 PUBLIC_PATHS = {"/health"}
+
+# Пока владелец не заведён, пароля для входа не существует — спрашивать его
+# не у кого. Открыт только мастер первичной настройки, и тот просит код,
+# напечатанный в окне установки. Всё остальное отвечает «требуется
+# настройка», а не пускает без пароля.
+SETUP_PREFIX = "/api/setup"
 
 # Что разрешено роли operator помимо статики страницы: только база обзвона.
 # Расчёт зарплаты администратору не показываем — это дело управляющего.
@@ -72,22 +82,45 @@ def _same(введено: str, ожидается: str) -> bool:
     return secrets.compare_digest(введено.encode("utf-8"), ожидается.encode("utf-8"))
 
 
+def настройка_не_закончена() -> bool:
+    """Владельца нет нигде — ни в .env, ни среди заведённых через мастер."""
+    return not (settings.owner_login and settings.owner_password) and not credentials.заведён(
+        ROLE_OWNER
+    )
+
+
 def _resolve_identity(login: str, password: str) -> tuple[str, int | None] | None:
     """Роль и привязка к мастеру по паре логин-пароль, либо None.
 
     Сравнения выполняются для всех учётных записей до проверки результата:
     иначе по времени ответа можно определить, существует ли такой логин.
+
+    Источников два: .env, как было всегда, и учётные записи, заведённые через
+    мастер первичной настройки. Первые проверяются первыми — у развёрнутых
+    установок они уже работают, и перестать их принимать нельзя.
     """
     matched: tuple[str, int | None] | None = None
 
-    owner_login_ok = _same(login, settings.owner_login)
-    owner_password_ok = _same(password, settings.owner_password)
-    operator_login_ok = _same(login, settings.operator_login)
-    operator_password_ok = _same(password, settings.operator_password)
+    owner_login_ok = _same(login, settings.owner_login) and bool(settings.owner_login)
+    owner_password_ok = _same(password, settings.owner_password) and bool(
+        settings.owner_password
+    )
+    operator_login_ok = _same(login, settings.operator_login) and bool(
+        settings.operator_login
+    )
+    operator_password_ok = _same(password, settings.operator_password) and bool(
+        settings.operator_password
+    )
 
-    if owner_login_ok and owner_password_ok:
+    # Обе роли проверяются всегда, независимо от того, сработал ли .env:
+    # ранний выход дал бы разницу во времени ответа между существующим и
+    # несуществующим логином.
+    owner_saved_ok = credentials.проверить_пароль(ROLE_OWNER, login, password)
+    operator_saved_ok = credentials.проверить_пароль(ROLE_OPERATOR, login, password)
+
+    if (owner_login_ok and owner_password_ok) or owner_saved_ok:
         matched = (ROLE_OWNER, None)
-    elif operator_login_ok and operator_password_ok:
+    elif (operator_login_ok and operator_password_ok) or operator_saved_ok:
         matched = (ROLE_OPERATOR, None)
 
     for account in settings.master_accounts:
@@ -112,6 +145,23 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
         if request.url.path in PUBLIC_PATHS:
             return await call_next(request)
 
+        path = request.url.path
+
+        # Режим первичной настройки: пароля ещё не существует.
+        if настройка_не_закончена():
+            if path.startswith(SETUP_PREFIX):
+                return await call_next(request)
+            if not path.startswith("/api/"):
+                # Статику отдаём: без неё мастер настройки не на чем открыть.
+                return await call_next(request)
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "detail": "Директор ещё не настроен",
+                    "setup_required": True,
+                },
+            )
+
         auth = request.headers.get("Authorization", "")
         if not auth.startswith("Basic "):
             return self._challenge()
@@ -127,7 +177,6 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
             return self._challenge()
 
         role, staff_id = identity
-        path = request.url.path
         allowed = {
             ROLE_OPERATOR: OPERATOR_API_PREFIXES,
             ROLE_MASTER: MASTER_API_PREFIXES,
@@ -152,6 +201,53 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
         )
 
 
+def _объявить_код_настройки() -> None:
+    """Напечатать код первичной настройки и положить его в файл.
+
+    Код нужен один раз — чтобы мастер настройки, открытый без пароля, не мог
+    заполнить кто-то посторонний. Печатается в журнал, который видно в окне
+    установки, и кладётся рядом с журналами: человек, который ставит
+    программу, найдёт его в обоих местах, а посторонний — ни в одном.
+    """
+    код = credentials.выдать_код_настройки()
+    рамка = "═" * 52
+    logger.info(
+        f"\n{рамка}\n  Директор ещё не настроен.\n"
+        f"  Откройте http://localhost:{settings.app_port} и введите код:\n\n"
+        f"        {код}\n\n{рамка}"
+    )
+    # Пишем в output, а не рядом с журналами: в Docker именно эта папка
+    # вынесена наружу, и только оттуда файл виден на самом компьютере.
+    # Внутри контейнера он никому не нужен.
+    try:
+        папка = settings.output_dir
+        папка.mkdir(parents=True, exist_ok=True)
+        (папка / "код-настройки.txt").write_text(
+            f"Код первичной настройки Директора: {код}\n\n"
+            "Он нужен один раз, при первом открытии. После того как заведена\n"
+            "учётная запись владельца, код перестаёт действовать.\n",
+            encoding="utf-8",
+        )
+        # Голый код латиницей — его читает установщик, чтобы показать человеку
+        # окном. Кириллица и разметка там только помешают.
+        (папка / "setup-code.txt").write_text(код, encoding="ascii")
+    except OSError as сбой:
+        logger.warning(f"код настройки не записан в файл: {сбой}")
+
+
+def убрать_код_настройки() -> None:
+    """Код отслужил: владелец заведён, и файл с кодом больше не нужен.
+
+    Оставлять его — значит оставить на диске пропуск, которым уже нельзя
+    воспользоваться, но который выглядит действующим.
+    """
+    for имя in ("код-настройки.txt", "setup-code.txt"):
+        try:
+            (settings.output_dir / имя).unlink(missing_ok=True)
+        except OSError as сбой:
+            logger.warning(f"файл {имя} не удалён: {сбой}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting Rubl AI Director...")
@@ -163,6 +259,39 @@ async def lifespan(app: FastAPI):
 
     settings.output_dir.mkdir(parents=True, exist_ok=True)
     settings.stories_dir.mkdir(parents=True, exist_ok=True)
+
+    # Настройки интеграций и учётные записи читаются один раз при старте:
+    # дальше за ними ходят из мест, где сессии базы под рукой нет, — из
+    # middleware на каждый запрос и из выгрузки в фоне.
+    from app.database import async_session
+
+    # При обновлении приложение стартует раньше, чем установка накатит
+    # миграцию: скрипты сначала поднимают контейнер, потом выполняют
+    # alembic upgrade внутри него. В этот промежуток таблиц app_settings ещё
+    # нет. Падать из-за этого нельзя — контейнер ушёл бы в перезапуск по
+    # кругу, и миграция не смогла бы в него попасть. Поэтому здесь отказ —
+    # не ошибка: работаем на значениях из .env, а управляемые подхватятся
+    # при следующем запуске или первом сохранении.
+    try:
+        async with async_session() as session:
+            await configuration.загрузить(session)
+            await credentials.загрузить(session)
+    except Exception as сбой:  # noqa: BLE001
+        logger.warning(
+            f"управляемые настройки не прочитаны (вероятно, миграция ещё не "
+            f"применена): {type(сбой).__name__}. Работаю на значениях из .env"
+        )
+
+    if настройка_не_закончена():
+        _объявить_код_настройки()
+    else:
+        обзор = configuration.обзор()
+        if обзор["missing"]:
+            logger.warning(
+                "не настроены ключи: "
+                + ", ".join(обзор["missing"])
+                + " — раздел «Настройки → Интеграции»"
+            )
 
     from app.services.sync import run_sync_loop
 
@@ -206,12 +335,31 @@ for r in (
     dashboard_router,
     employees_router,
     finance_router,
+    monthly_report_router,
     operations_router,
+    settings_router,
     shift_router,
     stories_router,
     sync_router,
 ):
     app.include_router(r)
+
+
+@app.exception_handler(YclientsНеНастроен)
+async def yclients_not_configured(
+    request: Request, exc: YclientsНеНастроен
+) -> JSONResponse:
+    """Ненастроенная интеграция — это 503 с понятным текстом, а не 500.
+
+    Раздел, которому нужны свежие данные из YCLIENTS, должен сказать «нет
+    ключей», а не показать «внутренняя ошибка сервера»: по второму человек
+    идёт искать поломку там, где её нет.
+    """
+    logger.info(f"{request.url.path}: YCLIENTS не настроен")
+    return JSONResponse(
+        status_code=503,
+        content={"detail": str(exc), "needs_configuration": "yclients"},
+    )
 
 
 @app.exception_handler(ValueError)
@@ -247,11 +395,16 @@ async def me(request: Request) -> dict:
 
 @app.get("/api/info")
 async def info() -> dict:
+    обзор = configuration.обзор()
     return {
-        "company_id": settings.yclients_company_id,
+        "company_id": configuration.число("YCLIENTS_COMPANY_ID"),
         "sync_interval_minutes": settings.sync_interval_minutes,
         "sync_window_days": settings.sync_window_days,
         "version": "2.0.0",
+        # Чего не хватает — по этому интерфейс показывает полосу «требуется
+        # настройка» на любой странице, а не только в разделе настроек.
+        "ready": обзор["ready"],
+        "missing": обзор["missing"],
     }
 
 

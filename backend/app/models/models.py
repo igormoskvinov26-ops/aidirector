@@ -330,10 +330,21 @@ class ContactAttempt(Base):
     outcome: Mapped[str] = mapped_column(String(20))  # booked | no_booking | no_answer
     channel: Mapped[str] = mapped_column(String(20))  # phone | message
     comment: Mapped[str | None] = mapped_column(Text)
+    # Имя администратора, выбранное в интерфейсе обзвона. До 9.9 здесь всегда
+    # стояло «admin»: такие строки остаются, в отчёте они идут отдельной строкой.
     actor_id: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+    # Проверка кнопки «Записан» по YCLIENTS (месячный отчёт). Нажатие само по
+    # себе не результат: pending → confirmed | not_confirmed | error.
+    # Заполняется только для outcome == "booked".
+    admin_staff_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    verification_status: Mapped[str | None] = mapped_column(String(20), index=True)
+    yclients_record_id: Mapped[int | None] = mapped_column(BigInteger, index=True)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    verification_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    verification_note: Mapped[str | None] = mapped_column(Text)
 
 
 class DailySegmentSnapshot(Base):
@@ -470,3 +481,89 @@ class SyncRun(Base):
     clients_count: Mapped[int] = mapped_column(Integer, default=0)
     visits_count: Mapped[int] = mapped_column(Integer, default=0)
     sales_count: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class AppSetting(Base):
+    """Управляемая настройка: то, что владелец задаёт в «Настройки → Интеграции».
+
+    Хранилище одно на все интеграции — YCLIENTS, Telegram, а дальше банк,
+    эквайринг, телефония. Отдельная таблица под каждую означала бы отдельную
+    миграцию, отдельный сервис и отдельное место, где можно забыть про
+    маскирование; ключ и значение обходятся без этого.
+
+    Значение лежит строкой, даже если по смыслу это число: источники
+    конфигурации — переменная окружения, строка .env, поле формы — все строки,
+    и приведение к типу делается в одном месте, при чтении.
+
+    Приоритет источников (app/services/configuration.py):
+        переменная окружения процесса > эта таблица > файл .env > пусто
+    Первое — потому что заданное инфраструктурой веб-интерфейс перекрыть не
+    может: при перезапуске вернётся значение инфраструктуры.
+    """
+
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    updated_by: Mapped[str | None] = mapped_column(String(64))
+
+
+class SettingsAudit(Base):
+    """Кто и когда менял настройки. Значения не сохраняются — ни старое, ни новое.
+
+    Смысл записи в том, чтобы через полгода можно было ответить на вопрос
+    «почему перестал ходить Telegram» строкой «30.09 в 14:22 владелец сменил
+    BOT_TOKEN», а не догадками. Само значение для этого не нужно, а хранить
+    историю токенов — значит завести ещё одно место, откуда они утекают.
+    """
+
+    __tablename__ = "settings_audit"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    who: Mapped[str] = mapped_column(String(64))
+    integration: Mapped[str] = mapped_column(String(32))
+    key: Mapped[str] = mapped_column(String(64))
+    # changed | removed | imported
+    action: Mapped[str] = mapped_column(String(16))
+
+
+class ReportSetting(Base):
+    """Настройки месячного отчёта: нормативы, допуслуги, администраторы, окно.
+
+    Отдельно от app_settings: там секреты интеграций с маскированием и
+    приоритетом окружения, а здесь обычные значения, которые владелец меняет
+    часто и которым нужна структура (списки), а не строка.
+    """
+
+    __tablename__ = "report_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[dict | list | str | int | float | None] = mapped_column(JSON)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class MonthlyReportSnapshot(Base):
+    """Сохранённый итог завершённого месяца.
+
+    Нормативы месяца лежат внутри: смена нормы позже не меняет историю.
+    Сырых данных YCLIENTS здесь нет, только посчитанные показатели.
+    """
+
+    __tablename__ = "monthly_report_snapshots"
+
+    report_month: Mapped[str] = mapped_column(String(7), primary_key=True)  # YYYY-MM
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    finalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    master_metrics: Mapped[list] = mapped_column(JSON)
+    admin_metrics: Mapped[list] = mapped_column(JSON)
+    targets: Mapped[dict] = mapped_column(JSON)
+    data_version: Mapped[int] = mapped_column(Integer, default=1)
+    warnings: Mapped[list] = mapped_column(JSON, default=list)

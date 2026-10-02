@@ -14,6 +14,7 @@ from tenacity import (
 )
 
 from app.config import settings
+from app.services import configuration
 from app.services.cache import cached
 
 BASE_URL = "https://api.yclients.com/api/v1"
@@ -43,20 +44,108 @@ def _is_retryable(exc: BaseException) -> bool:
     return False
 
 
+class YclientsОтветНеПонят(RuntimeError):
+    """Адрес ответил, но в ответе нет данных в том виде, в каком мы их ждём.
+
+    Отдельный класс нужен, чтобы на экране владельца стояло «адрес такой-то
+    отказал», а не голое `'NoneType' object is not iterable` из недр записи в
+    базу. По тексту исключения сразу видно, какой адрес и что именно вернул.
+    """
+
+
+def данные_ответа(result: Any, path: str) -> list[dict[str, Any]]:
+    """Достать список строк из конверта ответа YCLIENTS.
+
+    Прежняя запись по всему клиенту была ``result.get("data", [])``. Пустой
+    список она подставляет, только когда ключа `data` НЕТ. А YCLIENTS при
+    отказе присылает ключ со значением null — и метод возвращал None. Этот
+    None уходил дальше в цикл записи в базу, где выгрузка падала с
+    `'NoneType' object is not iterable`, ничего не сообщая о причине.
+
+    Разводим три случая, которые раньше сливались в один:
+
+    * ``success: false``  — адрес отказал (нет прав, чужой токен). Это ошибка,
+      и она должна быть видна, а не превращаться в ноль строк;
+    * ``data: null``      — данных не отдали. Считаем пустой выборкой, но
+      оставляем запись в журнале: для части адресов это законный «ничего не
+      нашлось», а для сотрудников и услуг — признак беды, и её ловит already
+      вызывающий код (см. ``sync.непустой``);
+    * ``data`` не список  — отдали объект вместо набора; заворачиваем в список,
+      чтобы не потерять содержимое.
+    """
+    if isinstance(result, list):
+        return result
+
+    if not isinstance(result, dict):
+        raise YclientsОтветНеПонят(
+            f"{path}: ожидался словарь или список, получено {type(result).__name__}"
+        )
+
+    if result.get("success") is False:
+        meta = result.get("meta")
+        причина = ""
+        if isinstance(meta, dict):
+            причина = str(meta.get("message") or meta.get("error") or "").strip()
+        хвост = f" — {причина}" if причина else ""
+        raise YclientsОтветНеПонят(f"{path}: адрес ответил отказом{хвост}")
+
+    data = result.get("data")
+
+    if data is None:
+        if "data" not in result:
+            logger.warning(f"{path}: в ответе нет поля data")
+        else:
+            logger.warning(f"{path}: поле data пустое (null)")
+        return []
+
+    if isinstance(data, dict):
+        return [data]
+
+    if not isinstance(data, list):
+        raise YclientsОтветНеПонят(
+            f"{path}: поле data имеет тип {type(data).__name__}, ожидался список"
+        )
+
+    return data
+
+
+class YclientsНеНастроен(RuntimeError):
+    """Нет ключей — идти в YCLIENTS не с чем.
+
+    Отдельное исключение, а не запрос с пустым токеном: пустой токен даёт
+    отказ авторизации, и человек ищет отозванные права там, где ключ просто
+    не заполнен.
+    """
+
+
 class YClientsClient:
     def __init__(self, company_id: int | None = None, user_token: str | None = None):
-        self.company_id = company_id or settings.yclients_company_id
+        # Ключи берутся через configuration, а не напрямую из .env: владелец
+        # меняет их в разделе «Настройки → Интеграции», и новый токен должен
+        # работать без перезапуска приложения. Клиент создаётся на каждый
+        # запрос, поэтому читать значения здесь достаточно.
+        свой_филиал = configuration.число("YCLIENTS_COMPANY_ID")
+        партнёрский = configuration.значение("YCLIENTS_PARTNER_TOKEN")
+
+        self.company_id = company_id or свой_филиал
         if user_token:
             self.user_token = user_token
-        elif company_id and company_id != settings.yclients_company_id:
+        elif company_id and company_id != свой_филиал:
             self.user_token = settings.yclients_old_user_token
         else:
-            self.user_token = settings.yclients_user_token
+            self.user_token = configuration.значение("YCLIENTS_USER_TOKEN")
+
+        if not партнёрский or not self.user_token or not self.company_id:
+            raise YclientsНеНастроен(
+                "YCLIENTS не настроен — заполните ключи в разделе "
+                "«Настройки → Интеграции»"
+            )
+
         self._client = httpx.AsyncClient(
             base_url=BASE_URL,
             headers={
                 "Authorization": (
-                    f"Bearer {settings.yclients_partner_token}, User {self.user_token}"
+                    f"Bearer {партнёрский}, User {self.user_token}"
                 ),
                 "Accept": "application/vnd.yclients.v2+json",
                 "Content-Type": "application/json",
@@ -131,7 +220,10 @@ class YClientsClient:
                 all_data.extend(result)
                 break
 
-            data = result.get("data", [])
+            # Разбор конверта: отказ адреса больше не выглядит как «страниц
+            # больше нет». Прежде и то и другое давало пустой список, и
+            # неполная выгрузка молча считалась удачной.
+            data = данные_ответа(result, path)
             if not data:
                 break
 
@@ -206,8 +298,8 @@ class YClientsClient:
 
     async def get_staff(self) -> list[dict[str, Any]]:
         async def load() -> list[dict[str, Any]]:
-            result = await self._get(f"/company/{self.company_id}/staff")
-            return result.get("data", [])
+            path = f"/company/{self.company_id}/staff"
+            return данные_ответа(await self._get(path), path)
 
         return await cached(self._ck("staff"), load)
 
@@ -313,8 +405,8 @@ class YClientsClient:
 
     async def get_services(self) -> list[dict[str, Any]]:
         async def load() -> list[dict[str, Any]]:
-            result = await self._get(f"/services/{self.company_id}")
-            return result.get("data", []) if isinstance(result, dict) else result
+            path = f"/services/{self.company_id}"
+            return данные_ответа(await self._get(path), path)
 
         return await cached(self._ck("services"), load)
 

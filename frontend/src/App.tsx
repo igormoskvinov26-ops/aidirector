@@ -19,16 +19,21 @@ import {
   Save,
   CalendarClock,
   Wallet,
+  FileBarChart,
   RefreshCw,
   AlertTriangle,
   Activity,
   Sunrise,
+  Settings,
 } from "lucide-react";
 import { useDark, палитраГрафика } from "./тема";
 import ClientBasePage from "./ClientBasePage";
 import BarberMonthPage from "./BarberMonthPage";
 import BasePulsePage from "./BasePulsePage";
 import ShiftPage from "./ShiftPage";
+import SettingsPage from "./SettingsPage";
+import MonthlyReportPage from "./MonthlyReportPage";
+import SetupWizard from "./SetupWizard";
 import { ClientCounters } from "./ClientCounters";
 import { MetricChart, type MetricPoint, type ТонГрафика } from "./MetricChart";
 import logo from "./assets/logo.png";
@@ -140,7 +145,10 @@ interface PlanFactSummary {
 // прятать пункты меню — это удобство, а не защита. Мастер, зашедший по
 // прямому адресу, всё равно получит от сервера только свою строку.
 const PAGES_BY_ROLE: Record<string, string[]> = {
-  owner: ["planfact", "bookings", "payroll", "pulse", "shift", "clients"],
+  // Настройки интеграций — только владельцу. Ограничение продублировано на
+  // сервере: за этими адресами лежат токены, и спрятанный пункт меню их не
+  // защищает.
+  owner: ["planfact", "bookings", "payroll", "monthly", "pulse", "shift", "clients", "settings"],
   // Расчёт ЗП администратору не показываем — это дело управляющего.
   // Решение владельца 18.09.2026. Смену открывает и закрывает он же —
   // вкладка «Смена» ему открыта. Решение владельца 23.09.2026.
@@ -152,9 +160,11 @@ const NAV = [
   { id: "planfact", label: "План-факт", icon: CreditCard },
   { id: "bookings", label: "Записи за месяц", icon: CalendarClock },
   { id: "payroll", label: "Расчёт ЗП", icon: Wallet },
+  { id: "monthly", label: "Месячный отчёт", icon: FileBarChart },
   { id: "pulse", label: "Пульс базы", icon: Activity },
   { id: "shift", label: "Смена", icon: Sunrise },
   { id: "clients", label: "Клиенты", icon: Users },
+  { id: "settings", label: "Настройки", icon: Settings },
 ];
 
 /** Ответ /api/sync/status — свежесть данных и текущий ход выгрузки. */
@@ -204,6 +214,25 @@ const УСТАРЕЛО_МИНУТ = 90;
  */
 function SyncBadge() {
   const [состояние, setСостояние] = useState<SyncState | null>(null);
+  // Самопроверка связи. Появилась после 28.09.2026: обновление стояло двое
+  // суток, а на экране была одна строка с текстом исключения — чтобы понять,
+  // какой адрес отказал, приходилось лезть в журнал контейнера.
+  const [проверка, setПроверка] = useState<string | null>(null);
+  const [идётПроверка, setИдётПроверка] = useState(false);
+
+  const проверитьСвязь = async () => {
+    setИдётПроверка(true);
+    setПроверка(null);
+    try {
+      const r = await fetch("/api/sync/checkup");
+      const тело = await r.json();
+      setПроверка(тело?.вывод ?? "Проверка не дала ответа");
+    } catch {
+      setПроверка("Директор не отвечает — проверьте, запущен ли он");
+    } finally {
+      setИдётПроверка(false);
+    }
+  };
 
   useEffect(() => {
     let живой = true;
@@ -287,7 +316,25 @@ function SyncBadge() {
       <span>
         Обновлено {времяПоМоскве(состояние.last_success_at)}
         {сорвалось && (
-          <span className="block">Последняя попытка не удалась</span>
+          <>
+            <span className="block">Последняя попытка не удалась</span>
+            {/* Полный текст ошибки: во всплывающей подсказке он обрезается
+                рамкой окна, а именно в хвосте стоит название адреса. */}
+            <span className="block mt-1 break-words opacity-80">
+              {состояние.last_error}
+            </span>
+            <button
+              type="button"
+              onClick={проверитьСвязь}
+              disabled={идётПроверка}
+              className="mt-1 underline underline-offset-2 disabled:opacity-50"
+            >
+              {идётПроверка ? "Проверяю связь…" : "Проверить связь"}
+            </button>
+            {проверка && (
+              <span className="block mt-1 break-words">{проверка}</span>
+            )}
+          </>
         )}
       </span>
     </div>
@@ -1838,6 +1885,12 @@ export default function App() {
   const [role, setRole] = useState<Role>("master");
   const [userName, setUserName] = useState<string | null>(null);
   const [page, setPage] = useState("payroll");
+  // Первый запуск: учётной записи ещё нет, и спрашивать пароль не у кого.
+  const [нуженМастер, setНуженМастер] = useState(false);
+  // Чего не хватает, чтобы Директор показывал цифры. Полоса с этим списком
+  // висит на любой странице: без неё владелец видит пустые графики и решает,
+  // что программа сломана.
+  const [нехватает, setНехватает] = useState<string[]>([]);
   const [theme, setTheme] = useState<"dark" | "light">(() => {
     if (typeof window !== "undefined") {
       return localStorage.getItem("rubl-theme") === "light" ? "light" : "dark";
@@ -1855,6 +1908,20 @@ export default function App() {
     // вкладка откроется. Данные каждая вкладка грузит сама — общей загрузки
     // здесь больше нет.
     (async () => {
+      // Сначала — нужна ли первичная настройка. Пока владельца нет, все
+      // остальные адреса отвечают «требуется настройка», и спрашивать у них
+      // роль бессмысленно.
+      try {
+        const s = await fetch("/api/setup/state");
+        if (s.ok && (await s.json()).setup_required) {
+          setНуженМастер(true);
+          setLoading(false);
+          return;
+        }
+      } catch (err) {
+        console.error("Не удалось узнать состояние настройки:", err);
+      }
+
       // Роль по умолчанию — самая узкая: если сервер не ответил, лучше
       // показать меньше, чем случайно показать чужое.
       let resolved: Role = "master";
@@ -1870,6 +1937,15 @@ export default function App() {
       } catch (err) {
         console.error("Не удалось определить роль:", err);
       }
+      if (resolved === "owner") {
+        try {
+          const i = await fetch("/api/info");
+          if (i.ok) setНехватает((await i.json()).missing ?? []);
+        } catch (err) {
+          console.error("Не удалось узнать, что не настроено:", err);
+        }
+      }
+
       setRole(resolved);
       setPage(PAGES_BY_ROLE[resolved][0]);
       setLoading(false);
@@ -1877,6 +1953,13 @@ export default function App() {
   }, []);
 
   if (loading) return <Spinner />;
+
+  if (нуженМастер) {
+    // Перезагрузка, а не смена состояния: после того как владелец заведён,
+    // браузер должен спросить логин и пароль, а спрашивает он их только на
+    // новом запросе к закрытому адресу.
+    return <SetupWizard приГотовности={() => window.location.reload()} />;
+  }
 
   return (
     <div className="min-h-screen bg-milk dark:bg-ink text-ink-soft dark:text-cream flex">
@@ -1949,6 +2032,29 @@ export default function App() {
       {/* Main */}
       <main className="flex-1 ml-60 p-8 min-h-screen">
         <div className="max-w-[1280px] mx-auto">
+          {нехватает.length > 0 && page !== "settings" && (
+            <div className="mb-6 rounded-xl border border-amber-500/40 bg-amber-500/5 px-4 py-3 flex items-start gap-3">
+              <AlertTriangle
+                size={18}
+                className="text-amber-600 dark:text-amber-400 mt-0.5 shrink-0"
+              />
+              <div className="flex-1 text-sm">
+                <div className="text-ink-soft dark:text-cream font-medium">
+                  Требуется настройка интеграций
+                </div>
+                <div className="text-muted-light dark:text-muted mt-0.5">
+                  Не заполнено: {нехватает.join(", ")}. Пока этого нет, часть
+                  разделов будет пустой.
+                </div>
+              </div>
+              <button
+                className="shrink-0 px-3 py-1.5 rounded-lg text-sm bg-bronze dark:bg-gold text-milk dark:text-ink font-medium"
+                onClick={() => setPage("settings")}
+              >
+                Настроить
+              </button>
+            </div>
+          )}
           {/* Каждая страница показывается, только если роль её действительно
               имеет. Список ролей один, и меню, и маршрутизация читают его. */}
           {PAGES_BY_ROLE[role].includes(page) && (
@@ -1959,9 +2065,11 @@ export default function App() {
               {page === "planfact" && <PlanFactPage />}
               {page === "bookings" && <BookingsPage />}
               {page === "payroll" && <BarberMonthPage payroll />}
+              {page === "monthly" && <MonthlyReportPage />}
               {page === "pulse" && <BasePulsePage />}
               {page === "shift" && <ShiftPage role={role} />}
               {page === "clients" && <ClientBasePage role={role} />}
+              {page === "settings" && <SettingsPage />}
             </PageBoundary>
           )}
         </div>

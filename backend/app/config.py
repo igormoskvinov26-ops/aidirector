@@ -1,16 +1,68 @@
 """Application configuration loaded from environment variables.
 
-Secrets have NO defaults on purpose: if a value is missing the app refuses to
-start instead of silently running with a well-known password.
+Секретов со значениями по умолчанию здесь нет и не будет: пустое значение
+означает «не настроено», а не «возьмём общеизвестный пароль».
+
+Пустое значение больше не роняет запуск. Раньше отсутствие любого
+обязательного ключа означало, что приложение не поднимается вообще, и
+единственным способом это исправить было открыть .env на сервере. Теперь
+недостающее показывается в разделе «Настройки → Интеграции» и заполняется
+оттуда; проверки на слабый пароль остались и применяются к заполненным
+значениям. Что именно считается обязательным и как это показать человеку —
+в app/services/configuration.py, здесь только чтение окружения.
 """
 
 import hashlib
+import os
 from pathlib import Path
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
+def _ключи_файла(путь: Path) -> dict[str, str]:
+    """Имена и значения из .env, без выполнения файла. Пусто, если файла нет."""
+    найдено: dict[str, str] = {}
+    try:
+        текст = путь.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return найдено
+    for строка in текст.splitlines():
+        строка = строка.strip()
+        if not строка or строка.startswith("#") or "=" not in строка:
+            continue
+        имя, _, значение = строка.partition("=")
+        значение = значение.strip()
+        if len(значение) >= 2 and значение[0] == значение[-1] and значение[0] in "\"'":
+            значение = значение[1:-1]
+        найдено[имя.strip().upper()] = значение
+    return найдено
+
+
+_ФАЙЛ_ENV = _ключи_файла(PROJECT_ROOT / ".env")
+
+# Какие ключи задала инфраструктура, а какие просто лежат в .env.
+#
+# Различие не формальное: заданное инфраструктурой (docker-compose, systemd,
+# панель хостинга) веб-интерфейс перекрыть не может — при следующем
+# перезапуске вернётся значение инфраструктуры, а человек будет смотреть на
+# настройку, которая «не применяется». Такие ключи показываются только для
+# чтения.
+#
+# Одного os.environ для этого мало. docker-compose передаёт весь .env внутрь
+# контейнера настоящими переменными окружения (env_file), то есть там в
+# os.environ лежит ровно то же, что в файле. Поэтому ключ считается заданным
+# инфраструктурой, только если файл его не объясняет: либо не упоминает
+# вовсе, либо задаёт другое значение.
+#
+# Снимок делается один раз при импорте, до того как что-либо успевает
+# дописать в os.environ.
+ИЗ_ОКРУЖЕНИЯ_ПРОЦЕССА: frozenset[str] = frozenset(
+    имя
+    for имя, значение in os.environ.items()
+    if _ФАЙЛ_ENV.get(имя.upper()) != значение
+)
 
 # Заведомо слабые и ранее скомпрометированные пароли.
 # Хранятся хешами: сами значения публиковались в открытом репозитории,
@@ -40,19 +92,25 @@ class Settings(BaseSettings):
         "extra": "ignore",
     }
 
-    # -- YCLIENTS (required) --
-    yclients_partner_token: str
-    yclients_company_id: int
-    yclients_user_token: str
+    # -- YCLIENTS --
+    # Пусто = не настроено. Приложение поднимается и показывает мастер
+    # настройки; выгрузка при этом не идёт и честно об этом сообщает.
+    yclients_partner_token: str = ""
+    yclients_company_id: int = 0
+    yclients_user_token: str = ""
     yclients_old_company_id: int = 0
     yclients_old_user_token: str = ""
 
-    # -- PostgreSQL (password required) --
+    # -- PostgreSQL --
+    # Пароль базы остаётся в .env и через веб не настраивается: управляемые
+    # настройки лежат в самой базе, и менять через них доступ к базе — значит
+    # пилить сук, на котором сидишь. Файл .env создают local/start.sh и
+    # bootstrap.ps1, пароль они генерируют сами.
     postgres_host: str = "localhost"
     postgres_port: int = 5432
     postgres_db: str = "rubl_director"
     postgres_user: str = "rubl"
-    postgres_password: str
+    postgres_password: str = ""
 
     # -- FastAPI --
     app_host: str = "127.0.0.1"
@@ -72,6 +130,10 @@ class Settings(BaseSettings):
     # Значение согласовано с MAX_DAYS_AHEAD в app/services/bookings.py —
     # смотреть дальше горизонта, который умеет показывать интерфейс, незачем.
     sync_window_ahead_days: int = 60
+    # Предел на один прогон. Без него зависший ответ YCLIENTS останавливал
+    # обновление насовсем: флаг «идёт выгрузка» не снимался, и все следующие
+    # запуски по расписанию тихо пропускались как «уже идёт».
+    sync_timeout_minutes: int = 30
 
     # -- Cache --
     cache_ttl_seconds: int = 300
@@ -82,10 +144,15 @@ class Settings(BaseSettings):
     #   operator — только база обзвона, /api/client-base/*.
     # Разделение не косметическое: на странице обзвона лежат имена и телефоны
     # клиентов, и объём доступа к ним должен быть минимально необходимым.
-    owner_login: str
-    owner_password: str
-    operator_login: str
-    operator_password: str
+    #
+    # Пусто = учётная запись не заведена. При пустом владельце приложение
+    # переходит в режим первичной настройки: открыт только мастер, всё
+    # остальное отвечает «требуется настройка». Пароль, заданный через мастер,
+    # хранится в базе хешем — см. app/services/credentials.py.
+    owner_login: str = ""
+    owner_password: str = ""
+    operator_login: str = ""
+    operator_password: str = ""
 
     # Учётные записи мастеров: каждый видит только свою зарплату. Задаются
     # списком в .env, потому что состав команды меняется чаще, чем код.
@@ -125,6 +192,14 @@ class Settings(BaseSettings):
     @field_validator("owner_password", "operator_password")
     @classmethod
     def _reject_weak_access_password(cls, v: str, info) -> str:
+        """Пустое — «не заведено», это разрешено. Заполненное — по всей строгости.
+
+        Послабление касается только отсутствия значения. Заведомо слабый или
+        короткий пароль отвергается ровно как раньше: иначе достаточно было бы
+        стереть строку в .env и вписать «12345678», чтобы обойти проверку.
+        """
+        if not v:
+            return v
         env_name = info.field_name.upper()
         if _is_known_weak(v):
             raise ValueError(
@@ -138,7 +213,7 @@ class Settings(BaseSettings):
     @field_validator("postgres_password")
     @classmethod
     def _reject_weak_db_password(cls, v: str) -> str:
-        if _is_known_weak(v):
+        if v and _is_known_weak(v):
             raise ValueError(
                 "POSTGRES_PASSWORD is a known weak/default value. Set a unique password in .env."
             )

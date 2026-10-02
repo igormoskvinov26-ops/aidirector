@@ -483,6 +483,34 @@ function AdminView({ role }: { role: "owner" | "operator" | "master" }) {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<string>("all");
   const [busy, setBusy] = useState<number | null>(null);
+  // Кто звонит. Список задаёт владелец в «Настройки → Месячный отчёт»; без
+  // выбора имени результат звонка нельзя приписать администратору.
+  const [admins, setAdmins] = useState<{ staff_id: number; name: string }[]>([]);
+  const [adminId, setAdminId] = useState<number | null>(() => {
+    try {
+      const v = localStorage.getItem("rubl.call.admin");
+      return v ? Number(v) : null;
+    } catch {
+      return null;
+    }
+  });
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch("/api/client-base/admins");
+        if (r.ok) setAdmins(await r.json());
+      } catch {}
+    })();
+  }, []);
+  const выбранный = admins.find((a) => a.staff_id === adminId) ?? null;
+  const нужноИмя = admins.length > 0 && !выбранный;
+  const выбратьАдмина = (id: number | null) => {
+    setAdminId(id);
+    try {
+      if (id == null) localStorage.removeItem("rubl.call.admin");
+      else localStorage.setItem("rubl.call.admin", String(id));
+    } catch {}
+  };
   const [journalKey, setJournalKey] = useState(0);
 
   const fetchTasks = async () => {
@@ -501,12 +529,18 @@ function AdminView({ role }: { role: "owner" | "operator" | "master" }) {
   }, []);
 
   const recordOutcome = async (id: number, outcome: string, channel: string) => {
+    if (нужноИмя) return;
     setBusy(id);
     try {
       await fetch(`/api/client-base/tasks/${id}/outcome`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ outcome, channel, actor_id: "admin" }),
+        body: JSON.stringify({
+          outcome,
+          channel,
+          actor_id: выбранный?.name ?? "admin",
+          admin_staff_id: выбранный?.staff_id ?? null,
+        }),
       });
       setTasks((prev) => prev.filter((t) => t.id !== id));
       setJournalKey((k) => k + 1);
@@ -564,6 +598,34 @@ function AdminView({ role }: { role: "owner" | "operator" | "master" }) {
         <ClipboardList size={16} />
         <span>{filtered.length} клиентов требуют действия</span>
       </div>
+
+      {admins.length > 0 && (
+        <div
+          className={`rounded-xl border px-4 py-3 text-sm flex flex-wrap items-center gap-3 ${
+            нужноИмя
+              ? "border-caution/50 bg-caution/5"
+              : "border-milk-line dark:border-line bg-milk-card dark:bg-panel/60"
+          }`}
+        >
+          <span className="text-muted-light dark:text-muted">Кто звонит:</span>
+          {admins.map((a) => (
+            <button
+              key={a.staff_id}
+              onClick={() => выбратьАдмина(a.staff_id)}
+              className={`rounded-full border px-3 py-1 transition-colors ${
+                a.staff_id === adminId
+                  ? "border-bronze dark:border-gold bg-milk-deep dark:bg-panel-deep font-medium"
+                  : "border-milk-line dark:border-line hover:border-bronze dark:hover:border-gold"
+              }`}
+            >
+              {a.name}
+            </button>
+          ))}
+          {нужноИмя && (
+            <span className="text-caution">Выберите своё имя — без него результат не сохранится.</span>
+          )}
+        </div>
+      )}
 
       <CallJournal role={role} refreshKey={journalKey} />
 

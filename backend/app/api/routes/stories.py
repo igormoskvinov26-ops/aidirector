@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 from loguru import logger
 
 from app.api.yclients import YClientsClient
-from app.config import settings
+from app.services import configuration
 from app.services.slots import compute_free_slots
 from app.services.stories import compute_slot_hash, generate_story
 from app.services.story_preview import render_story_html
@@ -29,12 +29,16 @@ def _caption(name: str, slots: list[str] | None = None) -> str:
 
 
 async def _send_photo(data: bytes, filename: str, caption: str) -> dict:
-    token = settings.telegram_bot_token
-    chat_id = settings.telegram_chat_id
+    # Через configuration, а не напрямую из .env: бот и чат настраиваются в
+    # интерфейсе, и сторис должны уходить тому же боту, что и отчёты смены.
+    # Раньше здесь читался только .env, и после настройки через форму сторис
+    # продолжали уходить старому боту либо не уходили вовсе.
+    token = configuration.значение("TELEGRAM_BOT_TOKEN")
+    chat_id = configuration.значение("TELEGRAM_CHAT_ID")
     if not token or not chat_id:
         raise HTTPException(
             status_code=503,
-            detail="TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID не настроены в .env",
+            detail="Telegram не настроен — заполните его в разделе «Настройки → Интеграции»",
         )
 
     async with httpx.AsyncClient(timeout=30) as http:

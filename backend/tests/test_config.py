@@ -52,8 +52,14 @@ def test_rejects_short_access_password(field):
         Settings(**{**BASE, field: "short"}, _env_file=None)
 
 
-def test_requires_both_accounts(monkeypatch):
-    """Забыть вторую учётную запись нельзя: приложение не стартует.
+def test_missing_account_does_not_crash_startup(monkeypatch):
+    """Незаполненная учётная запись больше не роняет запуск, но и не работает.
+
+    Раньше отсутствие любого обязательного ключа означало, что приложение не
+    поднимается вообще; починить это можно было только через .env на сервере.
+    Теперь недостающее показывается в разделе «Настройки → Интеграции», а
+    пустая пара логин-пароль не пускает никого: пустой логин с пустым
+    паролем совпал бы сам с собой.
 
     Переменные окружения убираются явно: conftest выставляет их для всех
     остальных тестов, и без этого Settings подхватил бы их в обход аргументов.
@@ -61,8 +67,29 @@ def test_requires_both_accounts(monkeypatch):
     monkeypatch.delenv("OPERATOR_LOGIN", raising=False)
     monkeypatch.delenv("OPERATOR_PASSWORD", raising=False)
     without_operator = {k: v for k, v in BASE.items() if not k.startswith("operator_")}
-    with pytest.raises(ValidationError):
-        Settings(**without_operator, _env_file=None)
+
+    конфиг = Settings(**without_operator, _env_file=None)
+    assert конфиг.operator_login == ""
+    assert конфиг.operator_password == ""
+
+
+def test_empty_credentials_let_nobody_in(monkeypatch):
+    """Пустой логин и пустой пароль не должны совпадать друг с другом.
+
+    Проверка не теоретическая: secrets.compare_digest("", "") возвращает
+    истину, и без отдельной проверки на заполненность незаведённая учётная
+    запись администратора пускала бы любого, кто оставит оба поля пустыми.
+    """
+    from app.config import settings as живые
+    from app.main import _resolve_identity
+
+    monkeypatch.setattr(живые, "operator_login", "")
+    monkeypatch.setattr(живые, "operator_password", "")
+    monkeypatch.setattr(живые, "owner_login", "")
+    monkeypatch.setattr(живые, "owner_password", "")
+    monkeypatch.setattr(живые, "master_accounts", [])
+
+    assert _resolve_identity("", "") is None
 
 
 def test_rejects_empty_password():

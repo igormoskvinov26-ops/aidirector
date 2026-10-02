@@ -49,13 +49,15 @@ async def get_dashboard_from_api(date_from: str, date_to: str, company_id: int |
         if rdate not in by_day:
             by_day[rdate] = {"date": rdate, "revenue": 0, "visits": 0, "avg_check": "0"}
 
-        rev = sum(s.get("cost", 0) for s in r.get("services", []))
+        rev = sum(
+            (s.get("cost") or 0) for s in (r.get("services") or []) if isinstance(s, dict)
+        )
         by_day[rdate]["visits"] += 1
         by_day[rdate]["revenue"] += rev
         total_revenue += rev
         total_visits += 1
 
-        client_data = r.get("client", {})
+        client_data = r.get("client") or {}
         if client_data.get("is_new"):
             new_clients += 1
         else:
@@ -72,12 +74,14 @@ async def get_dashboard_from_api(date_from: str, date_to: str, company_id: int |
         by_master[staff_id]["visits"] += 1
         by_master[staff_id]["revenue"] += rev
 
-        for svc in r.get("services", []):
+        for svc in (r.get("services") or []):
+            if not isinstance(svc, dict):
+                continue
             sname = svc.get("title", f"#{svc.get('id')}")
             if sname not in by_service:
                 by_service[sname] = {"name": sname, "count": 0, "revenue": 0}
             by_service[sname]["count"] += 1
-            by_service[sname]["revenue"] += svc.get("cost", 0)
+            by_service[sname]["revenue"] += svc.get("cost") or 0
 
     for d in by_day.values():
         d["avg_check"] = str(round(d["revenue"] / d["visits"], 2)) if d["visits"] else "0"
