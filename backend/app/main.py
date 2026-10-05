@@ -292,6 +292,7 @@ async def lifespan(app: FastAPI):
         async with async_session() as session:
             await configuration.загрузить(session)
             await credentials.загрузить(session)
+            await credentials.посеять_top_из_файла(session, "/app/top-seed.env")
             await salon.загрузить(session)
     except Exception as сбой:  # noqa: BLE001
         logger.warning(
