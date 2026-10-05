@@ -28,6 +28,33 @@ def period(now):
     return start, end
 
 
+async def future_booked_revenue(client, now: datetime) -> Decimal:
+    """Сумма уже записанного на оставшиеся до конца месяца дни.
+
+    Решение владельца 05.10.2026: отдельная цифра от кассовой выручки — это
+    ещё не заработанные деньги, а то, что уже стоит в записи (не выполнено,
+    не отменено и не неявка). Используется и в сообщении о закрытии смены, и
+    в «Контроле финансов».
+    """
+    _, end = period(now)
+    now = now.astimezone(MOSCOW)
+    записи = await pages(
+        client, f'/records/{client.company_id}', now.date().isoformat(),
+        (end - timedelta(days=1)).date().isoformat(),
+    )
+    total = Decimal(0)
+    for record in записи:
+        if record.get('deleted'):
+            continue
+        dt = timestamp(record.get('datetime') or record.get('date'))
+        if dt <= now or dt >= end:
+            continue
+        if visit_attendance(record) not in (0, 2):
+            continue
+        total += amount(record)
+    return total
+
+
 def visit_attendance(record):
     """Код посещения из записи YCLIENTS.
 

@@ -37,6 +37,7 @@ from app.services.barber_month import (
     load_products,
     money,
     pages,
+    period,
     timestamp,
     visit_attendance,
 )
@@ -577,6 +578,14 @@ async def собрать_закрытие(день: date | None = None) -> dict:
         окно = await загрузить_окно_потерь(client, день)
         записи = [з for з in окно if в_день(з, день)]
         будущие = await загрузить_будущее(client, день)
+        _, конец_месяца = period(datetime.combine(день, datetime.min.time(), tzinfo=MOSCOW))
+        записано_до_конца_месяца = sum(
+            (amount(з) for з in будущие
+             if not з.get("deleted")
+             and timestamp(з.get("datetime") or з.get("date")) < конец_месяца
+             and visit_attendance(з) in ОЖИДАНИЕ),
+            Decimal(0),
+        )
         мастера, предупреждение = await работающие_мастера(client, день, записи)
         if предупреждение:
             предупреждения.append(предупреждение)
@@ -658,6 +667,10 @@ async def собрать_закрытие(день: date | None = None) -> dict:
         "created_today_for_future": НЕТ_ДАННЫХ,
         "completed": разложить_пришедших(пришли, визитов),
         "lost_today": стали_потерянными(окно, будущие, день),
+        # Записано вперёд (решение владельца 05.10.2026): сумма ещё не
+        # выполненных записей по сегодняшний день до конца месяца — не
+        # заработанные деньги, а то, что уже стоит в книге записи.
+        "booked_until_month_end": float(записано_до_конца_месяца),
         "masters": мастера,
         "warnings": предупреждения,
         "calculated_at": moscow_now().isoformat(),
@@ -719,6 +732,8 @@ def текст_закрытия(снимок: dict, времена: dict[int, st
         "Заработано",
         f"Услуги — {рубли(снимок['services_revenue'])}",
         f"Товары — {рубли(снимок['products_revenue'])}",
+        "",
+        f"Записано до конца месяца — {рубли(снимок.get('booked_until_month_end', 0))}",
         "",
         "Клиенты",
         f"Записались на следующий визит — {клиенты['booked_next']}",

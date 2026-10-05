@@ -17,6 +17,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
+from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -139,6 +140,19 @@ async def _транзакции_месяца(ym: str, today: date) -> list[dict]
     return await cached(key, load, ttl=300 if текущий else 6 * 3600)
 
 
+async def _записано_вперёд(today: date) -> Decimal:
+    key = f"owner-overview-booked:{settings.yclients_company_id}:{today.isoformat()}"
+
+    async def load() -> Decimal:
+        from app.api.yclients import YClientsClient
+
+        async with YClientsClient() as client:
+            return await bm.future_booked_revenue(client, datetime.now(MOSCOW))
+
+    # То же окно, что и у текущего месяца в итогах: 5 минут.
+    return await cached(key, load, ttl=300)
+
+
 async def сверка_месяца(session: AsyncSession, today: date) -> dict[str, Any]:
     """Итог сверки за текущий месяц: YCLIENTS против банка и налички в кассе."""
     first, _ = _границы(today.strftime("%Y-%m"))
@@ -165,4 +179,9 @@ async def построить(session: AsyncSession, today: date | None = None) -
     план = await session.scalar(select(PlanTarget).where(PlanTarget.period == today.strftime("%Y-%m")))
     итог = свести(по_месяцам, Decimal(str(план.profit_target)) if план else D0, today)
     итог["recon"] = await сверка_месяца(session, today)
+    try:
+        итог["booked_until_month_end"] = _f(await _записано_вперёд(today))
+    except Exception as e:  # noqa: BLE001 — YCLIENTS может быть недоступен
+        logger.warning(f"owner_overview: записано вперёд не посчиталось: {e}")
+        итог["booked_until_month_end"] = None
     return итог
