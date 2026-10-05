@@ -107,10 +107,65 @@ function logout() {
 
 // ── Дашборд ──────────────────────────────────────────────────────────────
 
-function barColor(ok) {
+function окРасцвет(ok) {
   if (ok === true) return "var(--profit)";
   if (ok === false) return "var(--loss)";
-  return "var(--gold)";
+  return "var(--cream)";
+}
+
+// Коротко: 1.2 млн / 650к — как кратко() в OwnerPage.tsx.
+function кратко(v) {
+  return Math.abs(v) >= 1_000_000
+    ? `${(v / 1_000_000).toFixed(1).replace(".", ",")} млн`
+    : `${Math.round(v / 1000)}к`;
+}
+
+/** Точный порт Спидометра из frontend/src/OwnerPage.tsx — тот же радиус,
+ * та же дуга плана и темпа, тот же способ красить заливку по ok. */
+function спидометр({ min, max, value, plan, pace, fill, planZone, caption, text }) {
+  const R = 118, C = 150, W = 14;
+  const f = (v) => (Math.max(min, Math.min(max, v)) - min) / (max - min || 1);
+  const pt = (k, r = R) => {
+    const a = Math.PI * (1 - k);
+    return [C + r * Math.cos(a), C - r * Math.sin(a)];
+  };
+  const arc = (k1, k2, r = R) => {
+    const [x1, y1] = pt(k1, r), [x2, y2] = pt(k2, r);
+    return `M${x1} ${y1} A${r} ${r} 0 0 1 ${x2} ${y2}`;
+  };
+  const zero = f(Math.max(0, min));
+  const k = f(value);
+  const [a, b] = k >= zero ? [zero, k] : [k, zero];
+  const track = "var(--line)", tick = "var(--muted)";
+
+  let svg = `<svg viewBox="0 0 300 200" class="gauge" role="img" aria-label="${esc(caption)}: ${esc(text)}">`;
+  svg += `<path d="${arc(0, 1)}" fill="none" stroke="${track}" stroke-width="${W}" stroke-linecap="round"/>`;
+  if (plan != null && plan < max) {
+    svg += `<path d="${arc(f(plan), 1)}" fill="none" stroke="${planZone}" stroke-opacity="0.28" stroke-width="${W}"/>`;
+  }
+  if (b - a > 0.002) {
+    svg += `<path d="${arc(a, b)}" fill="none" stroke="${fill}" stroke-width="${W}" stroke-linecap="round"/>`;
+  }
+  if (min < 0) {
+    const [x1, y1] = pt(zero, R - W), [x2, y2] = pt(zero, R + W);
+    svg += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${tick}" stroke-width="1.5"/>`;
+  }
+  if (pace != null) {
+    const [x1, y1] = pt(f(pace), R - W / 2 - 5), [x2, y2] = pt(f(pace), R + W / 2 + 5);
+    svg += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${tick}" stroke-width="1.2" stroke-dasharray="2 2"/>`;
+  }
+  if (plan != null) {
+    const [x, y] = pt(f(plan));
+    const [tx, ty] = pt(f(plan), R + 24);
+    svg += `<circle cx="${x}" cy="${y}" r="6.5" fill="${track}" stroke="${tick}" stroke-width="2"/>`;
+    svg += `<text x="${tx}" y="${ty + 3}" text-anchor="middle" font-size="9.5" fill="${tick}">план</text>`;
+  }
+  svg += `<text x="${C}" y="${C - 6}" text-anchor="middle" font-size="27" font-weight="600" fill="${fill}">${esc(text)}</text>`;
+  svg += `<text x="${C}" y="${C + 14}" text-anchor="middle" font-size="10.5" fill="${tick}">${esc(caption)}</text>`;
+  svg += `<text x="${pt(0)[0]}" y="${C + 22}" text-anchor="middle" font-size="9.5" fill="${tick}">${min < 0 ? "−" + кратко(-min) : "0"}</text>`;
+  svg += `<text x="${pt(1)[0]}" y="${C + 22}" text-anchor="middle" font-size="9.5" fill="${tick}">${кратко(max)}</text>`;
+  svg += `</svg>`;
+  return svg;
 }
 
 function financeCard(f) {
@@ -118,33 +173,41 @@ function financeCard(f) {
     return `<div class="card"><h2>Финансы месяца</h2>
       <div class="empty-state">YCLIENTS ещё не настроен или сервер не ответил</div></div>`;
   }
-  const profitColor = f.profit.value >= 0 ? "var(--profit)" : "var(--loss)";
-  const incomePct = Math.min(100, f.income.pct_of_plan ?? 0);
-  const expPct = Math.min(100, f.expenses.pct_of_budget ?? 0);
+  // Те же формулы шкал, что в OwnerPage.tsx: план не в конце, после него
+  // запас на перевыполнение/перерасход.
+  const шкалаДохода = Math.max((f.income.plan ?? 0) * 1.2, (f.income.value ?? 0) * 1.1, 1);
+  const шкалаРасхода = Math.max((f.expenses.budget ?? 0) * 1.2, (f.expenses.value ?? 0) * 1.1, 1);
+  const размахПрибыли = Math.max(Math.abs(f.profit.value ?? 0) * 1.15, (f.profit.plan ?? 0) * 1.2, 1);
+  const темпДохода = f.income.plan != null ? (f.income.plan * f.elapsed_pct) / 100 : null;
+  const темпРасхода = f.expenses.budget != null ? (f.expenses.budget * f.elapsed_pct) / 100 : null;
+
   const hist = f.history.slice(-6);
   const maxAbs = Math.max(1, ...hist.map((m) => Math.abs(m.profit)));
+
   return `
     <div class="card">
-      <h2>Финансы месяца</h2>
-      <div class="profit-row">
-        <div>
-          <div class="value" style="color:${profitColor}">${rub(f.profit.value)}</div>
-          <div class="margin">прибыль${f.profit.margin_pct !== null ? ` · маржа ${pct(f.profit.margin_pct)}` : ""}</div>
+      <h2>Финансы месяца — темп ${pct(Math.round(f.elapsed_pct))}</h2>
+      <div class="gauges">
+        <div class="gauge-cell">
+          ${спидометр({
+            min: 0, max: шкалаДохода, value: f.income.value ?? 0, plan: f.income.plan, pace: темпДохода,
+            fill: окРасцвет(f.income.ok), planZone: "var(--profit)", caption: "доход", text: rub(f.income.value),
+          })}
+          <div class="gauge-sub">${f.income.plan != null ? `план ${rub(f.income.plan)} · ${pct(f.income.pct_of_plan)}` : "план не задан"}</div>
         </div>
-        <div class="margin">темп месяца: ${pct(f.elapsed_pct)}</div>
-      </div>
-      <div class="kpi-grid">
-        <div class="kpi">
-          <div class="label">Доход</div>
-          <div class="val">${rub(f.income.value)}</div>
-          <div class="sub">${f.income.plan !== null ? `план ${rub(f.income.plan)} · ${pct(f.income.pct_of_plan)}` : "план не задан"}</div>
-          <div class="bar-track"><div class="bar-fill" style="width:${incomePct}%;background:${barColor(f.income.ok)}"></div></div>
+        <div class="gauge-cell">
+          ${спидометр({
+            min: 0, max: шкалаРасхода, value: f.expenses.value ?? 0, plan: f.expenses.budget, pace: темпРасхода,
+            fill: окРасцвет(f.expenses.ok), planZone: "var(--loss)", caption: "расходы", text: rub(f.expenses.value),
+          })}
+          <div class="gauge-sub">${f.expenses.budget != null ? `бюджет ${rub(f.expenses.budget)} · ${pct(f.expenses.pct_of_budget)}` : "бюджет не посчитан"}</div>
         </div>
-        <div class="kpi">
-          <div class="label">Расходы</div>
-          <div class="val">${rub(f.expenses.value)}</div>
-          <div class="sub">${f.expenses.budget !== null ? `бюджет ${rub(f.expenses.budget)} · ${pct(f.expenses.pct_of_budget)}` : "бюджет не посчитан"}</div>
-          <div class="bar-track"><div class="bar-fill" style="width:${expPct}%;background:${barColor(f.expenses.ok)}"></div></div>
+        <div class="gauge-cell">
+          ${спидометр({
+            min: -размахПрибыли, max: размахПрибыли, value: f.profit.value ?? 0, plan: f.profit.plan, pace: f.profit.pace,
+            fill: окРасцвет(f.profit.ok), planZone: "var(--profit)", caption: "прибыль", text: rub(f.profit.value),
+          })}
+          <div class="gauge-sub">${f.profit.plan != null ? `план ${rub(f.profit.plan)}${f.profit.margin_pct != null ? ` · рент. ${pct(f.profit.margin_pct)}` : ""}` : "план не задан"}</div>
         </div>
       </div>
       <div class="hist">

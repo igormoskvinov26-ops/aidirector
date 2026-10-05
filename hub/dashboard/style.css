@@ -137,9 +137,14 @@ a { color: inherit; }
   margin-bottom: 12px;
 }
 
-.profit-row { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 14px; }
-.profit-row .value { font-size: 30px; font-weight: 700; }
-.profit-row .margin { font-size: 13px; color: var(--muted); }
+.gauges { display: grid; grid-template-columns: 1fr; gap: 4px; margin-bottom: 10px; }
+.gauge-cell { text-align: center; }
+.gauge { width: 100%; max-width: 280px; height: auto; display: block; margin: 0 auto; }
+.gauge-sub { font-size: 12px; color: var(--muted); margin-top: -6px; }
+
+@media (min-width: 460px) {
+  .gauges { grid-template-columns: 1fr 1fr 1fr; gap: 0; }
+}
 
 .kpi-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 4px; }
 .kpi {
