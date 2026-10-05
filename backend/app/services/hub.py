@@ -44,8 +44,7 @@ PULSE_KEY = "pulse_start_date"
 DASHBOARD_KEY = "owner_dashboard"
 SHIFT_WINDOW_DAYS = 45
 ACQ_WINDOW_DAYS = 120
-INTERVAL_SECONDS = 45
-DASHBOARD_INTERVAL_SECONDS = 600
+INTERVAL_SECONDS = 300  # решение владельца 05.10.2026: пореже, чтобы не грузить канал
 _lock = asyncio.Lock()
 _lock_витрины = asyncio.Lock()
 status: dict[str, Any] = {"ok": None, "at": None, "error": None, "pushed": 0, "pulled": 0}
@@ -359,10 +358,24 @@ async def протолкнуть_витрину(session: AsyncSession, client: h
     return True
 
 
-async def один_цикл_витрины() -> None:
+def запустить_витрину_в_фоне() -> None:
+    """Пуш витрины по событию — вызывать при открытии и закрытии смены.
+
+    Решение владельца 05.10.2026: этих двух моментов в сутках достаточно —
+    именно тогда показатели меняются настолько, что их стоит пересчитать.
+    Остальное время дёргать YCLIENTS ради той же картины бессмысленно,
+    поэтому отдельного таймера здесь больше нет (было 10 минут).
+    Не блокирует вызывающий код: считает и отправляет в фоне.
+    """
+    if not настроен():
+        return
+    asyncio.create_task(_витрина_в_фоне())
+
+
+async def _витрина_в_фоне() -> None:
     from app.database import async_session
 
-    if not настроен() or _lock_витрины.locked():
+    if _lock_витрины.locked():
         return
     async with _lock_витрины:
         try:
@@ -370,10 +383,3 @@ async def один_цикл_витрины() -> None:
                 await протолкнуть_витрину(session, c)
         except Exception as e:  # noqa: BLE001
             logger.warning(f"витрина: не отправилась: {e}")
-
-
-async def run_dashboard_loop() -> None:
-    await asyncio.sleep(60)
-    while True:
-        await один_цикл_витрины()
-        await asyncio.sleep(DASHBOARD_INTERVAL_SECONDS)

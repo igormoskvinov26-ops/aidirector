@@ -314,17 +314,16 @@ async def lifespan(app: FastAPI):
 
     from app.services.sync import run_sync_loop
 
-    from app.services.hub import run_dashboard_loop, run_hub_loop
+    from app.services.hub import run_hub_loop
     from app.services.settings_file import run_settings_file_loop
 
     sync_task = asyncio.create_task(run_sync_loop())
     hub_task = asyncio.create_task(run_hub_loop())
-    dashboard_task = asyncio.create_task(run_dashboard_loop())
     file_task = asyncio.create_task(run_settings_file_loop())
     try:
         yield
     finally:
-        for task in (sync_task, hub_task, dashboard_task, file_task):
+        for task in (sync_task, hub_task, file_task):
             task.cancel()
             try:
                 await task

@@ -178,6 +178,11 @@ async def открыть(session: AsyncSession, день: date | None = None) ->
     смена.opened_at = datetime.now(UTC)
     await _мастера_смены(session, смена, снимок["masters"])
     await session.commit()
+
+    from app.services import hub
+
+    hub.запустить_витрину_в_фоне()
+
     return await текущая(session, день)
 
 
@@ -213,6 +218,11 @@ async def закрыть(session: AsyncSession, день: date | None = None) ->
     смена.closed_at = datetime.now(UTC)
     await _мастера_смены(session, смена, снимок["masters"])
     await session.commit()
+
+    from app.services import hub
+
+    hub.запустить_витрину_в_фоне()
+
     return await текущая(session, день)
 
 
