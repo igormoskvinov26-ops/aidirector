@@ -86,16 +86,46 @@ if grep -rl "server_name[[:space:]].*$DOMAIN" /etc/nginx/sites-enabled/ 2>/dev/n
     exit 1
 fi
 
+mkdir -p /var/www/html/.well-known/acme-challenge
+
+# Шаг 1: только порт 80, без ssl-блока — сертификата ещё нет, и nginx
+# откажется стартовать "listen ... ssl" без него (курица и яйцо).
+# Выдаём его через webroot, уже потом дописываем https-блок.
 cat > /etc/nginx/sites-available/pult-hub << NGINX
 server {
     listen 80;
     server_name $DOMAIN;
+
+    location /.well-known/acme-challenge/ { root /var/www/html; }
+    location / { return 301 https://\$host\$request_uri; }
+}
+NGINX
+
+ln -sf /etc/nginx/sites-available/pult-hub /etc/nginx/sites-enabled/pult-hub
+ufw allow 'Nginx Full' >/dev/null 2>&1 || true
+nginx -t && systemctl reload nginx
+
+if [ ! -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
+    certbot certonly --webroot -w /var/www/html -d "$DOMAIN" --non-interactive \
+        --agree-tos --register-unsafely-without-email 2>&1 | tail -5
+fi
+
+# Шаг 2: сертификат есть — дописываем https-блок.
+cat > /etc/nginx/sites-available/pult-hub << NGINX
+server {
+    listen 80;
+    server_name $DOMAIN;
+
+    location /.well-known/acme-challenge/ { root /var/www/html; }
     location / { return 301 https://\$host\$request_uri; }
 }
 
 server {
     listen 443 ssl http2;
     server_name $DOMAIN;
+
+    ssl_certificate     /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
 
     add_header Strict-Transport-Security "max-age=31536000" always;
     add_header X-Content-Type-Options "nosniff" always;
@@ -110,12 +140,6 @@ server {
     }
 }
 NGINX
-
-ln -sf /etc/nginx/sites-available/pult-hub /etc/nginx/sites-enabled/pult-hub
-ufw allow 'Nginx Full' >/dev/null 2>&1 || true
-
-certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos \
-    --register-unsafely-without-email --redirect 2>&1 | tail -3
 
 nginx -t && systemctl reload nginx
 WEB
