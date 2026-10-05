@@ -947,7 +947,7 @@ async def test_старый_отправленный_снимок_без_ден�
     assert деньги == {
         "total_earned": None, "non_cash": None, "cash": None, "spent": None,
         "cash_register_estimate": None, "settlement_account_estimate": None,
-        "other_account_debt": None,
+        "other_account_debt": None, "cash_counted": None,
     }
     # Остальное содержимое старого снимка не тронуто.
     assert итог["closing_snapshot"]["services_revenue"] == 5000.0
@@ -977,3 +977,37 @@ async def test_снимок_с_деньгами_без_долга_дополня
     деньги = итог["closing_snapshot"]["money"]
     assert деньги["cash_register_estimate"] == 500.0
     assert деньги["other_account_debt"] is None
+
+
+@pytest.mark.asyncio
+async def test_наличка_по_факту_переживает_пересчёт_и_идёт_в_сверку(session: AsyncSession, monkeypatch):
+    """Админ ввёл пересчитанную наличку — повторное «Закрыть» её не стирает,
+    а «Контроль финансов» сравнивает её с наличкой YCLIENTS."""
+    from app.services import finance_analysis, shift, shift_store
+
+    async def собрать_закрытие(день=None):
+        return {
+            "shift_date": ДЕНЬ.isoformat(), "records_total": 0, "records_completed": 0,
+            "services_revenue": 0.0, "products_revenue": 0.0,
+            "money": {"total_earned": 0.0, "non_cash": 9000.0, "cash": 3000.0, "spent": 0.0,
+                      "cash_register_estimate": None, "settlement_account_estimate": None,
+                      "other_account_debt": None},
+            "clients_came": 0, "clients": {"booked_next": 0, "not_booked": 0},
+            "created_today_for_future": None, "completed": {"new": None, "became_regular": None},
+            "lost_today": None, "masters": [], "warnings": [], "calculated_at": "x",
+        }
+
+    monkeypatch.setattr(shift, "собрать_закрытие", собрать_закрытие)
+    with pytest.raises(ValueError):
+        await shift_store.записать_наличку(session, 2500.0, ДЕНЬ)  # смена не закрыта
+
+    await shift_store.закрыть(session, ДЕНЬ)
+    итог = await shift_store.записать_наличку(session, 2500.0, ДЕНЬ)
+    assert итог["closing_snapshot"]["money"]["cash_counted"] == 2500.0
+
+    итог = await shift_store.закрыть(session, ДЕНЬ)
+    assert итог["closing_snapshot"]["money"]["cash_counted"] == 2500.0
+
+    закрытия = await finance_analysis._закрытия(session, ДЕНЬ, ДЕНЬ)
+    assert закрытия[ДЕНЬ]["cash_counted"] == 2500
+    assert закрытия[ДЕНЬ]["cash"] == 3000

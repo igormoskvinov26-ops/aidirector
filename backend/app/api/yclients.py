@@ -118,6 +118,12 @@ class YclientsНеНастроен(RuntimeError):
     """
 
 
+def _служебный(name):
+    from app.services.salon import служебный
+
+    return служебный(name)
+
+
 class YClientsClient:
     def __init__(self, company_id: int | None = None, user_token: str | None = None):
         # Ключи берутся через configuration, а не напрямую из .env: владелец
@@ -312,7 +318,7 @@ class YClientsClient:
             if not s.get("hidden")
             and not s.get("fired")
             and not s.get("is_fired")
-            and s.get("name") != "Лист Ожидания"
+            and not _служебный(s.get("name"))
         ]
 
     # ------------------------------------------------------------------ #

@@ -76,6 +76,11 @@ WEAK_PASSWORD_HASHES = {
 }
 
 
+# Минимальная длина пароля любой учётной записи. Решение владельца 04.10.2026:
+# 6 знаков (было 12). Заведомо слабые пароли по-прежнему отвергаются.
+MIN_PASSWORD = 6
+
+
 def _is_known_weak(value: str) -> bool:
     """True, если пароль пустой или входит в список известных слабых."""
     normalized = value.strip().lower()
@@ -98,6 +103,13 @@ class Settings(BaseSettings):
     yclients_partner_token: str = ""
     yclients_company_id: int = 0
     yclients_user_token: str = ""
+
+    # -- Общий сервер расчётных показателей (hub). Адрес зашит по умолчанию
+    # (не секрет) — новый Пульт уже знает, куда подключаться. Ключ секретный,
+    # в код не зашивается: его вводят один раз в «Настройки → Интеграции →
+    # Общий сервер», либо установщик берёт его из отдельного файла hub-token.txt.
+    hub_url: str = "https://igor-moskvinov.fvds.ru"
+    hub_token: str = ""
     yclients_old_company_id: int = 0
     yclients_old_user_token: str = ""
 
@@ -184,6 +196,9 @@ class Settings(BaseSettings):
     output_dir: Path = Field(default=PROJECT_ROOT / "output")
     fonts_dir: Path = Field(default=PROJECT_ROOT / "assets" / "fonts")
 
+    # Часовой пояс заведения (IANA). Читается при запуске, из .env: TIMEZONE=Asia/Yekaterinburg
+    timezone: str = "Europe/Moscow"
+
     # -- Business hours (fallback when YCLIENTS schedule is unavailable) --
     work_open_hour: int = 10
     work_close_hour: int = 22
@@ -206,8 +221,8 @@ class Settings(BaseSettings):
                 f"{env_name} is a known weak/default value. "
                 "Set a unique password in .env before starting."
             )
-        if len(v) < 12:
-            raise ValueError(f"{env_name} must be at least 12 characters long.")
+        if len(v) < MIN_PASSWORD:
+            raise ValueError(f"{env_name} must be at least {MIN_PASSWORD} characters long.")
         return v
 
     @field_validator("postgres_password")
@@ -242,9 +257,9 @@ class Settings(BaseSettings):
                 raise ValueError(f"MASTER_ACCOUNTS: у {login} нет staff_id")
             if staff_id in seen_staff:
                 raise ValueError(f"MASTER_ACCOUNTS: staff_id {staff_id} повторяется")
-            if _is_known_weak(password) or len(password) < 12:
+            if _is_known_weak(password) or len(password) < MIN_PASSWORD:
                 raise ValueError(
-                    f"MASTER_ACCOUNTS: пароль {login} слабый или короче 12 символов"
+                    f"MASTER_ACCOUNTS: пароль {login} слабый или короче {MIN_PASSWORD} символов"
                 )
             seen_logins.add(login)
             seen_staff.add(staff_id)
@@ -268,7 +283,7 @@ class Settings(BaseSettings):
     @property
     def database_url_sync(self) -> str:
         return (
-            f"postgresql://{self.postgres_user}:{self.postgres_password}"
+            f"postgresql+psycopg2://{self.postgres_user}:{self.postgres_password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
         )
 

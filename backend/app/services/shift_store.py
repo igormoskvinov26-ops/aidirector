@@ -87,6 +87,9 @@ def времена(смена: Shift | None, поле: str) -> dict[int, str]:
     "cash_register_estimate": None,
     "settlement_account_estimate": None,
     "other_account_debt": None,
+    # Наличка за день, пересчитанная администратором руками. Единственное число
+    # блока, которое не из YCLIENTS: с ним «Контроль финансов» сверяет кассу.
+    "cash_counted": None,
 }
 
 
@@ -194,7 +197,7 @@ async def закрыть(session: AsyncSession, день: date | None = None) ->
         снимок["warnings"].append(предупреждение_остатков)
     if остатки is None:
         снимок["warnings"].append(
-            "Остатки денег ещё не внесены — касса, счёт и долг по другому счёту "
+            "Остатки денег ещё не внесены — касса и счёт "
             "недоступны, пока владелец не укажет их хотя бы раз."
         )
 
@@ -202,9 +205,30 @@ async def закрыть(session: AsyncSession, день: date | None = None) ->
         смена = Shift(shift_date=день)
         session.add(смена)
         await session.flush()
+    # Пересчёт закрытия не должен стирать то, что админ ввёл руками.
+    прежняя = ((смена.closing_snapshot or {}).get("money") or {}).get("cash_counted")
+    if прежняя is not None:
+        снимок["money"]["cash_counted"] = прежняя
     смена.closing_snapshot = снимок
     смена.closed_at = datetime.now(UTC)
     await _мастера_смены(session, смена, снимок["masters"])
+    await session.commit()
+    return await текущая(session, день)
+
+
+async def записать_наличку(
+    session: AsyncSession, сумма: float | None, день: date | None = None
+) -> dict:
+    """Наличка за день по факту — вводит администратор после закрытия."""
+    день = день or расчёт.moscow_today()
+    смена = await _найти(session, день)
+    if смена is None or not смена.closing_snapshot:
+        raise ValueError("Сначала закройте смену")
+    if сумма is not None and сумма < 0:
+        raise ValueError("Сумма не может быть меньше нуля")
+    снимок = dict(смена.closing_snapshot)
+    снимок["money"] = {**(снимок.get("money") or {}), "cash_counted": сумма}
+    смена.closing_snapshot = снимок  # новый объект: JSON-колонка не следит за правками внутри
     await session.commit()
     return await текущая(session, день)
 

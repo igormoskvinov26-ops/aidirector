@@ -239,3 +239,26 @@ def test_настройки_не_попали_в_список_доступног
 
 def test_роли_не_перепутаны():
     assert ROLE_OWNER != ROLE_OPERATOR != ROLE_MASTER
+
+
+def test_свой_фон_загружается_только_владельцем(client, monkeypatch, tmp_path):
+    """Фон грузит владелец, смотрят все; «вернуть встроенный» удаляет файл."""
+    import io
+
+    from PIL import Image
+
+    monkeypatch.setattr(settings, "output_dir", tmp_path)
+    buf = io.BytesIO()
+    Image.new("RGB", (3000, 2000), (120, 90, 60)).save(buf, "PNG")
+    файл = {"file": ("bg.png", buf.getvalue(), "image/png")}
+
+    assert client.post("/api/salon/background/dark", files=файл, headers=АДМИНИСТРАТОР).status_code == 403
+    r = client.post("/api/salon/background/dark", files=файл, headers=ВЛАДЕЛЕЦ)
+    assert r.status_code == 200 and r.json()["backgrounds"]["dark"]
+    assert max(Image.open(tmp_path / "bg-dark.jpg").size) == 2560  # ужато
+    assert client.get("/api/salon/background/dark", headers=АДМИНИСТРАТОР).status_code == 200
+    assert client.post("/api/salon/background/sepia", files=файл, headers=ВЛАДЕЛЕЦ).status_code == 404
+
+    r = client.delete("/api/salon/background/dark", headers=ВЛАДЕЛЕЦ)
+    assert r.json()["backgrounds"]["dark"] is None
+    assert client.get("/api/salon/background/dark", headers=ВЛАДЕЛЕЦ).status_code == 404

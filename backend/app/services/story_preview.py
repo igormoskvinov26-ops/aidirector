@@ -2,6 +2,8 @@
 
 from datetime import date
 
+from app.services import salon
+
 
 def render_story_html(master_name: str, free_slots: list[str], photo_url: str, target_date: date) -> str:
     date_formatted = target_date.strftime("%d.%m.%Y")
@@ -108,11 +110,11 @@ body {{
 <div class="story">
   {photo_bg}
 
-  <div class="brand-mark">РУБЛЪ</div>
+  <div class="brand-mark">{salon.name.upper()}</div>
   <div class="badge">{date_formatted}</div>
 
   <div class="headline">
-    <span class="accent">В РУБЛЪ</span><br>
+    <span class="accent">В {salon.name.upper()}</span><br>
     ТЕБЯ СЕГОДНЯ<br>
     ЖДУТ
   </div>

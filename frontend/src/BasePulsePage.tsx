@@ -19,7 +19,8 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { useDark, палитраГрафика, палитраПульса } from "./тема";
+import { useDark, палитраГрафика } from "./тема";
+import BaseFlow from "./BaseFlow";
 
 /** Ответ /api/client-base/pulse. */
 interface PulseColumn {
@@ -54,9 +55,20 @@ interface PulseClient {
   days_since: number;
   /** Дата, с которой клиент считается потерянным. null для прочих сегментов. */
   lost_since: string | null;
+  do_not_call?: boolean;
 }
 
 const NO_MASTER = 0;
+
+/** Одна гамма вместо пяти цветов (решение владельца 04.10.2026): растущие
+ *  сегменты — латунь от светлой (новые) к густой (VIP), цветом выделен только
+ *  смысл — зона риска янтарём, потерянные красным. */
+function тоны(тёмная: boolean): Record<string, string> {
+  const ц = палитраГрафика(тёмная);
+  return тёмная
+    ? { new: "#e2c58f", second: "#d4ad6a", loyal: "#c9a15a", vip: "#a8843f", risk: ц.внимание, lost: ц.убыток }
+    : { new: "#c4955e", second: "#a97a42", loyal: "#9a6a36", vip: "#6f4a22", risk: ц.внимание, lost: ц.убыток };
+}
 
 /** Значок на каждую плитку — решение владельца 25.09.2026: опознаётся с
  *  одного взгляда, раньше, чем прочитана подпись. */
@@ -76,6 +88,7 @@ const ПОЯСНЕНИЯ: Record<string, string> = {
   loyal: "От трёх до девяти визитов. Отсюда растут VIP — или утекают потерянные.",
   vip: "Десять визитов и больше. Опора выручки.",
   lost: "Не был в салоне дольше 60 дней и не записан вперёд.",
+  risk: "Давно не был, но ещё не потерян — пора напомнить о записи.",
 };
 
 /** «12.08» — короткая дата для списка. */
@@ -117,46 +130,34 @@ function ПлиткаСегмента({
   const Значок = ЗНАЧОК[segment.code];
 
   return (
-    <div
-      className="relative overflow-hidden rounded-2xl border border-milk-line dark:border-line bg-milk-card dark:bg-panel p-5 pl-6 transition-shadow hover:shadow-lg hover:shadow-black/5 dark:hover:shadow-black/30"
-      style={{ borderLeftColor: цвет, borderLeftWidth: 3 }}
-    >
-      <div className="flex items-start justify-between gap-3 mb-1">
-        <div className="flex items-center gap-2.5">
-          <div
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl"
-            style={{ background: `${цвет}1f`, color: цвет }}
-          >
-            <Значок size={17} strokeWidth={2.25} />
-          </div>
-          <h2 className="text-sm font-semibold uppercase tracking-widest text-muted-light dark:text-muted">
+    <div className="rounded-2xl border border-milk-line dark:border-line bg-milk-card dark:bg-panel px-4 pt-3 pb-2 transition-shadow hover:shadow-lg hover:shadow-black/5 dark:hover:shadow-black/30">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Значок size={15} strokeWidth={2} style={{ color: цвет }} />
+          <h2 className="text-xs font-semibold uppercase tracking-widest text-muted-light dark:text-muted">
             {segment.label}
           </h2>
         </div>
-        {доляБазы !== null && (
-          <span className="mt-0.5 text-[11px] font-medium tabular-nums text-muted-light dark:text-muted">
-            {доляБазы}%
-          </span>
-        )}
-      </div>
-      <div className="flex items-baseline gap-2 mb-1">
-        <span className="text-2xl font-bold" style={{ color: цвет }}>
-          {segment.total}
+        <span className="text-[11px] tabular-nums text-muted-light dark:text-muted">
+          {доляБазы !== null ? `${доляБазы}% базы` : "вне суммы базы"}
         </span>
       </div>
-      <p className="text-xs text-muted-light dark:text-muted mb-3">
-        {ПОЯСНЕНИЯ[segment.code] ?? ""}
-      </p>
+      <div className="mt-1 flex items-baseline gap-3">
+        <span className="text-xl font-semibold tabular-nums text-ink-soft dark:text-cream">{segment.total}</span>
+        <span className="truncate text-[11px] text-muted-light dark:text-muted" title={ПОЯСНЕНИЯ[segment.code] ?? ""}>
+          {ПОЯСНЕНИЯ[segment.code] ?? ""}
+        </span>
+      </div>
 
-      <ResponsiveContainer width="100%" height={190}>
+      <ResponsiveContainer width="100%" height={118}>
         <BarChart
           data={segment.columns}
-          margin={{ top: 22, right: 8, left: 8, bottom: 0 }}
-          barCategoryGap="28%"
+          margin={{ top: 18, right: 4, left: 4, bottom: 0 }}
+          barCategoryGap="32%"
         >
           <XAxis
             dataKey={подписьСтолбца}
-            tick={{ fontSize: 12, fill: цвета.ось }}
+            tick={{ fontSize: 11, fill: цвета.ось }}
             tickLine={false}
             axisLine={false}
           />
@@ -191,7 +192,7 @@ function ПлиткаСегмента({
             <LabelList
               dataKey="count"
               position="top"
-              style={{ fontSize: 13, fontWeight: 600, fill: цвета.сейчас }}
+              style={{ fontSize: 11, fontWeight: 600, fill: цвета.сейчас }}
             />
           </Bar>
         </BarChart>
@@ -217,7 +218,7 @@ function ПлиткаСегмента({
  */
 export default function BasePulsePage() {
   const тёмная = useDark();
-  const палитра = палитраПульса(тёмная);
+  const палитра = тоны(тёмная);
 
   const [data, setData] = useState<PulseData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -284,7 +285,9 @@ export default function BasePulsePage() {
         </p>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-2 2xl:grid-cols-3">
+      <BaseFlow />
+
+      <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {data.segments.map((segment) => (
           <ПлиткаСегмента
             key={segment.code}
@@ -297,22 +300,9 @@ export default function BasePulsePage() {
             onColumnClick={(column) => открыть(segment, column)}
           />
         ))}
-      </div>
-
-      <div className="mt-6 mb-3">
-        <div className="flex items-center gap-2">
-          <BellRing size={16} style={{ color: палитра.risk }} />
-          <h2 className="text-sm font-semibold uppercase tracking-widest text-ink-soft dark:text-cream">
-            Зона риска
-          </h2>
-        </div>
-        <p className="text-muted-light dark:text-muted text-sm mt-1">
-          Не потерян, но не был от {data.risk_zone_min_days + 1} до {data.lost_after_days - 1}{" "}
-          дней — самое время напомнить о записи, пока не перешёл в потерянные. Пересекается с
-          сегментами выше, поэтому в базу отдельной строкой не суммируется.
-        </p>
-      </div>
-      <div className="grid gap-4 xl:grid-cols-2 2xl:grid-cols-3">
+        {/* Зона риска — в той же сетке (решение владельца 04.10.2026): отдельный
+            блок съедал полэкрана. Она пересекается с сегментами, поэтому
+            подписана «вне суммы базы». */}
         <ПлиткаСегмента
           segment={data.risk_zone}
           цвет={палитра.risk}
@@ -321,6 +311,10 @@ export default function BasePulsePage() {
           onColumnClick={(column) => открыть(data.risk_zone, column)}
         />
       </div>
+      <p className="mt-2 text-xs text-muted-light dark:text-muted">
+        Зона риска — не потерян, но не был от {data.risk_zone_min_days + 1} до {data.lost_after_days - 1} дней:
+        самое время напомнить о записи.
+      </p>
 
       {ячейка && (
         <div className="mt-4 bg-milk-card dark:bg-panel border border-milk-line dark:border-line rounded-2xl overflow-hidden">
@@ -371,6 +365,11 @@ export default function BasePulsePage() {
                   >
                     <td className="px-5 py-2.5 text-ink-soft dark:text-cream">
                       {c.name || "Без имени"}
+                      {c.do_not_call && (
+                        <span className="ml-2 rounded border border-loss/40 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-loss">
+                          не звонить
+                        </span>
+                      )}
                     </td>
                     <td className="px-3 py-2.5">
                       {c.phone ? (

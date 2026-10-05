@@ -9,6 +9,7 @@ from loguru import logger
 from PIL import Image, ImageDraw, ImageEnhance, ImageFont
 
 from app.config import settings
+from app.services import salon
 
 WIDTH = 1080
 HEIGHT = 1920
@@ -157,7 +158,7 @@ def generate_story(master_name: str, free_slots: list[str], target_date: date) -
     small_font = _get_font(30)
 
     # Top text
-    draw.text((60, 180), "В РУБЛЪ ТЕБЯ", fill=gold, font=title_font)
+    draw.text((60, 180), f"В {salon.name.upper()} ТЕБЯ", fill=gold, font=title_font)
     draw.text((60, 260), "СЕГОДНЯ ЖДУТ", fill=cream, font=title_font)
 
     # Name

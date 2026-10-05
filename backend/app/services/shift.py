@@ -30,6 +30,7 @@ from loguru import logger
 
 from app.api.yclients import YClientsClient
 from app.config import settings
+from app.services import salon
 from app.services.barber_month import (
     MOSCOW,
     amount,
@@ -687,7 +688,7 @@ def текст_открытия(снимок: dict, времена: dict[int, st
     день = date.fromisoformat(снимок["shift_date"])
     клиенты = снимок["clients"]
     строки = [
-        "РУБЛЪ — ОТКРЫТИЕ СМЕНЫ",
+        f"{salon.name.upper()} — ОТКРЫТИЕ СМЕНЫ",
         по_русски(день),
         "",
         f"План на день: {рубли(снимок['plan'])}",
@@ -708,7 +709,7 @@ def текст_закрытия(снимок: dict, времена: dict[int, st
     клиенты = снимок["clients"]
     выполнено = снимок["completed"]
     строки = [
-        "РУБЛЪ — ЗАКРЫТИЕ СМЕНЫ",
+        f"{salon.name.upper()} — ЗАКРЫТИЕ СМЕНЫ",
         по_русски(день),
         "",
         "Записи",

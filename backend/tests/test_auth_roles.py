@@ -72,10 +72,11 @@ def client() -> TestClient:
 
 
 def test_resolve_identity_distinguishes_accounts():
-    assert _resolve_identity(settings.owner_login, settings.owner_password) == (ROLE_OWNER, None)
+    assert _resolve_identity(settings.owner_login, settings.owner_password) == (ROLE_OWNER, None, True)
     assert _resolve_identity(settings.operator_login, settings.operator_password) == (
         ROLE_OPERATOR,
         None,
+        False,
     )
 
 
@@ -92,7 +93,7 @@ def test_master_account_carries_its_staff_id(monkeypatch):
         "master_accounts",
         [{"login": "ksenia", "password": "master-password-x", "staff_id": 5659614}],
     )
-    assert _resolve_identity("ksenia", "master-password-x") == (ROLE_MASTER, 5659614)
+    assert _resolve_identity("ksenia", "master-password-x") == (ROLE_MASTER, 5659614, False)
     assert _resolve_identity("ksenia", "wrong-password") is None
 
 
@@ -107,7 +108,7 @@ def test_кириллица_в_пароле_не_ломает_вход(monkeypat
     monkeypatch.setattr(settings, "owner_login", "Хозяин")
     monkeypatch.setattr(settings, "owner_password", "пароль-с-кириллицей")
 
-    assert _resolve_identity("Хозяин", "пароль-с-кириллицей") == (ROLE_OWNER, None)
+    assert _resolve_identity("Хозяин", "пароль-с-кириллицей") == (ROLE_OWNER, None, True)
     assert _resolve_identity("Хозяин", "не тот пароль") is None
     assert _resolve_identity("Хозяин", "ascii-password") is None
 
@@ -226,3 +227,20 @@ def test_запуск_выгрузки_остался_у_владельца(clie
 def test_без_пароля_состояние_не_отдаётся(client):
     """Открыли всем ролям — не значит открыли всем в сети."""
     assert client.get("/api/sync/status").status_code == 401
+
+
+def test_отдельный_владелец_забирает_top_у_главного_входа(monkeypatch):
+    """Пока Владелец не заведён, главный вход — Владелец. После — Управляющий."""
+    from app.services import credentials
+
+    monkeypatch.setattr(credentials, "_учётные", {})
+    assert _resolve_identity(settings.owner_login, settings.owner_password) == (ROLE_OWNER, None, True)
+
+    monkeypatch.setattr(
+        credentials,
+        "_учётные",
+        {"TOP_LOGIN": "igor", "TOP_PASSWORD_HASH": credentials._хеш("очень-длинный-пароль-1")},
+    )
+    assert _resolve_identity("igor", "очень-длинный-пароль-1") == (ROLE_OWNER, None, True)
+    assert _resolve_identity(settings.owner_login, settings.owner_password) == (ROLE_OWNER, None, False)
+    assert _resolve_identity("igor", "не тот") is None

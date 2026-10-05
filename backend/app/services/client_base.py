@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.models import (
+    AppSetting,
     Client,
     ContactAttempt,
     ContactTask,
@@ -30,7 +31,7 @@ from app.models.models import (
 from app.services import call_journal
 from app.services.finance import LOST_AFTER_DAYS
 
-MOSCOW = ZoneInfo("Europe/Moscow")
+MOSCOW = ZoneInfo(settings.timezone)
 
 # Segment ordering and human labels (must match the frontend).
 SEGMENT_ORDER = ["active", "due", "risk", "late", "lost"]
@@ -669,7 +670,8 @@ async def get_pulse_clients(session: AsyncSession, segment: str, staff_id: int) 
 
     строки = await session.execute(select(Client).where(Client.id.in_(отобранные)))
     for client in строки.scalars().all():
-        отобранные[client.id].update(name=client.name, phone=client.phone)
+        отобранные[client.id].update(name=client.name, phone=client.phone,
+                                     do_not_call=bool(client.do_not_call))
 
     порядок = (
         (lambda c: (-c["visits_total"], c["days_since"]))
@@ -681,9 +683,33 @@ async def get_pulse_clients(session: AsyncSession, segment: str, staff_id: int) 
     return sorted(отобранные.values(), key=порядок)
 
 
-async def get_clients_by_segment(session: AsyncSession, segment: str) -> list[dict]:
+# Плитки «Новые», «Стали постоянными», «Вернули» — это события за период, а не
+# сегмент на сегодня. Клик по ним показывает список тех самых клиентов (решение
+# владельца 04.10.2026: все плитки должны открываться). Правила — те же, что в
+# build_dashboard, чтобы число на плитке совпадало с длиной списка.
+МЕТРИКИ_ПЕРИОДА = ("new", "became_regular", "returned")
+
+
+def _в_метрике(p: dict, metric: str, start: date) -> bool:
+    dates = [date.fromisoformat(d) for d in p["visit_dates"]]
+    if metric == "new":
+        return dates[0] >= start
+    if metric == "returned":
+        return len(dates) >= 2 and dates[-1] >= start and (dates[-1] - dates[-2]).days > FALLBACK_RISK_DAYS
+    if metric == "became_regular":
+        return len(dates) >= MIN_STABLE_VISITS and dates[MIN_STABLE_VISITS - 1] >= start
+    return False
+
+
+async def get_clients_by_segment(session: AsyncSession, segment: str, period: str = "month") -> list[dict]:
     profiles = await build_client_profiles(session)
-    ids = [cid for cid, p in profiles.items() if p["segment"] == segment]
+    if segment in МЕТРИКИ_ПЕРИОДА:
+        start = _period_start(period, moscow_today())
+        ids = [cid for cid, p in profiles.items() if _в_метрике(p, segment, start)]
+    elif segment == "active_base":
+        ids = [cid for cid, p in profiles.items() if p["segment"] != "lost"]
+    else:
+        ids = [cid for cid, p in profiles.items() if p["segment"] == segment]
     clients: dict[int, Client] = {}
     if ids:
         rows = await session.execute(select(Client).where(Client.id.in_(ids)))
@@ -698,6 +724,7 @@ async def get_clients_by_segment(session: AsyncSession, segment: str) -> list[di
             "client_id": cid,
             "name": c.name if c else None,
             "phone": c.phone if c else None,
+            "do_not_call": bool(c.do_not_call) if c else False,
             "segment": p["segment"],
             "stable": p["stable"],
             "days_since": p["days_since"],
@@ -724,7 +751,7 @@ TASK_SCRIPTS = {
     "risk": {
         "goal": "Персональное напоминание или звонок",
         "phone": "Здравствуйте, {name}! Вы давно у нас не были. Удобно ли записаться на этой неделе?",
-        "message": "{name}, здравствуйте! Напомним о себе — будем рады видеть вас в РублЪ.",
+        "message": "{name}, здравствуйте! Напомним о себе — будем рады видеть вас снова.",
     },
     "late": {
         "goal": "Уточнить причину паузы и получить обратную связь",
@@ -752,6 +779,8 @@ async def refresh_tasks(session: AsyncSession) -> dict:
         rows = await session.execute(select(Client).where(Client.id.in_(client_ids)))
         for c in rows.scalars().all():
             clients[c.id] = c
+    # «НЕ ЗВОНИТЬ!» — такого клиента в очередь больше не ставим.
+    не_звонить = {cid for cid, c in clients.items() if c.do_not_call}
 
     # Remove all still-open tasks (idempotent daily refresh — old days' tasks are stale).
     from sqlalchemy import delete
@@ -761,9 +790,8 @@ async def refresh_tasks(session: AsyncSession) -> dict:
 
     created = 0
     for cid, p in profiles.items():
-        if p["segment"] not in ACTIONABLE_SEGMENTS:
+        if p["segment"] not in ACTIONABLE_SEGMENTS or cid in не_звонить:
             continue
-        client = clients.get(cid)
         task = ContactTask(
             client_id=cid,
             group_code=p["segment"],
@@ -839,6 +867,58 @@ async def get_tasks(session: AsyncSession, status: str = "open") -> list[dict]:
     return out
 
 
+async def set_do_not_call(session: AsyncSession, client_id: int, value: bool, actor: str | None) -> dict:
+    """Пометить «НЕ ЗВОНИТЬ!» или снять пометку. При пометке открытые задачи
+    этого клиента убираются из сегодняшней очереди сразу, не дожидаясь пересборки."""
+    from sqlalchemy import delete
+
+    client = await session.get(Client, client_id)
+    if client is None:
+        return {"ok": False, "error": "client not found"}
+    client.do_not_call = value
+    client.do_not_call_at = datetime.now(MOSCOW) if value else None
+    client.do_not_call_by = (actor or "")[:64] or None if value else None
+    removed = 0
+    if value:
+        res = await session.execute(
+            delete(ContactTask).where(ContactTask.client_id == client_id, ContactTask.status == "open")
+        )
+        removed = res.rowcount or 0
+    await session.commit()
+    return {"ok": True, "client_id": client_id, "do_not_call": value, "tasks_removed": removed}
+
+
+async def calls_today(session: AsyncSession, admin_staff_id: int | None = None) -> dict:
+    """Счётчик звонков за сегодня: всего, записались, без записи, не дозвонились.
+    Плюс рекорд — лучший день за 90 дней, чтобы было с чем соревноваться."""
+    today = moscow_today()
+    start = datetime.combine(today - timedelta(days=90), datetime.min.time(), tzinfo=MOSCOW)
+    rows = (await session.execute(
+        select(ContactAttempt.outcome, ContactAttempt.created_at, ContactAttempt.admin_staff_id)
+        .where(ContactAttempt.created_at >= start)
+    )).all()
+    def счёт(отбор) -> dict:
+        out = {"total": 0, "booked": 0, "no_booking": 0, "no_answer": 0}
+        for outcome, when, _ in отбор:
+            out["total"] += 1
+            if outcome in out:
+                out[outcome] += 1
+        return out
+    по_дням: dict[date, int] = defaultdict(int)
+    сегодня, моё = [], []
+    for r in rows:
+        when = r[1].astimezone(MOSCOW) if r[1].tzinfo else r[1].replace(tzinfo=MOSCOW)
+        по_дням[when.date()] += 1
+        if when.date() == today:
+            сегодня.append(r)
+            if admin_staff_id is not None and r[2] == admin_staff_id:
+                моё.append(r)
+    прошлые = [n for d, n in по_дням.items() if d != today]
+    return {"date": today.isoformat(), "salon": счёт(сегодня),
+            "mine": счёт(моё) if admin_staff_id is not None else None,
+            "record": max(прошлые) if прошлые else 0}
+
+
 async def set_admin_note(session: AsyncSession, client_id: int, note: str) -> dict:
     """Сохранить заметку администратора на клиенте.
 
@@ -885,3 +965,84 @@ async def record_outcome(
     # диске — вещь ненадёжная, а звонок терять нельзя.
     await call_journal.append_attempt(session, task_id, attempt, when=when)
     return {"ok": True, "task_id": task_id}
+
+
+# --------------------------------------------------------------------------- #
+# Баланс базы: новые минус потерянные (решение владельца 04.10.2026)
+# --------------------------------------------------------------------------- #
+
+PULSE_START_KEY = "pulse_start_date"
+
+
+def base_flow(
+    visits: dict[int, list[date]],
+    first_known: dict[int, date | None],
+    start: date,
+    today: date,
+) -> dict:
+    """Приток и отток базы по дням с ``start`` по ``today``.
+
+    Новый — первый визит клиента и возвращение после потери (решение владельца:
+    вернувшийся считается новым; в ответе они разделены). Потерянный в день D —
+    клиент, чей визит был ровно LOST_AFTER_DAYS + 1 дней назад и после него
+    не было визита. Пульс дня = новые − потерянные, итог — накопление со start.
+    Будущая запись, снимающая «потерянного», задним числом неизвестна и не
+    учитывается — как и в backfill_metric_history.
+    """
+    first: dict[date, int] = defaultdict(int)
+    back: dict[date, int] = defaultdict(int)
+    lost: dict[date, int] = defaultdict(int)
+    for cid, raw in visits.items():
+        v = sorted(set(raw))
+        if not v:
+            continue
+        known = first_known.get(cid)
+        if known is None or known >= v[0]:  # иначе ранние визиты вне нашей истории
+            first[v[0]] += 1
+        for a, b in zip(v, v[1:]):
+            if (b - a).days > LOST_AFTER_DAYS:
+                lost[a + timedelta(days=LOST_AFTER_DAYS + 1)] += 1
+                back[b] += 1
+        last_lost = v[-1] + timedelta(days=LOST_AFTER_DAYS + 1)
+        lost[last_lost] += 1
+    days, total, d = [], 0, start
+    while d <= today:
+        n, r, l = first.get(d, 0), back.get(d, 0), lost.get(d, 0)
+        pulse = n + r - l
+        total += pulse
+        days.append({"date": d.isoformat(), "new": n, "returned": r, "lost": l,
+                     "pulse": pulse, "total": total})
+        d += timedelta(days=1)
+    return {"start": start.isoformat(), "days": days, "total": total,
+            "new": sum(x["new"] for x in days), "returned": sum(x["returned"] for x in days),
+            "lost": sum(x["lost"] for x in days)}
+
+
+async def get_pulse_start(session: AsyncSession) -> date | None:
+    row = await session.get(AppSetting, PULSE_START_KEY)
+    return date.fromisoformat(row.value) if row and row.value else None
+
+
+async def set_pulse_start(session: AsyncSession, value: date) -> None:
+    row = await session.get(AppSetting, PULSE_START_KEY)
+    if row is None:
+        session.add(AppSetting(key=PULSE_START_KEY, value=value.isoformat()))
+    else:
+        row.value = value.isoformat()
+    await session.commit()
+
+
+async def build_base_flow(session: AsyncSession) -> dict:
+    today = moscow_today()
+    start = await get_pulse_start(session)
+    if start is None:
+        return {"start": None, "days": [], "today": today.isoformat()}
+    visits, _ = await _client_visit_summary(session)
+    rows = await session.execute(select(Client.id, Client.first_visit_date))
+    first_known = {cid: _to_moscow_date(dt) if dt else None for cid, dt in rows}
+    out = base_flow(visits, first_known, start, today)
+    earliest = min((v[0] for v in visits.values() if v), default=None)
+    out["today"] = today.isoformat()
+    out["history_from"] = earliest.isoformat() if earliest else None
+    out["lost_after_days"] = LOST_AFTER_DAYS
+    return out

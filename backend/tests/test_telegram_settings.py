@@ -49,7 +49,7 @@ async def test_без_настройки_и_без_env_не_настроено(s
 async def test_настройка_в_базе_главенствует_над_env(session: AsyncSession):
     await telegram_settings.сохранить(
         session, bot_token="db-токен-1234", chat_id="-100999",
-        bot_username="rubl_bot", chat_title="РублЪ Директор",
+        bot_username="rubl_bot", chat_title="РублЪ Пульт",
     )
 
     токен, чат = await telegram_settings.учётные_данные(session, "env-токен", "env-чат")
@@ -59,7 +59,7 @@ async def test_настройка_в_базе_главенствует_над_en
     assert словарь["configured"] is True
     assert словарь["source"] == "database"
     assert словарь["bot_username"] == "rubl_bot"
-    assert словарь["chat_title"] == "РублЪ Директор"
+    assert словарь["chat_title"] == "РублЪ Пульт"
     assert словарь["bot_token_masked"] == "…1234"
     assert "db-токен" not in словарь["bot_token_masked"]
 

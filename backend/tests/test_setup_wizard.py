@@ -1,6 +1,6 @@
 """Первый запуск без .env: приложение поднимается и даёт себя настроить.
 
-До этой доработки свежая установка означала тупик: чтобы открыть Директора,
+До этой доработки свежая установка означала тупик: чтобы открыть Пульта,
 нужен пароль из .env, а чтобы его туда вписать — доступ к файлу на сервере.
 Проверяется, что тупика больше нет и что открытая на время настройки дверь
 закрывается сразу, как только владелец заведён.
@@ -116,7 +116,8 @@ async def test_проверка_пароля(session: AsyncSession):
 @pytest.mark.asyncio
 async def test_слабый_и_короткий_пароль_отвергаются(session: AsyncSession):
     with pytest.raises(ValueError):
-        await credentials.завести(session, "owner", "igor", "короткий")
+        await credentials.завести(session, "owner", "igor", "кор5к")  # 5 знаков — мало
+    await credentials.завести(session, "owner", "igor", "рубль7")  # 6 знаков — достаточно
     with pytest.raises(ValueError):
         await credentials.завести(session, "owner", "", "длинный-пароль-владельца")
 
@@ -149,8 +150,8 @@ async def test_вход_по_заведённой_записи(session: AsyncSes
     await credentials.завести(session, "owner", "igor", "длинный-пароль-владельца")
     await credentials.завести(session, "operator", "admin", "длинный-пароль-админа")
 
-    assert _resolve_identity("igor", "длинный-пароль-владельца") == (ROLE_OWNER, None)
-    assert _resolve_identity("admin", "длинный-пароль-админа") == (ROLE_OPERATOR, None)
+    assert _resolve_identity("igor", "длинный-пароль-владельца") == (ROLE_OWNER, None, True)
+    assert _resolve_identity("admin", "длинный-пароль-админа") == (ROLE_OPERATOR, None, False)
     assert _resolve_identity("igor", "не тот пароль") is None
 
 
@@ -163,4 +164,5 @@ def test_вход_из_env_продолжает_работать():
     assert _resolve_identity(settings.owner_login, settings.owner_password) == (
         ROLE_OWNER,
         None,
+        True,
     )

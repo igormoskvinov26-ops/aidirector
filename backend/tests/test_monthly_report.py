@@ -375,6 +375,7 @@ async def test_проверка_сохраняет_confirmed_и_повтор_н�
 
 @pytest.mark.asyncio
 async def test_без_поля_создания_проверка_не_меняет_статус(session, monkeypatch):
+    monkeypatch.setitem(mr.ДЕФОЛТЫ, "record_created_field", "")  # поле по умолчанию убрано
     aid = await _call(session, datetime(2026, 10, 1, 12, 0, tzinfo=MSK))
     out = await mr.verify_pending(session, NOW)
     assert out["pending"] == 1 and "не подтверждено" in out["warning"]
@@ -391,3 +392,46 @@ async def test_настройки_проверяются_и_сохраняютс
     with pytest.raises(ValueError):
         await mr.save_settings(session, {"record_created_field": "create date; drop"})
     assert (await mr.load_settings(session))["attribution_window_days"] == 5
+
+
+
+async def test_today_authors_skips_api_and_other_days(monkeypatch):
+    from datetime import datetime, timedelta
+    from app.api import yclients
+    now = datetime.now(mr.MOSCOW)
+    iso = lambda d: d.strftime("%Y-%m-%dT%H:%M:%S+0300")
+    base = {"client": {"id": 1}, "datetime": iso(now + timedelta(days=3)), "deleted": False}
+    rows = [dict(base, id=1, create_date=iso(now), created_user_id=777),
+            dict(base, id=2, create_date=iso(now), created_user_id=4058773, api_id="x"),
+            dict(base, id=3, create_date=iso(now - timedelta(days=2)), created_user_id=888),
+            dict(base, id=4, create_date=iso(now), created_user_id=777, deleted=True)]
+
+    class Fake:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def get_all_records(self, a, b): return rows
+
+    monkeypatch.setattr(yclients, "YClientsClient", Fake)
+    out = await mr.today_authors()
+    assert [a["value"] for a in out["authors"]] == ["777"] and out["via_api"] == 1
+    assert out["authors"][0]["count"] == 2 and out["authors"][0]["deleted"] == 1
+
+
+@pytest.mark.asyncio
+async def test_администраторы_определяются_по_авторам_записей(monkeypatch):
+    cfg = {"admins": [], "record_creator_field": "created_user_id"}
+    recs = [
+        {"id": 1, "created_user_id": 900, "client": {"id": 1}},
+        {"id": 2, "created_user_id": 900, "client": {"id": 2}},
+        {"id": 3, "created_user_id": 901, "client": {"id": 3}},
+        {"id": 4, "created_user_id": 902, "api_id": 5, "client": {"id": 4}},  # онлайн-запись
+        {"id": 5, "created_user_id": 903, "client": {"id": 5}},                 # мастер
+    ]
+
+    async def fake_cached(key, loader, ttl=None):
+        return {"900": "Виктор"}, {"903": {"staff_id": 5659614, "name": "Ксения"}}
+
+    monkeypatch.setattr(mr, "cached", fake_cached)
+    out = await mr.auto_admins(cfg, recs)
+    assert [(a["staff_id"], a["name"], a["creator_values"]) for a in out] == [
+        (900, "Виктор", ["900"]), (901, "Сотрудник №901", ["901"])]

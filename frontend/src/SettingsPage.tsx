@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import ReportSettings from "./ReportSettings";
+import SalonSettings from "./SalonSettings";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -79,6 +80,24 @@ interface Проверка {
 const НАСТРОЕНО = "настроено";
 const ЧАСТИЧНО = "настроено частично";
 const ОШИБКА_СВЯЗИ = "ошибка подключения";
+
+interface СтатусСервера {
+  configured: boolean;
+  ok: boolean | null;
+  at: string | null;
+  error: string | null;
+  pushed?: number;
+  pulled?: number;
+}
+
+/** «16:24» для сегодняшнего обмена, иначе «04.10 16:24». */
+function когдаКратко(iso: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  const t = d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+  const сегодня = new Date().toDateString() === d.toDateString();
+  return сегодня ? `в ${t}` : `${d.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" })} ${t}`;
+}
 
 /** Цвет и значок статуса. Один взгляд должен отвечать на вопрос «всё ли в порядке». */
 function видСтатуса(статус: string) {
@@ -175,7 +194,7 @@ export default function SettingsPage() {
           Настройки · Интеграции
         </h1>
         <p className="text-sm text-muted-light dark:text-muted mt-1">
-          Ключи, по которым Директор ходит за данными. Их можно вписать руками
+          Ключи, по которым Пульт ходит за данными. Их можно вписать руками
           или загрузить готовым файлом <code>.env</code>.
         </p>
       </header>
@@ -206,7 +225,11 @@ export default function SettingsPage() {
         />
       ))}
 
+      <SalonSettings />
+
       <ReportSettings />
+
+      <УчёткаВладельца />
 
       <Журнал />
     </div>
@@ -290,7 +313,7 @@ function ЗагрузкаФайла({ приУспехе }: { приУспехе
             Загрузить готовый .env
           </div>
           <p className="text-sm text-muted-light dark:text-muted mt-1">
-            Возьмутся только те строки, которые Директор умеет использовать.
+            Возьмутся только те строки, которые Пульт умеет использовать.
             Остальные будут показаны и пропущены.
           </p>
         </div>
@@ -365,7 +388,7 @@ function ЗагрузкаФайла({ приУспехе }: { приУспехе
           {предпросмотр.unknown.length > 0 && (
             <div className="text-sm">
               <div className="text-muted-light dark:text-muted">
-                Не используется Директором — будет пропущено:
+                Не используется Пультом — будет пропущено:
               </div>
               <div className="mt-1 font-mono text-xs text-muted-light dark:text-muted">
                 {предпросмотр.unknown.join(", ")}
@@ -407,6 +430,26 @@ function КарточкаИнтеграции({
   const [занято, setЗанято] = useState(false);
   const [проверка, setПроверка] = useState<Проверка | null>(null);
   const [ошибка, setОшибка] = useState<string | null>(null);
+  const [синхр, setСинхр] = useState<СтатусСервера | null>(null);
+
+  useEffect(() => {
+    if (интеграция.id !== "hub") return;
+    let жив = true;
+    const опрос = async () => {
+      try {
+        const r = await fetch("/api/settings/hub/status");
+        if (жив && r.ok) setСинхр(await r.json());
+      } catch {
+        /* сеть моргнула — покажем при следующем опросе */
+      }
+    };
+    void опрос();
+    const t = setInterval(() => void опрос(), 15000);
+    return () => {
+      жив = false;
+      clearInterval(t);
+    };
+  }, [интеграция.id]);
 
   const { цвет, Значок } = видСтатуса(проверка ? проверка.status : интеграция.status);
   const ничегоНеЗаполнено = интеграция.fields.every((п) => !п.configured);
@@ -433,7 +476,7 @@ function КарточкаИнтеграции({
         (тело.changed ?? []).length
           ? интеграция.applies_immediately
             ? "Настройки сохранены и уже действуют — перезапуск не нужен."
-            : "Настройки сохранены. Для применения требуется перезапуск Директора."
+            : "Настройки сохранены. Для применения требуется перезапуск Пульта."
           : "Ничего не изменилось.",
       );
     } finally {
@@ -554,6 +597,23 @@ function КарточкаИнтеграции({
         </div>
       )}
       {ошибка && <div className="mt-4 text-sm text-red-600 dark:text-red-400">{ошибка}</div>}
+
+      {интеграция.id === "hub" && синхр?.configured && (
+        <div className="mt-4 text-sm">
+          {синхр.ok === null && <span className="text-muted-light dark:text-muted">Обмена ещё не было — подождите до минуты.</span>}
+          {синхр.ok === true && (
+            <span className="text-emerald-600 dark:text-emerald-400">
+              Синхронизация работает. Последний обмен {когдаКратко(синхр.at)}: отправлено {синхр.pushed ?? 0}, получено{" "}
+              {синхр.pulled ?? 0}.
+            </span>
+          )}
+          {синхр.ok === false && (
+            <span className="text-red-600 dark:text-red-400">
+              Последний обмен {когдаКратко(синхр.at)} не прошёл: {синхр.error}. Пульт повторит сам.
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Что настроено сейчас. Секретов здесь нет — только маски. */}
       <dl className="mt-5 grid gap-x-8 gap-y-2 sm:grid-cols-2">
@@ -706,7 +766,7 @@ function ТокенПоЛогину({
         className="mt-4 text-sm text-bronze dark:text-gold hover:underline"
         onClick={() => setОткрыта(true)}
       >
-        Нет пользовательского токена? Получить по логину и паролю YCLIENTS
+        Получить новый токен по логину и паролю YCLIENTS
       </button>
     );
   }
@@ -714,7 +774,7 @@ function ТокенПоЛогину({
   return (
     <div className="mt-5 space-y-3 border-t border-milk-line dark:border-line/50 pt-5">
       <p className="text-sm text-muted-light dark:text-muted">
-        Логин и пароль от кабинета YCLIENTS — не от Директора. Телефон без плюса,
+        Логин и пароль от кабинета YCLIENTS — не от Пульта. Телефон без плюса,
         например 79991234567, или почта. Они нужны на один запрос и нигде не
         сохраняются. Партнёрский токен должен быть уже вписан.
       </p>
@@ -760,6 +820,94 @@ function ТокенПоЛогину({
   );
 }
 
+// ── Учётная запись Владельца ──────────────────────────────────────────────
+
+/** Отдельный вход Владельца. Виден только Владельцу (сервер отвечает 403
+ *  остальным). Пока его нет, Владельцем считается главный вход. */
+function УчёткаВладельца() {
+  const [есть, setЕсть] = useState<{ exists: boolean; login: string } | null>(null);
+  const [логин, setЛогин] = useState("");
+  const [пароль, setПароль] = useState("");
+  const [повтор, setПовтор] = useState("");
+  const [занято, setЗанято] = useState(false);
+  const [ошибка, setОшибка] = useState<string | null>(null);
+  const [готово, setГотово] = useState(false);
+
+  useEffect(() => {
+    void (async () => {
+      const r = await fetch("/api/settings/top-account").catch(() => null);
+      if (r?.ok) setЕсть(await r.json());
+    })();
+  }, []);
+
+  if (!есть) return null;
+
+  async function сохранить() {
+    if (пароль !== повтор) {
+      setОшибка("Пароли не совпадают");
+      return;
+    }
+    setЗанято(true);
+    setОшибка(null);
+    try {
+      const r = await fetch("/api/settings/top-account", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ login: логин, password: пароль }),
+      });
+      if (!r.ok) {
+        setОшибка(await разобратьОшибку(r));
+        return;
+      }
+      setГотово(true);
+      setПароль("");
+      setПовтор("");
+    } catch {
+      setОшибка("Сервер не отвечает");
+    } finally {
+      setЗанято(false);
+    }
+  }
+
+  return (
+    <div className={КАРТОЧКА + " space-y-3"}>
+      <div className="flex items-center gap-2 font-semibold text-ink-soft dark:text-cream">
+        <ShieldCheck size={18} className="text-bronze dark:text-gold" /> Учётная запись Владельца
+      </div>
+      <p className="text-sm text-muted-light dark:text-muted max-w-[75ch]">
+        {есть.exists
+          ? `Заведена, логин «${есть.login}». Здесь можно сменить логин или пароль.`
+          : "Пока отдельного входа нет, и Владельцем считается общий вход управляющего. "}
+        {" "}Только Владелец видит «Контроль финансов» и добавляет филиалы. После того как
+        учётка заведена, общий вход становится входом Управляющего — без этих разделов.
+      </p>
+      {готово ? (
+        <p className="text-sm text-profit max-w-[75ch]">
+          Сохранено. Браузер помнит прежний вход, поэтому закройте его полностью (или откройте
+          окно инкогнито) и войдите в Пульт под логином Владельца.
+        </p>
+      ) : (
+        <>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <input className={ПОЛЕ_ВВОДА} placeholder="Логин" value={логин} autoComplete="off"
+              onChange={(e) => setЛогин(e.target.value)} />
+            <input className={ПОЛЕ_ВВОДА} placeholder="Пароль, от 6 знаков" type="password" value={пароль}
+              autoComplete="new-password" onChange={(e) => setПароль(e.target.value)} />
+            <input className={ПОЛЕ_ВВОДА} placeholder="Пароль ещё раз" type="password" value={повтор}
+              autoComplete="new-password" onChange={(e) => setПовтор(e.target.value)} />
+          </div>
+          {ошибка && <p role="alert" className="text-sm text-loss">{ошибка}</p>}
+          <button className={КНОПКА_ГЛАВНАЯ} disabled={занято || !логин.trim() || !пароль}
+            onClick={() => void сохранить()}>
+            {занято && <Loader2 size={16} className="animate-spin" />}
+            {есть.exists ? "Сменить" : "Завести учётку Владельца"}
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ── Журнал изменений ──────────────────────────────────────────────────────
 
 interface Запись {
@@ -776,7 +924,7 @@ const ДЕЙСТВИЕ: Record<string, string> = {
 };
 
 const КТО: Record<string, string> = {
-  owner: "Владелец",
+  owner: "Управляющий",
   operator: "Администратор",
 };
 

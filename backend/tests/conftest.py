@@ -1,3 +1,4 @@
+import pytest
 """Test environment: dummy credentials so config validation passes offline."""
 
 import os
@@ -16,3 +17,23 @@ os.environ.setdefault(
     "MASTER_ACCOUNTS",
     '[{"login":"test-master","password":"test-master-password","staff_id":5659614}]',
 )
+
+
+@pytest.fixture(autouse=True)
+def _salon_state_restored():
+    """Настройки заведения глобальные: тест не должен оставлять их другому."""
+    from app.config import settings
+    from app.services import salon
+
+    before = (list(settings.barber_payroll_rules), salon.name, salon.booking_url)
+    yield
+    settings.barber_payroll_rules, salon.name, salon.booking_url = before
+
+
+@pytest.fixture(autouse=True)
+def _branch_flags_restored():
+    from app.services import configuration, salon
+
+    before = (configuration.изолирован, salon.главная)
+    yield
+    configuration.изолирован, salon.главная = before

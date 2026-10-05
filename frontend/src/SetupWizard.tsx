@@ -77,7 +77,7 @@ export default function SetupWizard({ приГотовности }: { приГо
               Рубл<span className="text-bronze dark:text-gold">Ъ</span>
             </div>
             <div className="text-xs text-muted-light dark:text-muted mt-1">
-              Настройка AI Director
+              Настройка Пульт
             </div>
           </div>
         </div>
@@ -85,7 +85,7 @@ export default function SetupWizard({ приГотовности }: { приГо
         <div className="rounded-2xl border border-milk-line dark:border-line/50 bg-milk-card dark:bg-panel/60 p-7">
           {шаг === "код" && (
             <>
-              <h1 className="text-xl font-semibold">Директор ещё не настроен</h1>
+              <h1 className="text-xl font-semibold">Пульт ещё не настроен</h1>
               <p className="text-sm text-muted-light dark:text-muted mt-2">
                 Чтобы настроить его мог только тот, кто ставил программу,
                 введите код из окна установки. Он же лежит в файле{" "}
@@ -144,7 +144,7 @@ export default function SetupWizard({ приГотовности }: { приГо
                   <label className="block text-sm mb-1.5">
                     Пароль{" "}
                     <span className="text-muted-light dark:text-muted">
-                      · не короче 12 символов
+                      · не короче 6 символов
                     </span>
                   </label>
                   <input
@@ -174,7 +174,7 @@ export default function SetupWizard({ приГотовности }: { приГо
 
               <button
                 className="mt-5 w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-bronze dark:bg-gold text-milk dark:text-ink font-medium disabled:opacity-40"
-                disabled={занято || пароль.length < 12 || !логин.trim()}
+                disabled={занято || пароль.length < 6 || !логин.trim()}
                 onClick={() => void завестиВладельца()}
               >
                 {занято ? (
@@ -195,7 +195,7 @@ export default function SetupWizard({ приГотовности }: { приГо
               </div>
               <h1 className="text-xl font-semibold mt-3">Осталось подключить YCLIENTS</h1>
               <p className="text-sm text-muted-light dark:text-muted mt-2">
-                Дальше Директор попросит войти под только что созданным логином.
+                Дальше Пульт попросит войти под только что созданным логином.
                 Ключи можно загрузить готовым файлом <code>.env</code> или
                 вписать руками — то и другое в разделе «Настройки → Интеграции».
               </p>
@@ -208,7 +208,7 @@ export default function SetupWizard({ приГотовности }: { приГо
                 onClick={приГотовности}
               >
                 <ArrowRight size={16} />
-                Перейти в Директора
+                Перейти в Пульта
               </button>
             </>
           )}

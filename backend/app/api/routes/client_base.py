@@ -1,6 +1,7 @@
 """Client base routes — segmentation, dashboard, admin contact queue."""
 
 import tempfile
+from datetime import date
 from pathlib import Path
 
 from fastapi import (
@@ -82,6 +83,27 @@ async def pulse(db: AsyncSession = Depends(get_db)) -> dict:
     return await client_base.build_base_pulse(db)
 
 
+@router.get("/flow")
+async def flow(db: AsyncSession = Depends(get_db)) -> dict:
+    """Баланс базы: новые, потерянные и накопленный пульс по дням."""
+    return await client_base.build_base_flow(db)
+
+
+@router.post("/flow/start")
+async def flow_start(request: Request, payload: dict = Body(...), db: AsyncSession = Depends(get_db)) -> dict:
+    """Точка отсчёта пульса. Только владелец: от неё зависят все цифры."""
+    if getattr(request.state, "role", None) != ROLE_OWNER:
+        raise HTTPException(status_code=403, detail="Только для владельца")
+    try:
+        value = date.fromisoformat(str(payload.get("start")))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Дата в формате ГГГГ-ММ-ДД") from None
+    if value > moscow_today():
+        raise HTTPException(status_code=422, detail="Дата не может быть в будущем")
+    await client_base.set_pulse_start(db, value)
+    return await client_base.build_base_flow(db)
+
+
 @router.get("/pulse-clients")
 async def pulse_clients(
     segment: str = Query(..., description="new|second|loyal|vip|lost|risk"),
@@ -94,10 +116,11 @@ async def pulse_clients(
 
 @router.get("/clients")
 async def clients_by_segment(
-    segment: str = Query(..., description="active|due|risk|late|lost"),
+    segment: str = Query(..., description="active|due|risk|late|lost|active_base|new|became_regular|returned"),
+    period: str = Query("month"),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    return await client_base.get_clients_by_segment(db, segment)
+    return await client_base.get_clients_by_segment(db, segment, period)
 
 
 @router.get("/segments")
@@ -169,13 +192,34 @@ async def task_outcome(
     )
 
 
+@router.post("/clients/{client_id}/do-not-call")
+async def do_not_call(
+    client_id: int, request: Request, body: dict = Body(...), db: AsyncSession = Depends(get_db),
+) -> dict:
+    """«НЕ ЗВОНИТЬ!»: пометить может администратор, снять — только управляющий
+    или Владелец (чтобы пометку нельзя было снять по ошибке у стойки)."""
+    from app.main_roles import ROLE_OWNER
+
+    value = bool(body.get("value", True))
+    if not value and getattr(request.state, "role", None) != ROLE_OWNER:
+        raise HTTPException(status_code=403, detail="Снять пометку может только управляющий")
+    return await client_base.set_do_not_call(db, client_id, value, body.get("actor"))
+
+
+@router.get("/calls/today")
+async def calls_today(
+    admin_staff_id: int | None = Query(None), db: AsyncSession = Depends(get_db)
+) -> dict:
+    return await client_base.calls_today(db, admin_staff_id)
+
+
 @router.get("/admins")
 async def call_admins(db: AsyncSession = Depends(get_db)) -> list[dict]:
     """Кто может звонить: список из настроек отчёта. Нужен для выбора имени."""
     from app.services import monthly_report
 
-    cfg = await monthly_report.load_settings(db)
-    return [{"staff_id": a["staff_id"], "name": a["name"]} for a in cfg["admins"]]
+    return [{"staff_id": a["staff_id"], "name": a["name"]}
+            for a in await monthly_report.current_admins(db)]
 
 
 # --------------------------------------------------------------------------- #

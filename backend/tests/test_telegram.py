@@ -125,12 +125,12 @@ async def test_найти_чаты_разбирает_getupdates_и_не_дуб�
         telegram.httpx,
         "AsyncClient",
         lambda *a, **kw: _УспешныйКлиент({"ok": True, "result": [
-            {"update_id": 1, "message": {"chat": {"id": -100123, "title": "РублЪ Директор"}}},
-            {"update_id": 2, "message": {"chat": {"id": -100123, "title": "РублЪ Директор"}}},
+            {"update_id": 1, "message": {"chat": {"id": -100123, "title": "РублЪ Пульт"}}},
+            {"update_id": 2, "message": {"chat": {"id": -100123, "title": "РублЪ Пульт"}}},
         ]}),
     )
     чаты = await telegram.найти_чаты("токен")
-    assert чаты == [{"chat_id": -100123, "title": "РублЪ Директор"}]
+    assert чаты == [{"chat_id": -100123, "title": "РублЪ Пульт"}]
 
 
 @pytest.mark.asyncio
@@ -150,10 +150,10 @@ async def test_проверить_чат_возвращает_название(m
     monkeypatch.setattr(
         telegram.httpx,
         "AsyncClient",
-        lambda *a, **kw: _УспешныйКлиент({"ok": True, "result": {"title": "РублЪ Директор"}}),
+        lambda *a, **kw: _УспешныйКлиент({"ok": True, "result": {"title": "РублЪ Пульт"}}),
     )
     итог = await telegram.проверить_чат("токен", "-100123")
-    assert итог == {"title": "РублЪ Директор"}
+    assert итог == {"title": "РублЪ Пульт"}
 
 
 @pytest.mark.asyncio

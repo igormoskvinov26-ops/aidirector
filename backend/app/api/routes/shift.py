@@ -65,6 +65,22 @@ async def закрыть(
     return await shift_store.закрыть(db, _день(day))
 
 
+@router.post("/cash-counted")
+async def наличка_по_факту(
+    day: str | None = Query(None), body: dict = Body(...), db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Наличка за день, пересчитанная администратором: {"amount": 12500} или null."""
+    сырое = body.get("amount")
+    try:
+        сумма = None if сырое in (None, "") else float(Decimal(str(сырое).replace(",", ".").replace(" ", "")))
+    except (InvalidOperation, ValueError):
+        raise HTTPException(status_code=400, detail="Введите сумму числом") from None
+    try:
+        return await shift_store.записать_наличку(db, сумма, _день(day))
+    except ValueError as сбой:
+        raise HTTPException(status_code=400, detail=str(сбой)) from None
+
+
 @router.post("/times")
 async def времена(
     kind: str = Query(...),
@@ -117,15 +133,15 @@ async def сохранить_остатки(
         raise HTTPException(status_code=400, detail=f"Некорректные данные: {сбой}") from None
 
 
-@router.get("/money/{раздел}")
+@router.get("/money/{section}")
 async def деньги(
-    раздел: str,
+    section: str,
     day: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
     """Расшифровка плитки «Услуги» (services) или «Товары» (products)."""
     try:
-        return await shift_store.деньги_детали(db, раздел, _день(day))
+        return await shift_store.деньги_детали(db, section, _день(day))
     except ValueError as сбой:
         raise HTTPException(status_code=400, detail=str(сбой)) from None
 

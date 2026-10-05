@@ -25,7 +25,7 @@ JOURNAL_NAME = "обзвон.xlsx"
 
 # Время в журнале московское, а не то, в котором живёт контейнер: файл читает
 # администратор салона и сверяет строки со своей сменой.
-MOSCOW = ZoneInfo("Europe/Moscow")
+MOSCOW = ZoneInfo(settings.timezone)
 
 COLUMNS = (
     "Дата",

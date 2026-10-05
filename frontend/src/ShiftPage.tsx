@@ -39,6 +39,8 @@ interface ДеньгиСмены {
   cash_register_estimate: number | null;
   settlement_account_estimate: number | null;
   other_account_debt: number | null;
+  /** Наличка за день, пересчитанная администратором. Не из YCLIENTS. */
+  cash_counted?: number | null;
 }
 
 /** Ответ /api/shift/money/balances. Все поля null, пока владелец ни разу не
@@ -199,6 +201,50 @@ function Плитка({
 }
 
 /** Подпись подгруппы внутри блока «Деньги»: «из чего складывается сумма выше». */
+/** Наличка за день по факту: админ пересчитал кассу и вписал сумму.
+ *  С ней «Контроль финансов» сверяет наличку YCLIENTS. */
+function НаличкаПоФакту({
+  значение, поYclients, занято, onSave,
+}: {
+  значение: number | null;
+  поYclients: number | null;
+  занято: boolean;
+  onSave: (сумма: string) => void;
+}) {
+  const [ввод, setВвод] = useState(значение == null ? "" : String(значение));
+  const разница = значение != null && поYclients != null ? значение - поYclients : null;
+  return (
+    <div className="mt-3 rounded-xl border border-milk-line dark:border-line p-3">
+      <div className="text-[11px] uppercase tracking-widest text-muted-light dark:text-muted mb-1">
+        Наличка за день по факту
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          inputMode="decimal"
+          value={ввод}
+          onChange={(e) => setВвод(e.target.value)}
+          placeholder="пересчитайте кассу"
+          className="w-40 rounded-lg border border-milk-line dark:border-line bg-milk dark:bg-ink/40 px-3 py-1.5 text-sm text-right tabular-nums text-ink-soft dark:text-cream"
+        />
+        <button
+          disabled={занято || ввод === (значение == null ? "" : String(значение))}
+          onClick={() => onSave(ввод)}
+          className="rounded-lg bg-bronze dark:bg-gold px-3 py-1.5 text-xs font-semibold text-milk dark:text-ink disabled:opacity-40"
+        >
+          {занято ? "Сохраняю…" : "Сохранить"}
+        </button>
+        {разница != null && (
+          <span className={`text-xs ${Math.abs(разница) <= 1 ? "text-profit" : "text-loss"}`}>
+            {Math.abs(разница) <= 1
+              ? "сходится с YCLIENTS"
+              : `${разница > 0 ? "больше" : "меньше"}, чем в YCLIENTS, на ${РУБ(Math.abs(разница))}`}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ПодзаголовокДенег({ children }: { children: ReactNode }) {
   return (
     <div className="text-[10px] uppercase tracking-widest text-muted-light dark:text-muted mb-1.5">
@@ -309,8 +355,10 @@ function ФормаОстатков({
     String(остатки?.settlement_amount ?? "")
   );
   const [settlementAsOf, setSettlementAsOf] = useState(остатки?.settlement_as_of ?? сегодняISO());
-  const [otherDebt, setOtherDebt] = useState(String(остатки?.other_account_debt ?? "0"));
-  const [otherNote, setOtherNote] = useState(остатки?.other_debt_note ?? "");
+  // Долг по другому счёту теперь ведётся на странице «Финансы»; здесь он только
+  // передаётся обратно без изменений, чтобы сохранение остатков его не обнуляло.
+  const otherDebt = String(остатки?.other_account_debt ?? "0");
+  const otherNote = остатки?.other_debt_note ?? "";
 
   const поле = "w-full rounded-lg border border-milk-line dark:border-line bg-milk dark:bg-ink/40 px-3 py-1.5 text-sm text-ink-soft dark:text-cream";
   const подпись = "text-[11px] uppercase tracking-widest text-muted-light dark:text-muted mb-1";
@@ -351,26 +399,6 @@ function ФормаОстатков({
             type="date"
             value={settlementAsOf}
             onChange={(e) => setSettlementAsOf(e.target.value)}
-            className={поле}
-          />
-        </div>
-        <div>
-          <div className={подпись}>Долг по другому счёту</div>
-          <input
-            type="number"
-            value={otherDebt}
-            onChange={(e) => setOtherDebt(e.target.value)}
-            placeholder="0"
-            className={поле}
-          />
-        </div>
-        <div>
-          <div className={подпись}>Заметка к долгу (необязательно)</div>
-          <input
-            type="text"
-            value={otherNote}
-            onChange={(e) => setOtherNote(e.target.value)}
-            placeholder="например, с какого счёта заняли"
             className={поле}
           />
         </div>
@@ -750,6 +778,15 @@ export default function ShiftPage({ role }: { role: "owner" | "operator" | "mast
     }
   };
 
+  const сохранитьНаличку = async (сумма: string) => {
+    const итог = await запрос("/api/shift/cash-counted", "cash-counted", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ amount: сумма.trim() === "" ? null : сумма }),
+    });
+    if (итог) setState(итог);
+  };
+
   const переключитьДеньги = async (раздел: РазделДенег) => {
     if (деньгиОткрыто === раздел) {
       setДеньгиОткрыто(null);
@@ -874,7 +911,7 @@ export default function ShiftPage({ role }: { role: "owner" | "operator" | "mast
             Смена
           </h1>
           <p className="text-muted-light dark:text-muted text-sm">
-            Утром — план на день, вечером — факт. Руками вносится только время прихода и ухода:
+            Утром — план на день, вечером — факт. Руками вносятся время прихода и ухода и наличка по факту при закрытии:
             остальное считается по данным YCLIENTS.
           </p>
         </div>
@@ -1018,6 +1055,14 @@ export default function ShiftPage({ role }: { role: "owner" | "operator" | "mast
                 </div>
               </div>
 
+              <НаличкаПоФакту
+                key={String(закрытие.money?.cash_counted ?? "")}
+                значение={закрытие.money?.cash_counted ?? null}
+                поYclients={закрытие.money?.cash ?? null}
+                занято={занято === "cash-counted"}
+                onSave={сохранитьНаличку}
+              />
+
               <div className="mt-4">
                 <Плитка label="Потрачено" value={РУБ(закрытие.money?.spent)} тон="negative" />
               </div>
@@ -1032,15 +1077,6 @@ export default function ShiftPage({ role }: { role: "owner" | "operator" | "mast
                   <Плитка
                     label="На расчётном счёте (расчётно)"
                     value={РУБ(закрытие.money?.settlement_account_estimate)}
-                  />
-                  <Плитка
-                    label="Долг по другому счёту"
-                    value={РУБ(закрытие.money?.other_account_debt)}
-                    тон={
-                      закрытие.money?.other_account_debt && закрытие.money?.other_account_debt > 0
-                        ? "negative"
-                        : undefined
-                    }
                   />
                 </div>
               </div>

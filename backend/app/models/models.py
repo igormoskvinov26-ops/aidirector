@@ -1,4 +1,4 @@
-"""SQLAlchemy ORM models for Rubl AI Director."""
+"""SQLAlchemy ORM models for Rubl Пульт."""
 
 from datetime import date, datetime
 from decimal import Decimal
@@ -15,6 +15,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false as sa_false,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -63,6 +64,11 @@ class Client(Base):
     # пересобираются каждый день заново (refresh_tasks), а заметка должна
     # это пережить.
     admin_note: Mapped[str | None] = mapped_column(Text)
+    # «НЕ ЗВОНИТЬ!» — клиент просил не беспокоить. Своё поле, не из YCLIENTS;
+    # такой клиент не попадает в обзвон (решение владельца 04.10.2026).
+    do_not_call: Mapped[bool] = mapped_column(Boolean, default=False, server_default=sa_false())
+    do_not_call_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    do_not_call_by: Mapped[str | None] = mapped_column(String(64))
     total_visits: Mapped[int] = mapped_column(Integer, default=0)
     total_spent: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
     last_visit_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -268,7 +274,7 @@ class CostModel(Base):
 
     Постоянные расходы задаются одной суммой в месяц и делятся на дни. Разбор
     по статьям — аренда, оклады, уборка, налоги — здесь не ведётся: он живёт в
-    отчётности салона, а Директору нужно итоговое число. Держать статьи в двух
+    отчётности салона, а Пульту нужно итоговое число. Держать статьи в двух
     местах значит однажды поправить их в одном и забыть про другое.
 
     Что в эту сумму НЕ входит: оплата мастеров и расходники. Они считаются
@@ -458,7 +464,7 @@ class SyncRun(Base):
     """Одна выгрузка из YCLIENTS: когда шла, чем кончилась, сколько привезла.
 
     Лежит в базе, а не в памяти процесса. На экране должно стоять время
-    настоящего последнего обновления: после перезапуска Директора память
+    настоящего последнего обновления: после перезапуска Пульта память
     пуста, и человек увидел бы «никогда» при свежих данных.
 
     Строка на каждую выгрузку, а не одна перезаписываемая. Так видно не только
@@ -567,3 +573,21 @@ class MonthlyReportSnapshot(Base):
     targets: Mapped[dict] = mapped_column(JSON)
     data_version: Mapped[int] = mapped_column(Integer, default=1)
     warnings: Mapped[list] = mapped_column(JSON, default=list)
+
+
+class AcquiringRow(Base):
+    """Строка отчёта банка по эквайрингу: оборот, комиссия и зачисление за день.
+
+    Загружается владельцем файлом. Повторная загрузка за те же даты заменяет
+    прежние строки, поэтому один отчёт можно безопасно грузить дважды.
+    """
+
+    __tablename__ = "acquiring_rows"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    op_date: Mapped[date] = mapped_column(Date, index=True)
+    amount: Mapped[Decimal] = mapped_column(Numeric(14, 2))
+    fee: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
+    net: Mapped[Decimal] = mapped_column(Numeric(14, 2))
+    source_file: Mapped[str] = mapped_column(String(255))
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

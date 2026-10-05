@@ -258,6 +258,13 @@ async def sync_all(
         else:
             logger.info(f"Sync complete: {stats}")
             await _записать_прогон(начало, stats, None)
+            try:
+                from app.services import salon
+
+                async with async_session() as s:
+                    await salon.определить_барберов(s)
+            except Exception as e:  # noqa: BLE001 — не мешает выгрузке
+                logger.warning(f"барберы не определены: {e}")
 
     except Exception as e:
         # Сюда попадает только то, что сломалось вне шагов: не поднялся клиент
@@ -431,7 +438,7 @@ def get_sync_status() -> dict[str, Any]:
 async def get_sync_state(session: AsyncSession) -> dict[str, Any]:
     """Полное состояние для экрана: и текущий ход, и время обновления данных.
 
-    Время берётся из базы, а не из памяти: после перезапуска Директора память
+    Время берётся из базы, а не из памяти: после перезапуска Пульта память
     пуста, и на экране стояло бы «никогда» при свежих данных.
 
     Различаются последняя удачная выгрузка и последняя попытка. Если попытка

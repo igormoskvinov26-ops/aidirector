@@ -10,6 +10,7 @@ from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.services.salon import служебный
 from app.models.models import CostModel, Employee, PlanTarget, Sale, SaleItem, Visit
 
 WORKING_HOURS = range(10, 22)
@@ -341,6 +342,12 @@ def _break_even_revenue(num_masters: int, costs: Costs = DEFAULT_COSTS) -> Decim
     return _revenue_for_profit(num_masters, Decimal("0"), costs)
 
 
+async def _service_ids(session: AsyncSession) -> list[int]:
+    """Служебные «сотрудники» (лист ожидания): не мастера, в финансы не идут."""
+    rows = await session.execute(select(Employee.id, Employee.name))
+    return [int(i) for i, n in rows if служебный(n)]
+
+
 async def _daily_master_breakdown(
     session: AsyncSession,
     date_from: date,
@@ -352,6 +359,7 @@ async def _daily_master_breakdown(
     персонально, и при неравной выработке сумма выходит больше, чем при
     делении общей выручки поровну.
     """
+    skip = await _service_ids(session)
     day = func.date(Visit.datetime)
     service_rows = await session.execute(
         select(
@@ -363,6 +371,7 @@ async def _daily_master_breakdown(
             day >= date_from,
             day <= date_to,
             Visit.status.in_(COMPLETED_STATUSES),
+            Visit.employee_id.notin_(skip),
         )
         .group_by(day, Visit.employee_id)
     )
@@ -378,6 +387,7 @@ async def _daily_master_breakdown(
             sale_day >= date_from,
             sale_day <= date_to,
             Sale.employee_id.is_not(None),
+            Sale.employee_id.notin_(skip),
         )
         .group_by(sale_day, Sale.employee_id)
     )
@@ -420,6 +430,7 @@ async def get_daily_finance(
     """
     costs = await get_costs(session, date_from)
     breakdown = await _daily_master_breakdown(session, date_from, date_to)
+    skip = await _service_ids(session)
 
     # Границы зон зависят только от числа мастеров, а оно повторяется изо дня
     # в день. Считаем по одному разу на состав смены, а не на каждый день:
@@ -462,7 +473,9 @@ async def get_daily_finance(
             func.sum(
                 case((Visit.status.in_(COMPLETED_STATUSES), 1), else_=0)
             ).label("completed_visits"),
-            func.count(func.distinct(Visit.employee_id)).label("masters_count"),
+            func.count(func.distinct(Visit.employee_id)).filter(
+                Visit.employee_id.notin_(skip)
+            ).label("masters_count"),
         )
         .where(
             day_label >= date_from,
@@ -636,6 +649,7 @@ async def _today_by_master(session: AsyncSession, day: date) -> list[dict]:
     два мастера с одинаковой общей выручкой обходятся салону по-разному в
     зависимости от того, как она между ними легла.
     """
+    skip = await _service_ids(session)
     day_expr = func.date(Visit.datetime)
     service_rows = await session.execute(
         select(
@@ -644,7 +658,11 @@ async def _today_by_master(session: AsyncSession, day: date) -> list[dict]:
             func.coalesce(func.sum(Visit.total_amount), 0).label("amount"),
         )
         .join(Visit, Visit.employee_id == Employee.id)
-        .where(day_expr == day, Visit.status.in_(COMPLETED_STATUSES))
+        .where(
+            day_expr == day,
+            Visit.status.in_(COMPLETED_STATUSES),
+            Employee.id.notin_(skip),
+        )
         .group_by(Employee.id, Employee.name)
     )
 
@@ -654,7 +672,11 @@ async def _today_by_master(session: AsyncSession, day: date) -> list[dict]:
             Sale.employee_id,
             func.coalesce(func.sum(Sale.total_amount), 0).label("amount"),
         )
-        .where(sale_expr == day, Sale.employee_id.is_not(None))
+        .where(
+            sale_expr == day,
+            Sale.employee_id.is_not(None),
+            Sale.employee_id.notin_(skip),
+        )
         .group_by(Sale.employee_id)
     )
     products = {int(r.employee_id): Decimal(str(r.amount or 0)) for r in product_rows}
@@ -1200,7 +1222,10 @@ async def get_hourly_finance(
 async def _get_masters_count(session: AsyncSession, target_date: date) -> int:
     row = await session.scalar(
         select(func.count(func.distinct(Visit.employee_id)))
-        .where(func.date(Visit.datetime) == target_date)
+        .where(
+            func.date(Visit.datetime) == target_date,
+            Visit.employee_id.notin_(await _service_ids(session)),
+        )
     )
     return int(row or 0)
 

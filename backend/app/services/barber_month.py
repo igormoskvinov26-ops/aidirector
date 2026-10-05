@@ -9,7 +9,7 @@ from app.api.yclients import YClientsClient
 from app.config import settings
 from app.services.cache import cached
 
-MOSCOW = ZoneInfo('Europe/Moscow')
+MOSCOW = ZoneInfo(settings.timezone)
 
 
 def money(value):

@@ -1,4 +1,4 @@
-"""Rubl AI Director — FastAPI application entrypoint.
+"""Rubl Пульт — FastAPI application entrypoint.
 
 Wiring only. All business logic lives in app/services, all endpoints in
 app/api/routes. The previous version carried 522 lines with seven inline
@@ -29,13 +29,14 @@ from app.api.routes.operations import router as operations_router
 from app.api.routes.shift import router as shift_router
 from app.api.routes.stories import router as stories_router
 from app.api.routes.sync import router as sync_router
+from app.api.routes.finance_analysis import router as finance_analysis_router
 from app.api.routes.monthly_report import router as monthly_report_router
 from app.api.routes.settings import router as settings_router
 from app.api.yclients import YclientsНеНастроен
 from app.config import settings
 from app.database import check_db, init_db
 from app.main_roles import ROLE_MASTER, ROLE_OPERATOR, ROLE_OWNER
-from app.services import configuration, credentials
+from app.services import branches, configuration, credentials, salon
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 PUBLIC_PATHS = {"/health"}
@@ -59,11 +60,11 @@ SYNC_STATE_PREFIX = "/api/sync/status"
 
 # Смену открывает и закрывает администратор — значит, раздел смены ему открыт.
 # Решение владельца 23.09.2026.
-OPERATOR_API_PREFIXES = ("/api/client-base", "/api/shift", "/api/me", SYNC_STATE_PREFIX)
+OPERATOR_API_PREFIXES = ("/api/client-base", "/api/shift", "/api/me", "/api/salon", SYNC_STATE_PREFIX)
 
 # Мастер заходит только за своими деньгами. Внутри /api/barbers ответ ещё и
 # урезается до его собственной строки — одного лишь доступа к пути мало.
-MASTER_API_PREFIXES = ("/api/barbers", "/api/me", SYNC_STATE_PREFIX)
+MASTER_API_PREFIXES = ("/api/barbers", "/api/me", "/api/salon", SYNC_STATE_PREFIX)
 
 
 def _same(введено: str, ожидается: str) -> bool:
@@ -89,7 +90,7 @@ def настройка_не_закончена() -> bool:
     )
 
 
-def _resolve_identity(login: str, password: str) -> tuple[str, int | None] | None:
+def _resolve_identity(login: str, password: str) -> tuple[str, int | None, bool] | None:
     """Роль и привязка к мастеру по паре логин-пароль, либо None.
 
     Сравнения выполняются для всех учётных записей до проверки результата:
@@ -99,7 +100,7 @@ def _resolve_identity(login: str, password: str) -> tuple[str, int | None] | Non
     мастер первичной настройки. Первые проверяются первыми — у развёрнутых
     установок они уже работают, и перестать их принимать нельзя.
     """
-    matched: tuple[str, int | None] | None = None
+    matched: tuple[str, int | None, bool] | None = None
 
     owner_login_ok = _same(login, settings.owner_login) and bool(settings.owner_login)
     owner_password_ok = _same(password, settings.owner_password) and bool(
@@ -116,18 +117,32 @@ def _resolve_identity(login: str, password: str) -> tuple[str, int | None] | Non
     # ранний выход дал бы разницу во времени ответа между существующим и
     # несуществующим логином.
     owner_saved_ok = credentials.проверить_пароль(ROLE_OWNER, login, password)
+    top_ok = credentials.проверить_пароль("top", login, password)
     operator_saved_ok = credentials.проверить_пароль(ROLE_OPERATOR, login, password)
 
-    if (owner_login_ok and owner_password_ok) or owner_saved_ok:
-        matched = (ROLE_OWNER, None)
-    elif (operator_login_ok and operator_password_ok) or operator_saved_ok:
-        matched = (ROLE_OPERATOR, None)
+    # Не главный филиал: свои управляющий и администратор. Главный владелец
+    # (.env или мастер) входит всегда и один может управлять филиалами.
+    ветка_управляющий = credentials.проверить_пароль(ROLE_OWNER, login, password, ветка=True)
+    ветка_админ = credentials.проверить_пароль(ROLE_OPERATOR, login, password, ветка=True)
+    главный_филиал = branches.главный()
+
+    if top_ok:
+        matched = (ROLE_OWNER, None, True)
+    elif (owner_login_ok and owner_password_ok) or owner_saved_ok:
+        # Владелец заведён отдельно — главный вход теперь Управляющий.
+        matched = (ROLE_OWNER, None, not credentials.заведён("top"))
+    elif ветка_управляющий:
+        matched = (ROLE_OWNER, None, False)
+    elif главный_филиал and ((operator_login_ok and operator_password_ok) or operator_saved_ok):
+        matched = (ROLE_OPERATOR, None, False)
+    elif ветка_админ:
+        matched = (ROLE_OPERATOR, None, False)
 
     for account in settings.master_accounts:
         login_ok = _same(login, str(account.get("login", "")))
         password_ok = _same(password, str(account.get("password", "")))
         if login_ok and password_ok and matched is None:
-            matched = (ROLE_MASTER, int(account["staff_id"]))
+            matched = (ROLE_MASTER, int(account["staff_id"]), False)
 
     return matched
 
@@ -157,7 +172,7 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
             return JSONResponse(
                 status_code=503,
                 content={
-                    "detail": "Директор ещё не настроен",
+                    "detail": "Пульт ещё не настроен",
                     "setup_required": True,
                 },
             )
@@ -176,7 +191,7 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
             logger.warning(f"failed auth from {request.client.host if request.client else '?'}")
             return self._challenge()
 
-        role, staff_id = identity
+        role, staff_id, top = identity
         allowed = {
             ROLE_OPERATOR: OPERATOR_API_PREFIXES,
             ROLE_MASTER: MASTER_API_PREFIXES,
@@ -190,6 +205,7 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
 
         request.state.role = role
         request.state.staff_id = staff_id
+        request.state.top = top
         return await call_next(request)
 
     @staticmethod
@@ -212,7 +228,7 @@ def _объявить_код_настройки() -> None:
     код = credentials.выдать_код_настройки()
     рамка = "═" * 52
     logger.info(
-        f"\n{рамка}\n  Директор ещё не настроен.\n"
+        f"\n{рамка}\n  Пульт ещё не настроен.\n"
         f"  Откройте http://localhost:{settings.app_port} и введите код:\n\n"
         f"        {код}\n\n{рамка}"
     )
@@ -223,7 +239,7 @@ def _объявить_код_настройки() -> None:
         папка = settings.output_dir
         папка.mkdir(parents=True, exist_ok=True)
         (папка / "код-настройки.txt").write_text(
-            f"Код первичной настройки Директора: {код}\n\n"
+            f"Код первичной настройки Пульта: {код}\n\n"
             "Он нужен один раз, при первом открытии. После того как заведена\n"
             "учётная запись владельца, код перестаёт действовать.\n",
             encoding="utf-8",
@@ -250,7 +266,7 @@ def убрать_код_настройки() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Starting Rubl AI Director...")
+    logger.info("Starting Rubl Пульт...")
 
     # Fail loudly. The old version swallowed this and served a half-dead app
     # where client-base, finance and AI silently returned 500 forever.
@@ -276,11 +292,14 @@ async def lifespan(app: FastAPI):
         async with async_session() as session:
             await configuration.загрузить(session)
             await credentials.загрузить(session)
+            await salon.загрузить(session)
     except Exception as сбой:  # noqa: BLE001
         logger.warning(
             f"управляемые настройки не прочитаны (вероятно, миграция ещё не "
             f"применена): {type(сбой).__name__}. Работаю на значениях из .env"
         )
+
+    await branches.восстановить_активный()
 
     if настройка_не_закончена():
         _объявить_код_настройки()
@@ -295,20 +314,26 @@ async def lifespan(app: FastAPI):
 
     from app.services.sync import run_sync_loop
 
+    from app.services.hub import run_hub_loop
+    from app.services.settings_file import run_settings_file_loop
+
     sync_task = asyncio.create_task(run_sync_loop())
+    hub_task = asyncio.create_task(run_hub_loop())
+    file_task = asyncio.create_task(run_settings_file_loop())
     try:
         yield
     finally:
-        sync_task.cancel()
-        try:
-            await sync_task
-        except asyncio.CancelledError:
-            pass
+        for task in (sync_task, hub_task, file_task):
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
         logger.info("Shutting down...")
 
 
 app = FastAPI(
-    title="Rubl AI Director",
+    title="Rubl Пульт",
     version="2.0.0",
     description="AI-powered management system for Rubl Barbershop",
     lifespan=lifespan,
@@ -334,6 +359,7 @@ for r in (
     client_base_router,
     dashboard_router,
     employees_router,
+    finance_analysis_router,
     finance_router,
     monthly_report_router,
     operations_router,
@@ -390,6 +416,7 @@ async def me(request: Request) -> dict:
         "role": getattr(request.state, "role", ROLE_MASTER),
         "staff_id": staff_id,
         "name": name,
+        "top": bool(getattr(request.state, "top", False)),
     }
 
 

@@ -9,22 +9,22 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 from loguru import logger
 
 from app.api.yclients import YClientsClient
-from app.services import configuration
+from app.services import configuration, salon
 from app.services.slots import compute_free_slots
 from app.services.stories import compute_slot_hash, generate_story
 from app.services.story_preview import render_story_html
 
 router = APIRouter(prefix="/api/stories", tags=["stories"])
 
-BOOKING_URL = "n2387007.yclients.com"
 MAX_UPLOAD_BYTES = 8 * 1024 * 1024
 
 
 def _caption(name: str, slots: list[str] | None = None) -> str:
-    lines = ["В РУБЛЪ ТЕБЯ СЕГОДНЯ ЖДУТ", "", name.upper()]
+    lines = [f"В {salon.name.upper()} ТЕБЯ СЕГОДНЯ ЖДУТ", "", name.upper()]
     if slots:
         lines.append("  ".join(slots[:6]))
-    lines.append(f"Запись: {BOOKING_URL}")
+    if salon.booking_url:
+        lines.append(f"Запись: {salon.booking_url}")
     return "\n".join(lines)
 
 

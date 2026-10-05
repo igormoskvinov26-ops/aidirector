@@ -43,7 +43,7 @@ from app.models.models import (
 from app.services import barber_month as bm
 from app.services.cache import cached, invalidate
 
-MOSCOW = ZoneInfo("Europe/Moscow")
+MOSCOW = ZoneInfo(settings.timezone)
 DATA_VERSION = 1
 
 # Статусы проверки кнопки «Записан».
@@ -62,8 +62,9 @@ BUTTON_LABELS = {
     "extra_service_ids": [],
     "admins": [],  # [{"staff_id": int, "name": str, "creator_values": [str]}]
     "attribution_window_days": 3,
-    "record_created_field": "",
-    "record_creator_field": "",
+    # Стандартные поля записи YCLIENTS: дата создания и ID пользователя-автора.
+    "record_created_field": "create_date",
+    "record_creator_field": "created_user_id",
     "horizon_days": 60,
 }
 
@@ -76,6 +77,8 @@ async def load_settings(session: AsyncSession) -> dict[str, Any]:
     result = {k: (v.copy() if isinstance(v, (dict, list)) else v) for k, v in ДЕФОЛТЫ.items()}
     for row in rows:
         if row.key in result and row.value is not None:
+            if row.key in ("record_created_field", "record_creator_field") and not row.value:
+                continue  # пустое значение не отменяет стандартное поле
             if isinstance(result[row.key], dict) and isinstance(row.value, dict):
                 result[row.key] = {**result[row.key], **row.value}
             else:
@@ -425,6 +428,91 @@ def add_master_deltas(cur: dict, prev: dict | None) -> dict:
 
 
 # ── Администраторы: записи ────────────────────────────────────────────────
+
+
+async def _directory() -> tuple[dict[str, str], dict[str, dict]]:
+    """Кто есть кто в YCLIENTS: имена пользователей и сотрудники, привязанные к ним.
+
+    Сопоставление идёт по данным самого YCLIENTS: у сотрудника есть привязанный
+    пользователь (user_id), а список пользователей компании даёт имена тех, кто
+    не оказывает услуги (администраторы). Любой из двух запросов может не
+    ответить: тогда остаются «Сотрудник №…», отчёт при этом считается.
+    """
+    from app.api.yclients import YClientsClient
+
+    names: dict[str, str] = {}
+    linked: dict[str, dict] = {}
+    async with YClientsClient() as client:
+        try:
+            for s in await client.get_staff():
+                user = s.get("user") if isinstance(s.get("user"), dict) else {}
+                uid = s.get("user_id") or user.get("id")
+                if uid:
+                    linked[str(uid)] = {"staff_id": _int(s.get("id")), "name": s.get("name") or ""}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"список сотрудников для сопоставления не получен: {exc}")
+        try:
+            raw = await client._get(f"/company/{client.company_id}/users")
+            rows = raw.get("data") if isinstance(raw, dict) else raw
+            for u in rows if isinstance(rows, list) else []:
+                if isinstance(u, dict) and u.get("id") and (u.get("name") or u.get("firstname")):
+                    names[str(u["id"])] = str(u.get("name") or u.get("firstname")).strip()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"список пользователей YCLIENTS не получен: {exc}")
+    return names, linked
+
+
+async def auto_admins(cfg: dict[str, Any], records: list[dict]) -> list[dict]:
+    """Администраторы определяются сами: авторы записей, созданных вручную.
+
+    Не берём: онлайн-записи (есть api_id), мастеров из списка барберов
+    (запись, созданная мастером, — не работа администратора). Вручную заданные
+    в настройках остаются как были: так не пропадёт то, что уже настроено.
+    """
+    manual = list(cfg.get("admins") or [])
+    creator_field = cfg["record_creator_field"]
+    seen: dict[str, int] = {}
+    for rec in unique_records(records):
+        if rec.get("api_id") or rec.get("deleted"):
+            continue
+        who = record_creator(rec, creator_field)
+        if who:
+            seen[who] = seen.get(who, 0) + 1
+    known = {str(v).lower() for a in manual for v in a.get("creator_values", [])}
+    fresh = [u for u in seen if u.lower() not in known]
+    if not fresh:
+        return manual
+    names, linked = await cached("yclients-directory", _directory, ttl=600)
+    masters = {int(r["staff_id"]) for r in settings.barber_payroll_rules}
+    found = []
+    for uid in sorted(fresh, key=lambda u: -seen[u]):
+        link = linked.get(uid)
+        staff_id = link["staff_id"] if link else (int(uid) if uid.isdigit() else 0)
+        if not staff_id or staff_id in masters:
+            continue
+        name = (link or {}).get("name") or names.get(uid) or f"Сотрудник №{uid}"
+        found.append({"staff_id": staff_id, "name": name, "creator_values": [uid]})
+    return manual + found
+
+
+async def current_admins(session: AsyncSession) -> list[dict]:
+    """Список администраторов для выбора при звонке: авторы записей за последние 30 дней."""
+    cfg = await load_settings(session)
+
+    async def load() -> list[dict]:
+        from app.api.yclients import YClientsClient
+
+        today = datetime.now(MOSCOW).date()
+        async with YClientsClient() as client:
+            rows = await client.get_all_records(
+                (today - timedelta(days=30)).isoformat(), (today + timedelta(days=30)).isoformat())
+        return await auto_admins(cfg, rows)
+
+    try:
+        return await cached(f"admins-now:{len(cfg.get('admins') or [])}", load, ttl=600)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"администраторы не определены: {exc}")
+        return list(cfg.get("admins") or [])
 
 
 def _admin_by_creator(admins: list[dict], creator: str | None) -> dict | None:
@@ -861,6 +949,7 @@ async def compute(session: AsyncSession, ym: str, now: datetime | None = None) -
     months = [prev_ym, ym] if need_prev_live else [ym]
     source = await load_source(first, end - timedelta(days=1), months, int(cfg["horizon_days"]))
     warnings.extend(source.warnings)
+    cfg["admins"] = await auto_admins(cfg, source.records)
 
     rules = settings.barber_payroll_rules
     returns, ret_warn = await _return_rates(session, end if month_status(ym, now) == "final" else None)
@@ -970,7 +1059,7 @@ async def compute(session: AsyncSession, ym: str, now: datetime | None = None) -
         warnings_calls.append("Проверка звонков невозможна: поле даты создания записи не подтверждено.")
     warnings.extend(w for w in warnings_calls if w not in warnings)
     if not cfg["admins"]:
-        warnings.append("Список администраторов не задан в настройках отчёта.")
+        warnings.append("Среди авторов записей не нашлось ни одного администратора.")
 
     checks = integrity_checks(masters, admins)
     for c in checks:
@@ -1136,8 +1225,13 @@ async def today_authors(created_field: str = "create_date", creator_field: str =
             via_api += 1
             continue
         who = record_creator(rec, creator_field) or "?"
-        g = groups.setdefault(who, {"value": who, "count": 0, "times": []})
+        g = groups.setdefault(who, {"value": who, "count": 0, "times": [], "deleted": 0, "no_client": 0})
         g["count"] += 1
         g["times"].append(created[0].strftime("%H:%M"))
+        # те же отсечки, что в отчёте (admin_records): удалённые и без клиента в «Сделано» не попадают
+        if rec.get("deleted"):
+            g["deleted"] += 1
+        elif record_client_id(rec) is None:
+            g["no_client"] += 1
     authors = [dict(g, times=sorted(g["times"])) for g in sorted(groups.values(), key=lambda g: -g["count"])]
     return {"date": today.isoformat(), "authors": authors, "via_api": via_api}

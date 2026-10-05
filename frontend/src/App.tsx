@@ -1,4 +1,5 @@
-import { Component, useEffect, useMemo, useState } from "react";
+import Gauge from "./Gauge";
+import { Component, useEffect, useMemo, useRef, useState } from "react";
 import type { ErrorInfo, ReactNode } from "react";
 import {
   Bar,
@@ -15,11 +16,14 @@ import {
   Users,
   CreditCard,
   Sun,
+  Image,
+  ShieldCheck,
   Moon,
   Save,
   CalendarClock,
   Wallet,
   FileBarChart,
+  Landmark,
   RefreshCw,
   AlertTriangle,
   Activity,
@@ -32,8 +36,11 @@ import BarberMonthPage from "./BarberMonthPage";
 import BasePulsePage from "./BasePulsePage";
 import ShiftPage from "./ShiftPage";
 import SettingsPage from "./SettingsPage";
+import FinancePage from "./FinancePage";
+import OwnerPage from "./OwnerPage";
 import MonthlyReportPage from "./MonthlyReportPage";
 import SetupWizard from "./SetupWizard";
+import BranchSwitcher from "./BranchSwitcher";
 import { ClientCounters } from "./ClientCounters";
 import { MetricChart, type MetricPoint, type ТонГрафика } from "./MetricChart";
 import logo from "./assets/logo.png";
@@ -148,7 +155,8 @@ const PAGES_BY_ROLE: Record<string, string[]> = {
   // Настройки интеграций — только владельцу. Ограничение продублировано на
   // сервере: за этими адресами лежат токены, и спрятанный пункт меню их не
   // защищает.
-  owner: ["planfact", "bookings", "payroll", "monthly", "pulse", "shift", "clients", "settings"],
+  // «Контроль финансов» — только Владельцу (top), см. видимые в App.
+  owner: ["planfact", "shift", "clients", "pulse", "bookings", "payroll", "finance", "monthly", "control", "settings"],
   // Расчёт ЗП администратору не показываем — это дело управляющего.
   // Решение владельца 18.09.2026. Смену открывает и закрывает он же —
   // вкладка «Смена» ему открыта. Решение владельца 23.09.2026.
@@ -158,12 +166,14 @@ const PAGES_BY_ROLE: Record<string, string[]> = {
 
 const NAV = [
   { id: "planfact", label: "План-факт", icon: CreditCard },
-  { id: "bookings", label: "Записи за месяц", icon: CalendarClock },
-  { id: "payroll", label: "Расчёт ЗП", icon: Wallet },
-  { id: "monthly", label: "Месячный отчёт", icon: FileBarChart },
-  { id: "pulse", label: "Пульс базы", icon: Activity },
   { id: "shift", label: "Смена", icon: Sunrise },
   { id: "clients", label: "Клиенты", icon: Users },
+  { id: "pulse", label: "Пульс базы", icon: Activity },
+  { id: "bookings", label: "Записи за месяц", icon: CalendarClock },
+  { id: "payroll", label: "Расчёт ЗП", icon: Wallet },
+  { id: "finance", label: "Финансы", icon: Landmark },
+  { id: "monthly", label: "Месячный отчёт", icon: FileBarChart },
+  { id: "control", label: "Контроль финансов", icon: ShieldCheck },
   { id: "settings", label: "Настройки", icon: Settings },
 ];
 
@@ -228,7 +238,7 @@ function SyncBadge() {
       const тело = await r.json();
       setПроверка(тело?.вывод ?? "Проверка не дала ответа");
     } catch {
-      setПроверка("Директор не отвечает — проверьте, запущен ли он");
+      setПроверка("Пульт не отвечает — проверьте, запущен ли он");
     } finally {
       setИдётПроверка(false);
     }
@@ -250,7 +260,7 @@ function SyncBadge() {
           return;
         }
       } catch {
-        // Молча: Директор мог перезапускаться. Надпись останется прежней,
+        // Молча: Пульт мог перезапускаться. Надпись останется прежней,
         // следующая попытка будет через полминуты.
       }
       if (живой) таймер = window.setTimeout(спросить, 30000);
@@ -388,7 +398,7 @@ class PageBoundary extends Component<
         <p className="text-sm text-muted-light dark:text-muted mt-2">
           Скорее всего данные ещё не загружены до конца. Слева видно, идёт ли
           загрузка. Если она закончилась, а раздел всё равно не открывается —
-          перезапустите Директора и покажите вывод.
+          перезапустите Пульта и покажите вывод.
         </p>
         <pre className="mt-3 whitespace-pre-wrap break-words rounded-lg bg-ink/5 dark:bg-ink/40 px-3 py-2 text-xs text-muted-light dark:text-muted select-all">
           {this.state.причина}
@@ -413,7 +423,7 @@ function Spinner() {
 }
 
 // Постоянные расходы — одним числом: разбор по статьям ведётся в отчётности
-// салона, а Директору нужна итоговая сумма, чтобы поделить её на дни.
+// салона, а Пульту нужна итоговая сумма, чтобы поделить её на дни.
 // Оплата мастеров и расходники в неё не входят — они ниже, процентами.
 const COST_FIELDS = [
   { key: "fixed_monthly", label: "Постоянные расходы", unit: "₽ / мес" },
@@ -507,7 +517,8 @@ function PlanFactPage() {
   const [plan, setPlan] = useState<PlanData>({ period: "", profit_target: 0, margin_target_pct: 30 });
   const [summary, setSummary] = useState<PlanFactSummary | null>(null);
   const [costs, setCosts] = useState<CostSettings | null>(null);
-  const [costsOpen, setCostsOpen] = useState(false);
+  const [drawer, setDrawer] = useState<"month" | "costs" | null>(null);
+  const [chartTab, setChartTab] = useState<"day" | "month">("day");
   const [costsDraft, setCostsDraft] = useState<Record<string, string>>({});
   const [costsError, setCostsError] = useState("");
   const [planInput, setPlanInput] = useState("");
@@ -617,7 +628,7 @@ function PlanFactPage() {
       setHeaderSaved(true);
     } catch (e) {
       console.error("Header save error", e);
-      setHeaderError("Сервер не ответил. Проверьте, что Директор запущен.");
+      setHeaderError("Сервер не ответил. Проверьте, что Пульт запущен.");
     }
   };
 
@@ -643,7 +654,6 @@ function PlanFactPage() {
         );
         return;
       }
-      setCostsOpen(false);
       await fetchData();
     } catch (e) {
       console.error("Costs save error", e);
@@ -709,15 +719,18 @@ function PlanFactPage() {
     });
   }, [daily]);
 
+  const paceDev = summary && summary.plan.profit_target > 0
+    ? summary.plan.completion_pct - (summary.days_passed / summary.days_in_month) * 100 : 0;
+  const paceSpan = [25, 50, 100].find((s) => s >= Math.abs(paceDev) * 1.15) ?? 100;
+
   if (loading) return <Spinner />;
 
   return (
-    <div className="animate-in">
-      {/* Header with plan input */}
-      <div className="mb-6">
+    <div className="animate-in lg:h-[calc(100vh-4rem)] flex flex-col gap-3 min-h-0">
+      <div className="shrink-0">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight mb-1">План-факт</h1>
+          <h1 className="mb-1">План-факт</h1>
           <p className="text-muted-light dark:text-muted text-sm">Маржинальность, точка безубыточности, план/факт</p>
         </div>
         <div className="flex items-end gap-3">
@@ -760,6 +773,18 @@ function PlanFactPage() {
             Обновить данные
           </button>
           <button
+            onClick={() => setDrawer("month")}
+            className="flex items-center gap-1.5 border border-milk-line dark:border-line hover:border-bronze dark:hover:border-gold px-4 py-2 rounded-lg text-sm transition-all"
+          >
+            Месяц
+          </button>
+          <button
+            onClick={() => setDrawer("costs")}
+            className="flex items-center gap-1.5 border border-milk-line dark:border-line hover:border-bronze dark:hover:border-gold px-4 py-2 rounded-lg text-sm transition-all"
+          >
+            Расходы
+          </button>
+          <button
             onClick={saveHeader}
             className="flex items-center gap-1.5 bg-bronze dark:bg-gold hover:bg-bronze/90 dark:hover:bg-gold/90 text-ink-soft font-semibold px-4 py-2 rounded-lg text-sm transition-all"
           >
@@ -779,12 +804,43 @@ function PlanFactPage() {
         <p className="mt-2 text-right text-sm text-profit">Сохранено.</p>
       )}
       </div>
-
-      {/* Сегодня — по фактической выработке каждого мастера. Никаких
-          допущений: кто сколько сделал, уже известно. */}
-      {summary?.today_detail && (
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 shrink-0">
+        {[
+          ["Выручка сегодня", FMT_RUB(todayRevenue)],
+          ["Мастеров на смене", String(mastersToday)],
+          ["Точка безубыточности", FMT_RUB(breakEvenDaily)],
+          ["План на день", dailyPlan > 0 ? FMT_RUB(dailyPlan) : "—"],
+          ["Прибыль за месяц", summary ? FMT_RUB(summary.plan.profit_so_far) : "—"],
+        ].map(([k, v]) => (
+          <div key={k} className="bg-milk-card dark:bg-panel/80 border border-milk-line dark:border-line rounded-xl px-4 py-2.5">
+            <div className="text-[11px] text-muted-light dark:text-muted">{k}</div>
+            <div className="text-lg font-semibold leading-tight mt-0.5">{v}</div>
+          </div>
+        ))}
+      </div>
+      <div className="grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)] gap-3 shrink-0">
+        <div className="bg-milk-card dark:bg-panel/80 border border-milk-line dark:border-line rounded-2xl p-4 flex flex-col min-w-0">
+          <h3 className="text-sm font-semibold uppercase tracking-widest text-muted-light dark:text-muted mb-2">
+            Отклонение от плана
+          </h3>
+          {summary && summary.plan.profit_target > 0 ? (
+            <>
+              <div className="flex-1 flex items-center min-h-0">
+                <Gauge value={paceDev} span={paceSpan} label="ОТ ТЕМПА ПЛАНА"
+                  text={`${paceDev >= 0 ? "+" : "−"}${Math.abs(Math.round(paceDev))}%`}
+                  minus={цвета.убыток} plus={цвета.прибыль} tick={цвета.ось} />
+              </div>
+              <p className="text-xs text-muted-light dark:text-muted mt-1">
+                План выполнен на {summary.plan.completion_pct}%, прошло {Math.round((summary.days_passed / summary.days_in_month) * 100)}% месяца.
+              </p>
+            </>
+          ) : (
+            <p className="text-sm text-muted-light dark:text-muted">Задайте план прибыли на месяц — здесь появится стрелка отклонения.</p>
+          )}
+        </div>
+        {summary?.today_detail ? (
         <div
-          className={`bg-milk-card dark:bg-panel/80 border rounded-2xl p-6 mb-6 ${
+          className={`bg-milk-card dark:bg-panel/80 border rounded-2xl p-4 min-w-0 ${
             summary.today_detail.margin >= 0
               ? "border-profit/50"
               : "border-loss/40"
@@ -812,8 +868,8 @@ function PlanFactPage() {
               Выполненных записей сегодня пока нет.
             </p>
           ) : (
-            <div className="overflow-x-auto mb-5">
-              <table className="w-full text-sm min-w-[520px]">
+            <div className="overflow-x-auto mb-4">
+              <table className="w-full text-[13px] min-w-[520px]">
                 <thead>
                   <tr className="text-left text-[11px] uppercase tracking-wider text-muted-light dark:text-muted">
                     <th className="pb-2 pr-4 font-semibold">Мастер</th>
@@ -825,7 +881,7 @@ function PlanFactPage() {
                 <tbody>
                   {summary.today_detail.masters.map((m) => (
                     <tr key={m.name} className="border-t border-milk-line dark:border-line/60">
-                      <td className="py-2.5 pr-4">
+                      <td className="py-1.5 pr-4">
                         {m.name}
                         {m.on_guarantee && (
                           <span className="ml-2 text-[10px] uppercase tracking-wider text-caution border border-caution/40 rounded px-1.5 py-0.5">
@@ -833,11 +889,11 @@ function PlanFactPage() {
                           </span>
                         )}
                       </td>
-                      <td className="py-2.5 px-4 text-right">{RUB(m.services)}</td>
-                      <td className="py-2.5 px-4 text-right text-muted-light dark:text-muted">
+                      <td className="py-1.5 px-4 text-right">{RUB(m.services)}</td>
+                      <td className="py-1.5 px-4 text-right text-muted-light dark:text-muted">
                         {m.products > 0 ? RUB(m.products) : "—"}
                       </td>
-                      <td className="py-2.5 pl-4 text-right font-semibold">{RUB(m.payout)}</td>
+                      <td className="py-1.5 pl-4 text-right font-semibold">{RUB(m.payout)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -845,7 +901,7 @@ function PlanFactPage() {
             </div>
           )}
 
-          <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 text-sm">
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 text-[13px]">
             <div>
               <div className="text-xs text-muted-light dark:text-muted">Заработано</div>
               <div className="font-semibold mt-1">{RUB(summary.today_detail.revenue)}</div>
@@ -875,18 +931,157 @@ function PlanFactPage() {
             </div>
           </div>
 
-          <p className="text-xs text-muted-light dark:text-muted mt-4 max-w-[80ch]">
+          <p className="hidden 2xl:block text-xs text-muted-light dark:text-muted mt-3 max-w-[80ch]">
             Считается по фактической выработке каждого: гарант платится
             персонально, поэтому две одинаковые общие суммы обходятся салону
             по-разному. Порог сегодня при сложившемся распределении —{" "}
             {RUB(summary.today_detail.break_even)} по услугам.
           </p>
         </div>
-      )}
-
-      {/* Сводка месяца и таблица по составу смены */}
-      {summary && (
-        <div className="bg-milk-card dark:bg-panel/80 border border-milk-line dark:border-line rounded-2xl p-6 mb-6">
+        ) : <div />}
+      </div>
+      <div className="bg-milk-card dark:bg-panel/80 border border-milk-line dark:border-line rounded-2xl p-4 flex flex-col flex-1 min-h-[230px]">
+        <div className="flex gap-2 mb-2 shrink-0">
+          {(["day", "month"] as const).map((t) => (
+            <button key={t} onClick={() => setChartTab(t)}
+              className={`px-3 py-1 rounded-lg text-sm ${chartTab === t ? "bg-bronze/15 dark:bg-gold/15 text-bronze dark:text-gold font-medium" : "text-muted-light dark:text-muted"}`}>
+              {t === "day" ? "Сегодня по часам" : "По дням месяца"}
+            </button>
+          ))}
+        </div>
+        {chartTab === "day" && (<>
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-2 shrink-0">
+          <h3 className="text-sm font-semibold uppercase tracking-widest text-muted-light dark:text-muted">
+            Сегодня — {todayStr}
+          </h3>
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-light dark:text-muted">
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-bronze dark:bg-gold" /> Услуги выполн.</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-profit" /> Товары</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm border border-bronze/30 dark:border-gold/30 bg-bronze/25 dark:bg-gold/25" /> Запланировано</span>
+            <span className="flex items-center gap-1.5"><span className="w-0.5 h-4 bg-loss rounded-full" /> Безубыточность {FMT_RUB(breakEvenDaily)}</span>
+            {dailyPlan > 0 && <span className="flex items-center gap-1.5"><span className="w-0.5 h-4 bg-profit rounded-full" /> План дня {FMT_RUB(dailyPlan)}</span>}
+          </div>
+        </div>
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={hourlyCumulative} barGap={2} maxBarSize={38}>
+            <CartesianGrid strokeDasharray="3 3" stroke={цвета.сетка} />
+            <XAxis dataKey="hour" tick={{ fill: цвета.ось, fontSize: 10 }} />
+            <YAxis tick={{ fill: цвета.ось, fontSize: 10 }} tickFormatter={(v) => FMT(v)} />
+            <Tooltip
+              contentStyle={{ background: цвета.подсказкаФон, border: `1px solid ${цвета.подсказкаРамка}`, borderRadius: "12px", fontSize: 12 }}
+              formatter={(value: any, name: any) => {
+                if (name === "services") return [FMT_RUB(value), "Услуги (накопл.)"];
+                if (name === "products") return [FMT_RUB(value), "Товары (накопл.)"];
+                if (name === "scheduled") return [FMT_RUB(value), "Запланировано (накопл.)"];
+                if (name === "break_even") return [FMT_RUB(value), "Мин. маржинальность"];
+                return [value, name];
+              }}
+            />
+            <Bar dataKey="services" stackId="rev" name="services" radius={[4, 4, 0, 0]} label={({ x, y, width, index, value }: any) => {
+              const entry = hourlyCumulative[index];
+              if (!entry || entry.hour !== nowHour) return null;
+              return (
+                <g>
+                  <text x={x + width / 2} y={y - 8} fill={цвета.подсказкаФон} fontSize={11} fontWeight={600} textAnchor="middle" stroke={цвета.подсказкаФон} strokeWidth={3} paintOrder="stroke">{FMT_RUB(value)}</text>
+                  <text x={x + width / 2} y={y - 8} fill={цвета.подпись} fontSize={11} fontWeight={600} textAnchor="middle">{FMT_RUB(value)}</text>
+                </g>
+              );
+            }}>
+              {hourlyCumulative.map((entry, i) => (
+                <Cell key={i} fill={цвета.золото} stroke={entry.hour === nowHour ? цвета.сейчас : "transparent"} strokeWidth={entry.hour === nowHour ? 2 : 0} />
+              ))}
+            </Bar>
+            <Bar dataKey="products" stackId="rev" fill={цвета.прибыль} name="products" radius={[0, 0, 0, 0]} />
+            <Bar dataKey="scheduled" stackId="rev" name="scheduled" radius={[4, 4, 0, 0]} label={({ x, y, width, index }: any) => {
+              const entry = hourlyCumulative[index];
+              if (!entry || entry.hour !== nowHour) return null;
+              const total = entry.services + entry.products + entry.scheduled;
+              return <text x={x + width / 2} y={y - 8} fill={цвета.подпись} fontSize={11} fontWeight={700} textAnchor="middle">{FMT_RUB(total)}</text>;
+            }}>
+              {hourlyCumulative.map((entry, i) => (
+                <Cell key={i} fill={цвета.золото} fillOpacity={0.25} stroke={entry.hour === nowHour ? цвета.сейчас : цвета.золото} strokeWidth={entry.hour === nowHour ? 2 : 1} />
+              ))}
+            </Bar>
+            <Line dataKey="break_even" stroke={цвета.убыток} strokeWidth={1.75} dot={false} name="break_even" />
+            {dailyPlan > 0 && (
+              <Line dataKey={() => dailyPlan} stroke={цвета.прибыль} strokeWidth={1.75} dot={false} name="daily_plan" />
+            )}
+          </ComposedChart>
+        </ResponsiveContainer>
+        </>)}
+        {chartTab === "month" && (<>
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-2 shrink-0">
+          <h3 className="text-sm font-semibold uppercase tracking-widest text-muted-light dark:text-muted">
+            По дням — {currentPeriod}
+          </h3>
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-light dark:text-muted">
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-bronze dark:bg-gold" /> Услуги выполн.</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-profit" /> Товары</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm border border-bronze/30 dark:border-gold/30 bg-bronze/25 dark:bg-gold/25" /> Запланировано</span>
+            <span className="flex items-center gap-1.5"><span className="w-0.5 h-4 bg-loss rounded-full" /> Мин. марж. (накоп.)</span>
+            <span className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-loss" />
+              <span className="w-2 h-2 rounded-full bg-caution" />
+              <span className="w-2 h-2 rounded-full bg-profit" />
+              день: убыток · спорно · прибыль
+            </span>
+            {plan.profit_target > 0 && <span className="flex items-center gap-1.5"><span className="w-0.5 h-4 bg-profit rounded-full" /> Выручка под план (накоп.)</span>}
+          </div>
+        </div>
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={dailyCumulative} barGap={2} maxBarSize={26}>
+            <CartesianGrid strokeDasharray="3 3" stroke={цвета.сетка} />
+            <XAxis dataKey="date" tick={{ fill: цвета.ось, fontSize: 10 }} tickFormatter={(d: string) => d.slice(5)} />
+            <YAxis tick={{ fill: цвета.ось, fontSize: 10 }} tickFormatter={(v) => FMT(v)} />
+            <Tooltip cursor={{ fill: "rgba(212,168,83,0.08)" }} content={<DayTooltip />} />
+            {/* Столбец красится по зоне дня: подписей над каждым больше нет,
+                сумма и пояснение — в подсказке при наведении. */}
+            <Bar dataKey="services" stackId="rev" name="services" radius={[6, 6, 0, 0]}>
+              {dailyCumulative.map((entry, i) => (
+                <Cell
+                  key={i}
+                  fill={цвета.золото}
+                  stroke={
+                    entry.date === todayStr
+                      ? цвета.сейчас
+                      : entry.zone === "green"
+                        ? цвета.прибыль
+                        : entry.zone === "amber"
+                          ? цвета.внимание
+                          : entry.zone === "red"
+                            ? цвета.убыток
+                            : "transparent"
+                  }
+                  strokeWidth={entry.date === todayStr ? 2 : entry.zone ? 1.5 : 0}
+                />
+              ))}
+            </Bar>
+            <Bar dataKey="products" stackId="rev" fill={цвета.прибыль} name="products" radius={[0, 0, 0, 0]} />
+            <Bar dataKey="scheduled" stackId="rev" name="scheduled" radius={[6, 6, 0, 0]} label={({ x, y, width, index }: any) => {
+              const entry = dailyCumulative[index];
+              if (!entry || entry.date !== todayStr) return null;
+              const actual = entry.services + entry.products;
+              if (actual <= 0) return null;
+              return <text x={x + width / 2} y={y - 8} fill={цвета.сейчас} fontSize={11} fontWeight={700} textAnchor="middle">{FMT_RUB(actual)}</text>;
+            }}>
+              {dailyCumulative.map((entry, i) => (
+                <Cell key={i} fill={цвета.золото} fillOpacity={0.25} stroke={entry.date === todayStr ? цвета.сейчас : цвета.золото} strokeWidth={entry.date === todayStr ? 2 : 1} />
+              ))}
+            </Bar>
+            <Line dataKey="break_even" stroke={цвета.убыток} strokeWidth={1.75} dot={false} name="break_even" />
+            {plan.profit_target > 0 && (
+              <Line dataKey="daily_plan_cum" stroke={цвета.прибыль} strokeWidth={1.75} dot={false} name="daily_plan_cum" />
+            )}
+          </ComposedChart>
+        </ResponsiveContainer>
+        </>)}
+      </div>
+      {drawer && (
+        <div data-overlay className="fixed inset-0 z-30 flex justify-end bg-black/50" onClick={() => setDrawer(null)}>
+          <div className="w-full max-w-4xl h-full overflow-y-auto p-6 bg-milk dark:bg-ink border-l border-milk-line dark:border-line" onClick={(e) => e.stopPropagation()}>
+            <button onClick={() => setDrawer(null)} className="mb-4 text-sm text-muted-light dark:text-muted hover:text-ink-soft dark:hover:text-cream">✕ Закрыть</button>
+            {drawer === "month" && summary && (
+        <div className="bg-milk-card dark:bg-panel/80 border border-milk-line dark:border-line rounded-2xl p-6">
           <div className="flex flex-wrap items-baseline justify-between gap-3 mb-5">
             <h3 className="text-sm font-semibold uppercase tracking-widest text-muted-light dark:text-muted">
               С начала месяца — {summary.period}
@@ -1021,17 +1216,15 @@ function PlanFactPage() {
             </table>
           </div>
         </div>
-      )}
-
-      {/* Структура расходов — из неё считается порог безубыточности */}
-      {costs && (
-        <div className="bg-milk-card dark:bg-panel/80 border border-milk-line dark:border-line rounded-2xl p-6 mb-6">
+            )}
+            {drawer === "costs" && costs && (
+        <div className="bg-milk-card dark:bg-panel/80 border border-milk-line dark:border-line rounded-2xl p-6">
           <button
-            onClick={() => setCostsOpen(!costsOpen)}
+            onClick={() => {}}
             className="w-full flex flex-wrap items-baseline justify-between gap-3 text-left"
           >
             <h3 className="text-sm font-semibold uppercase tracking-widest text-muted-light dark:text-muted">
-              Расходы {costsOpen ? "▴" : "▾"}
+              Расходы
             </h3>
             <span className="text-xs text-muted-light dark:text-muted">
               {RUB(costs.fixed_monthly)} в месяц ·{" "}
@@ -1043,7 +1236,7 @@ function PlanFactPage() {
             </span>
           </button>
 
-          {costsOpen && (
+          {true && (
             <>
               <p className="text-xs text-muted-light dark:text-muted mt-4 max-w-[70ch]">
                 Из этих чисел считается всё остальное: порог безубыточности,
@@ -1102,157 +1295,10 @@ function PlanFactPage() {
             </>
           )}
         </div>
+            )}
+          </div>
+        </div>
       )}
-
-      {/* Chart 1: Hourly (Today) */}
-      <div className="bg-milk-card dark:bg-panel/80 border border-milk-line dark:border-line rounded-2xl p-6 mb-6">
-        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-          <h3 className="text-sm font-semibold uppercase tracking-widest text-muted-light dark:text-muted">
-            Сегодня — {todayStr}
-          </h3>
-          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-light dark:text-muted">
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-bronze dark:bg-gold" /> Услуги выполн.</span>
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-profit" /> Товары</span>
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm border border-bronze/30 dark:border-gold/30 bg-bronze/25 dark:bg-gold/25" /> Запланировано</span>
-            <span className="flex items-center gap-1.5"><span className="w-0.5 h-4 bg-loss rounded-full" /> Безубыточность {FMT_RUB(breakEvenDaily)}</span>
-            {dailyPlan > 0 && <span className="flex items-center gap-1.5"><span className="w-0.5 h-4 bg-profit rounded-full" /> План дня {FMT_RUB(dailyPlan)}</span>}
-          </div>
-        </div>
-        <ResponsiveContainer width="100%" height={320}>
-          <ComposedChart data={hourlyCumulative} barGap={2}>
-            <CartesianGrid strokeDasharray="3 3" stroke={цвета.сетка} />
-            <XAxis dataKey="hour" tick={{ fill: цвета.ось, fontSize: 11 }} />
-            <YAxis tick={{ fill: цвета.ось, fontSize: 11 }} tickFormatter={(v) => FMT(v)} />
-            <Tooltip
-              contentStyle={{ background: цвета.подсказкаФон, border: `1px solid ${цвета.подсказкаРамка}`, borderRadius: "12px", fontSize: 12 }}
-              formatter={(value: any, name: any) => {
-                if (name === "services") return [FMT_RUB(value), "Услуги (накопл.)"];
-                if (name === "products") return [FMT_RUB(value), "Товары (накопл.)"];
-                if (name === "scheduled") return [FMT_RUB(value), "Запланировано (накопл.)"];
-                if (name === "break_even") return [FMT_RUB(value), "Мин. маржинальность"];
-                return [value, name];
-              }}
-            />
-            <Bar dataKey="services" stackId="rev" name="services" radius={[4, 4, 0, 0]} label={({ x, y, width, index, value }: any) => {
-              const entry = hourlyCumulative[index];
-              if (!entry || entry.hour !== nowHour) return null;
-              return (
-                <g>
-                  <text x={x + width / 2} y={y - 8} fill="#000" fontSize={12} fontWeight={700} textAnchor="middle" stroke="#000" strokeWidth={3} paintOrder="stroke">{FMT_RUB(value)}</text>
-                  <text x={x + width / 2} y={y - 8} fill={цвета.подпись} fontSize={12} fontWeight={700} textAnchor="middle">{FMT_RUB(value)}</text>
-                </g>
-              );
-            }}>
-              {hourlyCumulative.map((entry, i) => (
-                <Cell key={i} fill={цвета.золото} stroke={entry.hour === nowHour ? цвета.сейчас : "transparent"} strokeWidth={entry.hour === nowHour ? 2 : 0} />
-              ))}
-            </Bar>
-            <Bar dataKey="products" stackId="rev" fill={цвета.прибыль} name="products" radius={[0, 0, 0, 0]} />
-            <Bar dataKey="scheduled" stackId="rev" name="scheduled" radius={[4, 4, 0, 0]} label={({ x, y, width, index }: any) => {
-              const entry = hourlyCumulative[index];
-              if (!entry || entry.hour !== nowHour) return null;
-              const total = entry.services + entry.products + entry.scheduled;
-              return <text x={x + width / 2} y={y - 8} fill={цвета.подпись} fontSize={11} fontWeight={700} textAnchor="middle">{FMT_RUB(total)}</text>;
-            }}>
-              {hourlyCumulative.map((entry, i) => (
-                <Cell key={i} fill={цвета.золото} fillOpacity={0.25} stroke={entry.hour === nowHour ? цвета.сейчас : цвета.золото} strokeWidth={entry.hour === nowHour ? 2 : 1} />
-              ))}
-            </Bar>
-            <Line dataKey="break_even" stroke={цвета.убыток} strokeWidth={2.5} dot={false} name="break_even" />
-            {dailyPlan > 0 && (
-              <Line dataKey={() => dailyPlan} stroke={цвета.прибыль} strokeWidth={2.5} dot={false} name="daily_plan" />
-            )}
-          </ComposedChart>
-        </ResponsiveContainer>
-      </div>
-
-      {/* Chart 2: Daily (current month) */}
-      <div className="bg-milk-card dark:bg-panel/80 border border-milk-line dark:border-line rounded-2xl p-6 mb-6">
-        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-          <h3 className="text-sm font-semibold uppercase tracking-widest text-muted-light dark:text-muted">
-            По дням — {currentPeriod}
-          </h3>
-          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-light dark:text-muted">
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-bronze dark:bg-gold" /> Услуги выполн.</span>
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-profit" /> Товары</span>
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm border border-bronze/30 dark:border-gold/30 bg-bronze/25 dark:bg-gold/25" /> Запланировано</span>
-            <span className="flex items-center gap-1.5"><span className="w-0.5 h-4 bg-loss rounded-full" /> Мин. марж. (накоп.)</span>
-            <span className="flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-loss" />
-              <span className="w-2 h-2 rounded-full bg-caution" />
-              <span className="w-2 h-2 rounded-full bg-profit" />
-              день: убыток · спорно · прибыль
-            </span>
-            {plan.profit_target > 0 && <span className="flex items-center gap-1.5"><span className="w-0.5 h-4 bg-profit rounded-full" /> Выручка под план (накоп.)</span>}
-          </div>
-        </div>
-        <ResponsiveContainer width="100%" height={340}>
-          <ComposedChart data={dailyCumulative} barGap={2}>
-            <CartesianGrid strokeDasharray="3 3" stroke={цвета.сетка} />
-            <XAxis dataKey="date" tick={{ fill: цвета.ось, fontSize: 11 }} tickFormatter={(d: string) => d.slice(5)} />
-            <YAxis tick={{ fill: цвета.ось, fontSize: 11 }} tickFormatter={(v) => FMT(v)} />
-            <Tooltip cursor={{ fill: "rgba(212,168,83,0.08)" }} content={<DayTooltip />} />
-            {/* Столбец красится по зоне дня: подписей над каждым больше нет,
-                сумма и пояснение — в подсказке при наведении. */}
-            <Bar dataKey="services" stackId="rev" name="services" radius={[6, 6, 0, 0]}>
-              {dailyCumulative.map((entry, i) => (
-                <Cell
-                  key={i}
-                  fill={цвета.золото}
-                  stroke={
-                    entry.date === todayStr
-                      ? цвета.сейчас
-                      : entry.zone === "green"
-                        ? цвета.прибыль
-                        : entry.zone === "amber"
-                          ? цвета.внимание
-                          : entry.zone === "red"
-                            ? цвета.убыток
-                            : "transparent"
-                  }
-                  strokeWidth={entry.date === todayStr ? 2 : entry.zone ? 1.5 : 0}
-                />
-              ))}
-            </Bar>
-            <Bar dataKey="products" stackId="rev" fill={цвета.прибыль} name="products" radius={[0, 0, 0, 0]} />
-            <Bar dataKey="scheduled" stackId="rev" name="scheduled" radius={[6, 6, 0, 0]} label={({ x, y, width, index }: any) => {
-              const entry = dailyCumulative[index];
-              if (!entry || entry.date !== todayStr) return null;
-              const actual = entry.services + entry.products;
-              if (actual <= 0) return null;
-              return <text x={x + width / 2} y={y - 8} fill={цвета.сейчас} fontSize={11} fontWeight={700} textAnchor="middle">{FMT_RUB(actual)}</text>;
-            }}>
-              {dailyCumulative.map((entry, i) => (
-                <Cell key={i} fill={цвета.золото} fillOpacity={0.25} stroke={entry.date === todayStr ? цвета.сейчас : цвета.золото} strokeWidth={entry.date === todayStr ? 2 : 1} />
-              ))}
-            </Bar>
-            <Line dataKey="break_even" stroke={цвета.убыток} strokeWidth={2.5} dot={false} name="break_even" />
-            {plan.profit_target > 0 && (
-              <Line dataKey="daily_plan_cum" stroke={цвета.прибыль} strokeWidth={2.5} dot={false} name="daily_plan_cum" />
-            )}
-          </ComposedChart>
-        </ResponsiveContainer>
-      </div>
-
-      {/* KPI mini-cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-milk-card dark:bg-panel/80 border border-milk-line dark:border-line rounded-xl p-4">
-          <div className="text-xs text-muted-light dark:text-muted">Выручка сегодня</div>
-          <div className="text-lg font-bold mt-1">{FMT_RUB(todayRevenue)}</div>
-        </div>
-        <div className="bg-milk-card dark:bg-panel/80 border border-milk-line dark:border-line rounded-xl p-4">
-          <div className="text-xs text-muted-light dark:text-muted">Мастеров на смене</div>
-          <div className="text-lg font-bold mt-1">{mastersToday}</div>
-        </div>
-        <div className="bg-milk-card dark:bg-panel/80 border border-milk-line dark:border-line rounded-xl p-4">
-          <div className="text-xs text-muted-light dark:text-muted">Точка безубыточности</div>
-          <div className="text-lg font-bold mt-1">{FMT_RUB(breakEvenDaily)}</div>
-        </div>
-        <div className="bg-milk-card dark:bg-panel/80 border border-milk-line dark:border-line rounded-xl p-4">
-          <div className="text-xs text-muted-light dark:text-muted">План на день</div>
-          <div className="text-lg font-bold mt-1">{dailyPlan > 0 ? FMT_RUB(dailyPlan) : "—"}</div>
-        </div>
-      </div>
     </div>
   );
 }
@@ -1884,13 +1930,29 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [role, setRole] = useState<Role>("master");
   const [userName, setUserName] = useState<string | null>(null);
+  const [top, setTop] = useState(false);
   const [page, setPage] = useState("payroll");
   // Первый запуск: учётной записи ещё нет, и спрашивать пароль не у кого.
   const [нуженМастер, setНуженМастер] = useState(false);
-  // Чего не хватает, чтобы Директор показывал цифры. Полоса с этим списком
+  // Чего не хватает, чтобы Пульт показывал цифры. Полоса с этим списком
   // висит на любой странице: без неё владелец видит пустые графики и решает,
   // что программа сломана.
   const [нехватает, setНехватает] = useState<string[]>([]);
+  const [salon, setSalon] = useState<{ name: string; has_logo: boolean; backgrounds?: { light: number | null; dark: number | null } }>({ name: "РублЪ", has_logo: false });
+  // Свои фоны из «Настройки → Заведение» подменяют встроенные через CSS-переменные.
+  useEffect(() => {
+    const html = document.documentElement;
+    const bg = salon.backgrounds;
+    for (const [тема, класс, переменная] of [
+      ["light", "свой-фон-светлый", "--фон-светлый"],
+      ["dark", "свой-фон-тёмный", "--фон-тёмный"],
+    ] as const) {
+      const v = bg?.[тема];
+      html.classList.toggle(класс, v != null);
+      if (v != null) html.style.setProperty(переменная, `url("/api/salon/background/${тема}?v=${v}")`);
+      else html.style.removeProperty(переменная);
+    }
+  }, [salon.backgrounds]);
   const [theme, setTheme] = useState<"dark" | "light">(() => {
     if (typeof window !== "undefined") {
       return localStorage.getItem("rubl-theme") === "light" ? "light" : "dark";
@@ -1902,6 +1964,83 @@ export default function App() {
     document.documentElement.classList.toggle("dark", theme === "dark");
     localStorage.setItem("rubl-theme", theme);
   }, [theme]);
+
+  const [фон, setФон] = useState(() => {
+    try { return localStorage.getItem("rubl-фон") !== "off"; } catch { return true; }
+  });
+  useEffect(() => {
+    document.documentElement.classList.toggle("без-фона", !фон);
+    try { localStorage.setItem("rubl-фон", фон ? "on" : "off"); } catch { /* не критично */ }
+  }, [фон]);
+
+  // Листание разделов колесом: страница целиком на экране, колесо — «следующий
+  // пункт меню». Если внутри есть что прокрутить (таблица, боковая панель),
+  // колесо сначала крутит её. Узкий экран листает обычной лентой.
+  const [направление, setНаправление] = useState<"вниз" | "вверх">("вниз");
+  const видимые = NAV.filter(
+    (i) => PAGES_BY_ROLE[role].includes(i.id) && (i.id !== "control" || top),
+  );
+  // Настройки — под чертой и колесом не листаются.
+  const листаемые = видимые.filter((i) => i.id !== "settings");
+  const idx = листаемые.findIndex((i) => i.id === page);
+  const следующий = idx < 0 ? undefined : листаемые[idx + 1];
+  const перейти = useRef((_d: 1 | -1) => {});
+  перейти.current = (d) => {
+    if (idx < 0) return;
+    const n = листаемые[idx + d];
+    if (n) { setНаправление(d > 0 ? "вниз" : "вверх"); setPage(n.id); }
+  };
+  useEffect(() => {
+    if (loading) return;
+    let acc = 0, last = 0, сброс = 0, былаПрокрутка = 0;
+    const on = (e: WheelEvent) => {
+      if (e.ctrlKey || window.innerWidth < 1024 || document.querySelector("[data-overlay]")) return;
+      let el = e.target as HTMLElement | null;
+      while (el && el !== document.body) {
+        if (el.tagName === "INPUT" && document.activeElement === el) return;
+        const s = getComputedStyle(el);
+        if (/(auto|scroll)/.test(s.overflowY) && el.scrollHeight > el.clientHeight + 1) {
+          const вверхуЛи = el.scrollTop <= 0;
+          const внизуЛи = el.scrollTop + el.clientHeight >= el.scrollHeight - 1;
+          if ((e.deltaY > 0 && !внизуЛи) || (e.deltaY < 0 && !вверхуЛи)) {
+            былаПрокрутка = Date.now();
+            acc = 0;
+            return;
+          }
+          // Дошли до края: пока колесо крутится непрерывно (в том числе по
+          // инерции), страницу не листаем — иначе до конца не доскроллить.
+          // Листание начинается после паузы в полсекунды.
+          if (Date.now() - былаПрокрутка < 500) {
+            былаПрокрутка = Date.now();
+            acc = 0;
+            return;
+          }
+        }
+        el = el.parentElement;
+      }
+      const now = Date.now();
+      if (now - last < 800) { acc = 0; return; }
+      acc += e.deltaY;
+      window.clearTimeout(сброс);
+      сброс = window.setTimeout(() => { acc = 0; }, 250);
+      if (Math.abs(acc) >= 120) {
+        перейти.current(acc > 0 ? 1 : -1);
+        acc = 0;
+        last = now;
+      }
+    };
+    const key = (e: KeyboardEvent) => {
+      if (!e.altKey) return;
+      if (e.key === "ArrowDown") перейти.current(1);
+      else if (e.key === "ArrowUp") перейти.current(-1);
+    };
+    window.addEventListener("wheel", on, { passive: true });
+    window.addEventListener("keydown", key);
+    return () => {
+      window.removeEventListener("wheel", on);
+      window.removeEventListener("keydown", key);
+    };
+  }, [loading]);
 
   useEffect(() => {
     // Роль выясняем до всего остального: от неё зависит и меню, и то, какая
@@ -1924,6 +2063,12 @@ export default function App() {
 
       // Роль по умолчанию — самая узкая: если сервер не ответил, лучше
       // показать меньше, чем случайно показать чужое.
+      try {
+        const sr = await fetch("/api/salon");
+        if (sr.ok) setSalon(await sr.json());
+      } catch (err) {
+        console.error("Не удалось загрузить название заведения:", err);
+      }
       let resolved: Role = "master";
       try {
         const r = await fetch("/api/me");
@@ -1933,6 +2078,7 @@ export default function App() {
             resolved = body.role;
           }
           setUserName(body.name ?? null);
+          setTop(Boolean(body.top));
         }
       } catch (err) {
         console.error("Не удалось определить роль:", err);
@@ -1962,31 +2108,50 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-milk dark:bg-ink text-ink-soft dark:text-cream flex">
+    <div className="min-h-screen text-ink-soft dark:text-cream flex">
       {/* Sidebar */}
       <aside className="w-60 border-r border-milk-line dark:border-line/50 flex flex-col fixed h-full bg-milk-card/90 dark:bg-ink/80 backdrop-blur-xl z-10">
-        <div className="p-6">
-          <div className="flex items-center gap-2.5 mb-8">
-            <img src={logo} alt="РублЪ" className="h-12 w-auto object-contain" />
-            <div>
-              <div className="text-sm font-bold tracking-tight leading-none">
-                Рубл<span className="text-bronze dark:text-gold">Ъ</span>
+        <div className="p-5 overflow-y-auto min-h-0">
+          <div className="mb-5">
+            {salon.has_logo ? (
+              <img src="/api/salon/logo" alt={salon.name} className="w-full max-h-24 object-contain object-left mb-2" />
+            ) : salon.name === "РублЪ" ? (
+              <img src={logo} alt="РублЪ" className="w-full max-h-24 object-contain object-left mb-2" />
+            ) : (
+              <div className="h-20 w-20 rounded-2xl bg-bronze dark:bg-gold text-milk dark:text-ink flex items-center justify-center text-4xl font-bold mb-3">
+                {salon.name.trim().slice(0, 1).toUpperCase()}
               </div>
-              <div className="text-[10px] text-muted-light dark:text-muted mt-0.5">AI Director</div>
+            )}
+            <div className="min-w-0">
+              <div className="text-2xl font-bold tracking-tight leading-tight break-words">
+                {salon.name === "РублЪ" ? (
+                  <>
+                    Рубл<span className="text-bronze dark:text-gold">Ъ</span>
+                  </>
+                ) : (
+                  salon.name
+                )}
+              </div>
+              <div className="text-xs text-muted-light dark:text-muted mt-1">Пульт</div>
             </div>
           </div>
 
+          {role === "owner" && <BranchSwitcher />}
+
           <nav className="space-y-1">
-            {NAV.filter((item) => PAGES_BY_ROLE[role].includes(item.id)).map((item) => {
+            {видимые.map((item) => {
               const Icon = item.icon;
               const active = page === item.id;
               return (
+                <div key={item.id}>
+                {item.id === "settings" && листаемые.length > 0 && (
+                  <hr className="my-2 border-milk-line dark:border-line/60" />
+                )}
                 <button
-                  key={item.id}
-                  onClick={() => setPage(item.id)}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition-all duration-200 ${
+                  onClick={() => { setНаправление(листаемые.findIndex((i) => i.id === item.id) > idx ? "вниз" : "вверх"); setPage(item.id); }}
+                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-sm text-left whitespace-nowrap transition-all duration-200 ${
                     active
-                      ? "bg-milk-deep dark:bg-panel-deep/80 text-ink-soft dark:text-cream font-medium"
+                      ? "bg-milk-deep dark:bg-panel-deep/80 text-ink-soft dark:text-cream font-medium shadow-[inset_3px_0_0_var(--color-bronze)] dark:shadow-[inset_3px_0_0_var(--color-gold)]"
                       : "text-muted-light dark:text-muted hover:text-ink-soft dark:hover:text-cream hover:bg-milk-deep dark:hover:bg-panel"
                   }`}
                 >
@@ -1996,18 +2161,26 @@ export default function App() {
                     <span className="ml-auto w-1.5 h-1.5 rounded-full bg-bronze dark:bg-gold" />
                   )}
                 </button>
+                </div>
               );
             })}
           </nav>
         </div>
 
-        <div className="mt-auto p-6 border-t border-milk-line dark:border-line/50">
+        <div className="mt-auto p-5 pt-3 border-t border-milk-line dark:border-line/50 shrink-0">
           <button
             onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
             className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-muted-light dark:text-muted hover:bg-milk-deep dark:hover:bg-panel transition-colors"
           >
             {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
             {theme === "dark" ? "Светлая тема" : "Тёмная тема"}
+          </button>
+          <button
+            onClick={() => setФон(!фон)}
+            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-muted-light dark:text-muted hover:bg-milk-deep dark:hover:bg-panel transition-colors"
+          >
+            <Image size={16} />
+            {фон ? "Фон: вкл" : "Фон: выкл"}
           </button>
           {/* Свежесть данных. Здесь, а не на каждой странице по отдельности:
               боковая панель видна везде, и надпись не придётся повторять. */}
@@ -2021,7 +2194,7 @@ export default function App() {
             {userName
               ? userName
               : role === "owner"
-                ? "Владелец"
+                ? "Управляющий"
                 : role === "operator"
                   ? "Администратор"
                   : "Мастер"}
@@ -2030,7 +2203,7 @@ export default function App() {
       </aside>
 
       {/* Main */}
-      <main className="flex-1 ml-60 p-8 min-h-screen">
+      <main className="flex-1 ml-60 p-8 h-screen overflow-y-auto">
         <div className="max-w-[1280px] mx-auto">
           {нехватает.length > 0 && page !== "settings" && (
             <div className="mb-6 rounded-xl border border-amber-500/40 bg-amber-500/5 px-4 py-3 flex items-start gap-3">
@@ -2057,23 +2230,50 @@ export default function App() {
           )}
           {/* Каждая страница показывается, только если роль её действительно
               имеет. Список ролей один, и меню, и маршрутизация читают его. */}
-          {PAGES_BY_ROLE[role].includes(page) && (
+          {видимые.some((i) => i.id === page) && (
             /* key по разделу: при переходе React создаёт ограждение заново,
                и сломанная страница не держит его поднятым до перезагрузки
                окна. Сбрасывать состояние вручную для этого не нужно. */
-            <PageBoundary key={page}>
+            <div key={page} className={направление === "вниз" ? "раздел-вниз" : "раздел-вверх"}>
+            <PageBoundary>
               {page === "planfact" && <PlanFactPage />}
               {page === "bookings" && <BookingsPage />}
               {page === "payroll" && <BarberMonthPage payroll />}
               {page === "monthly" && <MonthlyReportPage />}
+              {page === "finance" && <FinancePage />}
+              {page === "control" && <OwnerPage />}
               {page === "pulse" && <BasePulsePage />}
               {page === "shift" && <ShiftPage role={role} />}
               {page === "clients" && <ClientBasePage role={role} />}
               {page === "settings" && <SettingsPage />}
             </PageBoundary>
+            </div>
           )}
         </div>
       </main>
+
+      {/* Точки справа — где мы в меню; подсказка снизу — куда ведёт колесо. */}
+      {листаемые.length > 1 && idx >= 0 && (
+        <nav aria-label="Разделы" className="hidden lg:flex fixed right-4 top-1/2 -translate-y-1/2 flex-col gap-3 z-20">
+          {листаемые.map((i) => (
+            <button
+              key={i.id}
+              title={i.label}
+              aria-label={i.label}
+              onClick={() => { setНаправление(листаемые.indexOf(i) > idx ? "вниз" : "вверх"); setPage(i.id); }}
+              className={`rounded-full transition-all ${i.id === page ? "w-2 h-6 bg-bronze dark:bg-gold" : "w-2 h-2 bg-muted-light/60 dark:bg-muted/60 hover:bg-bronze dark:hover:bg-gold"}`}
+            />
+          ))}
+        </nav>
+      )}
+      {следующий && (
+        <button
+          onClick={() => перейти.current(1)}
+          className="hidden lg:block fixed bottom-3 left-[calc(50%+7.5rem)] -translate-x-1/2 z-20 text-xs px-3 py-1 rounded-full border border-milk-line dark:border-line bg-milk-card/80 dark:bg-panel/70 text-muted-light dark:text-muted hover:text-ink-soft dark:hover:text-cream"
+        >
+          Прокрутите вниз — {следующий.label} ↓
+        </button>
+      )}
     </div>
   );
 }
