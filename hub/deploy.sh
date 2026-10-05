@@ -77,6 +77,8 @@ if ! command -v nginx >/dev/null 2>&1 || ! command -v certbot >/dev/null 2>&1; t
     apt-get update -qq
     apt-get install -y -qq nginx certbot python3-certbot-nginx ufw >/dev/null
 fi
+# На некоторых серверных образах пакет не стартует сервис сам после установки.
+systemctl enable --now nginx >/dev/null 2>&1 || true
 
 # Не трогаем сайт, если под этим именем уже что-то настроено кем-то другим.
 if grep -rl "server_name[[:space:]].*$DOMAIN" /etc/nginx/sites-enabled/ 2>/dev/null \
@@ -103,7 +105,8 @@ NGINX
 
 ln -sf /etc/nginx/sites-available/pult-hub /etc/nginx/sites-enabled/pult-hub
 ufw allow 'Nginx Full' >/dev/null 2>&1 || true
-nginx -t && systemctl reload nginx
+nginx -t
+systemctl restart nginx || { systemctl status nginx --no-pager -l; exit 1; }
 
 if [ ! -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
     certbot certonly --webroot -w /var/www/html -d "$DOMAIN" --non-interactive \
@@ -141,7 +144,8 @@ server {
 }
 NGINX
 
-nginx -t && systemctl reload nginx
+nginx -t
+systemctl restart nginx || { systemctl status nginx --no-pager -l; exit 1; }
 WEB
 echo "       OK"
 
