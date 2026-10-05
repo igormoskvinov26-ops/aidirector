@@ -41,10 +41,13 @@ from app.services import configuration
 
 STATE_KEY = "hub_state"
 PULSE_KEY = "pulse_start_date"
+DASHBOARD_KEY = "owner_dashboard"
 SHIFT_WINDOW_DAYS = 45
 ACQ_WINDOW_DAYS = 120
 INTERVAL_SECONDS = 45
+DASHBOARD_INTERVAL_SECONDS = 600
 _lock = asyncio.Lock()
+_lock_витрины = asyncio.Lock()
 status: dict[str, Any] = {"ok": None, "at": None, "error": None, "pushed": 0, "pulled": 0}
 
 
@@ -108,6 +111,38 @@ async def _смена_в_документ(session: AsyncSession, смена: Shi
         "employees": [{"staff_id": p.staff_id, "name": p.staff_name_snapshot,
                        "arrival": p.arrival_time, "departure": p.departure_time} for p in people],
     }
+
+
+async def _витрина_владельца(session: AsyncSession) -> dict[str, Any] | None:
+    """Агрегаты для дашборда владельца на телефоне — только суммы и счётчики.
+
+    Решение владельца 04.10.2026: то же правило, что и для остальных
+    документов — клиентов, телефонов и записей здесь нет, только посчитанные
+    итоги (выручка/расходы/прибыль, сегменты базы, приток-отток по дням).
+    Любая из частей может не посчитаться (YCLIENTS недоступен) — тогда
+    просто не включаем её, а не роняем весь обмен.
+    """
+    from app.services import client_base, owner_overview
+
+    finance = None
+    if configuration.настроена("yclients"):
+        today = client_base.moscow_today()
+        try:
+            finance = await owner_overview.построить(session, today)
+        except Exception as e:  # noqa: BLE001 — YCLIENTS может быть недоступен
+            logger.warning(f"витрина: финансы не посчитались: {e}")
+    try:
+        base_pulse = await client_base.build_base_pulse(session)
+        base_flow = await client_base.build_base_flow(session)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"витрина: база не посчиталась: {e}")
+        base_pulse = base_flow = None
+    if finance is None and base_pulse is None:
+        return None
+    # Время последней правки сервер проставит сам при записи документа:
+    # если включить его сюда, документ менялся бы каждый цикл обмена и
+    # отправлялся бы заново даже когда ничего по сути не изменилось.
+    return {"finance": finance, "base_pulse": base_pulse, "base_flow": base_flow}
 
 
 async def локальные(session: AsyncSession, today: date | None = None) -> dict[str, Any]:
@@ -293,3 +328,52 @@ async def run_hub_loop() -> None:
     while True:
         await один_цикл()
         await asyncio.sleep(INTERVAL_SECONDS)
+
+
+async def протолкнуть_витрину(session: AsyncSession, client: httpx.AsyncClient) -> bool:
+    """Отдельный, нечастый пуш дашборда владельца — не часть общего цикла обмена.
+
+    Выделен из обмен()/локальные(): витрина считает выручку по YCLIENTS за
+    полгода, и гонять это каждые 45 секунд вместе с остальными документами
+    слишком дорого и подставляет основной цикл синхронизации под сетевые
+    сбои YCLIENTS. Использует тот же hub_state, что и обмен() — состояния
+    не расходятся.
+    """
+    витрина = await _витрина_владельца(session)
+    if витрина is None:
+        return False
+    state = await _состояние(session)
+    known: dict = state["docs"]
+    h = _хеш(витрина)
+    st = known.get(DASHBOARD_KEY)
+    if st and st["h"] == h:
+        return False
+    key = f"{_префикс()}{DASHBOARD_KEY}"
+    body = {"value": витрина, "base_seq": st["seq"] if st else 0}
+    r = await client.put(f"/v1/doc/{key}", json=body)
+    if r.status_code == 409:
+        return False
+    r.raise_for_status()
+    known[DASHBOARD_KEY] = {"h": h, "seq": r.json()["seq"]}
+    await _сохранить_состояние(session, state)
+    return True
+
+
+async def один_цикл_витрины() -> None:
+    from app.database import async_session
+
+    if not настроен() or _lock_витрины.locked():
+        return
+    async with _lock_витрины:
+        try:
+            async with _клиент() as c, async_session() as session:
+                await протолкнуть_витрину(session, c)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"витрина: не отправилась: {e}")
+
+
+async def run_dashboard_loop() -> None:
+    await asyncio.sleep(60)
+    while True:
+        await один_цикл_витрины()
+        await asyncio.sleep(DASHBOARD_INTERVAL_SECONDS)

@@ -1,0 +1,13 @@
+services:
+  hub:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      HUB_TOKEN: ${HUB_TOKEN:?укажите HUB_TOKEN в .env рядом с этим файлом}
+    volumes:
+      - hub_data:/data
+
+volumes:
+  hub_data:
