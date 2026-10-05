@@ -26,7 +26,16 @@ from app.models.models import PlanTarget
 from app.services import acquiring
 from app.services import barber_month as bm
 from app.services.cache import cached
-from app.services.finance_analysis import ПРОДАЖИ, _закрытия, _f, _день, _группа, _статья, ПЕРЕВОДЫ
+from app.services.finance_analysis import (
+    БЕЗ_СТАТЬИ,
+    ПЕРЕВОДЫ,
+    ПРОДАЖИ,
+    _день,
+    _группа,
+    _закрытия,
+    _статья,
+    _f,
+)
 from app.services.monthly_report import MOSCOW
 
 МЕСЯЦЕВ = 6
@@ -64,7 +73,12 @@ def итоги_месяца(транзакции: list[dict]) -> dict:
             доход += сумма
         elif сумма < 0:
             статья = _статья(t)
-            if any(w in статья.lower() for w in ПЕРЕВОДЫ):
+            if статья == БЕЗ_СТАТЬИ or any(w in статья.lower() for w in ПЕРЕВОДЫ):
+                # Без категории — то же самое системное движение денег, что и
+                # «перевод»/«инкасс»: YCLIENTS в собственном отчёте «Расходы»
+                # такие операции не считает тратой (решение владельца 05.10.2026,
+                # проверено сверкой с отчётом YCLIENTS — расхождение было ровно
+                # на сумму операций без статьи).
                 continue  # деньги переехали между кассой и счётом — не трата
             расход += -сумма
             группы[_группа(статья)] += -сумма

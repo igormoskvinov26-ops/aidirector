@@ -100,7 +100,11 @@ def разнести(транзакции: list[dict]) -> tuple[dict, list[dict]
             title = _статья(t)
             расходы.append({
                 "date": день, "title": title, "amount": -сумма, "cash": касса,
-                "transfer": any(w in title.lower() for w in ПЕРЕВОДЫ),
+                # Без категории — то же системное движение денег, что и
+                # «перевод»/«инкасс»: решение владельца 05.10.2026, сверено с
+                # отчётом «Расходы» в самом YCLIENTS — он такие операции не
+                # считает тратой (у инкассации там просто не задана статья).
+                "transfer": title == БЕЗ_СТАТЬИ or any(w in title.lower() for w in ПЕРЕВОДЫ),
                 "comment": str(t.get("comment") or "")[:80],
             })
     return dict(движения), расходы
@@ -187,9 +191,11 @@ def расходы_по_статьям(items: list[dict], prev_items: list[dict]
         if (a["share_pct"] or 0) >= 5 and a["delta_pct"] is not None and a["delta_pct"] >= 30:
             watch.append(f"«{a['title']}» выросла на {a['delta_pct']:.0f}% к прошлому месяцу "
                          f"({a['total']:,.0f} ₽)".replace(",", " "))
-    if БЕЗ_СТАТЬИ in by:
-        watch.append(f"Есть расходы без статьи на {float(by[БЕЗ_СТАТЬИ]['total']):,.0f} ₽: "
-                     "без статьи неясно, куда ушли деньги.".replace(",", " "))
+    без_статьи = sum((x["amount"] for x in items if x["title"] == БЕЗ_СТАТЬИ), D0)
+    if без_статьи:
+        watch.append(f"Расходы без статьи на {float(без_статьи):,.0f} ₽ не входят в сумму "
+                     "выше (как инкассация и переводы) — подпишите статью в YCLIENTS, "
+                     "если это не так.".replace(",", " "))
     прочее = groups.get("Прочее", D0)
     if total and прочее / total >= Decimal("0.15"):
         watch.append(f"Группа «Прочее» — {float(прочее / total * 100):.0f}% расходов: "
