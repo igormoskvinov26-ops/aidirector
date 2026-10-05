@@ -94,8 +94,7 @@ server {
 }
 
 server {
-    listen 443 ssl;
-    http2 on;
+    listen 443 ssl http2;
     server_name $DOMAIN;
 
     add_header Strict-Transport-Security "max-age=31536000" always;
