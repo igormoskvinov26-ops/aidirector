@@ -137,6 +137,17 @@ a { color: inherit; }
   margin-bottom: 12px;
 }
 
+.calls-line { padding: 12px 16px; }
+.calls-line-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--muted);
+}
+.calls-line-row b { font-size: 15px; color: var(--cream); font-weight: 700; }
+
 .gauges { display: grid; grid-template-columns: 1fr; gap: 4px; margin-bottom: 10px; }
 .gauge-cell { text-align: center; }
 .gauge { width: 100%; max-width: 280px; height: auto; display: block; margin: 0 auto; }

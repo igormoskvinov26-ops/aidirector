@@ -15,7 +15,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.database import Base
-from app.models.models import Client
+from app.models.models import Client, ContactAttempt, ContactTask
 from app.services.shift import (
     MOSCOW,
     актуальная,
@@ -915,6 +915,42 @@ async def test_закрытие_без_остатков_предупреждае
     деньги = итог["closing_snapshot"]["money"]
     assert деньги["cash_register_estimate"] is None
     assert any("не внесены" in w for w in итог["closing_snapshot"]["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_закрытие_подтягивает_звонки_за_день(session: AsyncSession, monkeypatch):
+    """Обзвон не вводится руками — закрытие само берёт итог дня из журнала
+    звонков (решение владельца 06.10.2026)."""
+    from app.services import shift, shift_store
+
+    async def собрать_закрытие(день=None):
+        return {
+            "shift_date": ДЕНЬ.isoformat(), "records_total": 0, "records_completed": 0,
+            "services_revenue": 0.0, "products_revenue": 0.0,
+            "money": {"total_earned": 0.0, "non_cash": None, "cash": None, "spent": None,
+                      "cash_register_estimate": None, "settlement_account_estimate": None,
+                      "other_account_debt": None},
+            "clients_came": 0, "clients": {"booked_next": 0, "not_booked": 0},
+            "created_today_for_future": None, "completed": {"new": None, "became_regular": None},
+            "lost_today": None, "masters": [], "warnings": [], "calculated_at": "x",
+        }
+
+    monkeypatch.setattr(shift, "собрать_закрытие", собрать_закрытие)
+
+    session.add(Client(id=1, yclients_id=1001, name="Иван", phone="+79990000001"))
+    await session.flush()
+    session.add(ContactTask(id=5, client_id=1, group_code="lost", priority=1, due_date=ДЕНЬ, status="done"))
+    await session.flush()
+    session.add(ContactAttempt(task_id=5, outcome="booked", channel="phone",
+                                created_at=datetime(2026, 9, 23, 10, 0, tzinfo=shift.MOSCOW)))
+    await session.commit()
+
+    итог = await shift_store.закрыть(session, ДЕНЬ)
+    assert итог["closing_snapshot"]["calls"] == {
+        "total": 1, "booked": 1, "no_booking": 0, "no_answer": 0, "returned_lost": 1,
+    }
+    текст = shift.текст_закрытия(итог["closing_snapshot"], {})
+    assert "Звонков — 1, записано — 1, вернули потерянных — 1" in текст
 
 
 # --------------------------------------------------------------------------- #

@@ -86,6 +86,9 @@ interface ClosingSnapshot {
   created_today_for_future: number | null;
   completed: { new: number | null; became_regular: number | null };
   lost_today: number | null;
+  /** Необязательно: подтягивается автоматом из журнала обзвона (§ решение
+   *  владельца 06.10.2026) — у снимков, закрытых до этой доработки, нет. */
+  calls?: { total: number; booked: number; no_booking: number; no_answer: number; returned_lost: number };
   warnings: string[];
   integrity_failures: string[];
 }
@@ -1143,6 +1146,18 @@ export default function ShiftPage({ role }: { role: "owner" | "operator" | "mast
             <Раздел title="Потерянные">
               <Плитка label="Сегодня" value={ЧИСЛО(закрытие.lost_today)} тон="negative" />
             </Раздел>
+
+            {закрытие.calls && (
+              <Раздел title="Обзвон">
+                <Плитка label="Звонков" value={String(закрытие.calls.total)} />
+                <Плитка label="Записано" value={String(закрытие.calls.booked)} тон="positive" />
+                <Плитка
+                  label="Вернули потерянных"
+                  value={String(закрытие.calls.returned_lost)}
+                  тон="positive"
+                />
+              </Раздел>
+            )}
 
             <Предупреждения список={закрытие.warnings} />
             {закрытие.integrity_failures.length > 0 && (

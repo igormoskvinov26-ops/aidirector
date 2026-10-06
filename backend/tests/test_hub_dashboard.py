@@ -54,9 +54,13 @@ async def test_витрина_пушится_отдельно_и_не_повто
     async def fake_flow(session):
         return {"total": 5}
 
+    async def fake_calls(session, day):
+        return {"total": 20, "booked": 10, "no_booking": 7, "no_answer": 3, "returned_lost": 2}
+
     monkeypatch.setattr("app.services.owner_overview.построить", fake_finance)
     monkeypatch.setattr("app.services.client_base.build_base_pulse", fake_pulse)
     monkeypatch.setattr("app.services.client_base.build_base_flow", fake_flow)
+    monkeypatch.setattr("app.services.client_base.calls_for_day", fake_calls)
     monkeypatch.setattr("app.services.configuration.настроена", lambda ид: True)
 
     async with install() as session, _client(app) as c:
@@ -69,6 +73,7 @@ async def test_витрина_пушится_отдельно_и_не_повто
         assert body["finance"]["profit"]["value"] == 1000.0
         assert body["base_pulse"]["base_total"] == 42
         assert body["base_flow"]["total"] == 5
+        assert body["calls"] == {"total": 20, "booked": 10, "no_booking": 7, "no_answer": 3, "returned_lost": 2}
         assert "updated_at" in body
 
         fake_pulse_updated = {"base_total": 43}
@@ -91,8 +96,12 @@ async def test_витрина_пропускается_если_ничего_н�
     async def none_pulse(session):
         raise RuntimeError("БД недоступна")
 
+    async def none_calls(session, day):
+        raise RuntimeError("БД недоступна")
+
     monkeypatch.setattr("app.services.owner_overview.построить", none_finance)
     monkeypatch.setattr("app.services.client_base.build_base_pulse", none_pulse)
+    monkeypatch.setattr("app.services.client_base.calls_for_day", none_calls)
     monkeypatch.setattr("app.services.configuration.настроена", lambda ид: True)
 
     async with install() as session, _client(app) as c:

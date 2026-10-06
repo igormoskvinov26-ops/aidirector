@@ -50,11 +50,27 @@ async def test_пометка_убирает_задачу_и_не_даёт_ве�
 @pytest.mark.asyncio
 async def test_счётчик_звонков_за_сегодня(session):
     session.add(Client(id=1, yclients_id=1001, name="Иван", phone="+7999"))
+    session.add(Client(id=2, yclients_id=1002, name="Пётр", phone="+7998"))
     await session.flush()
     session.add(ContactTask(id=5, client_id=1, group_code="risk", priority=3, due_date=date.today(), status="done"))
+    session.add(ContactTask(id=6, client_id=2, group_code="lost", priority=3, due_date=date.today(), status="done"))
     for outcome, admin in (("booked", 7), ("no_answer", 7), ("no_booking", 8)):
         session.add(ContactAttempt(task_id=5, outcome=outcome, channel="phone", admin_staff_id=admin))
+    session.add(ContactAttempt(task_id=6, outcome="booked", channel="phone", admin_staff_id=7))
     await session.commit()
     r = await client_base.calls_today(session, 7)
-    assert r["salon"] == {"total": 3, "booked": 1, "no_booking": 1, "no_answer": 1}
-    assert r["mine"] == {"total": 2, "booked": 1, "no_booking": 0, "no_answer": 1}
+    assert r["salon"] == {"total": 4, "booked": 2, "no_booking": 1, "no_answer": 1, "returned_lost": 1}
+    assert r["mine"] == {"total": 3, "booked": 2, "no_booking": 0, "no_answer": 1, "returned_lost": 1}
+
+
+@pytest.mark.asyncio
+async def test_звонки_за_день_для_закрытия_смены(session):
+    """calls_for_day — то же, что считает calls_today на сегодня, но для
+    любого дня и без истории рекордов: нужно закрытию смены и витрине."""
+    session.add(Client(id=1, yclients_id=1001, name="Иван", phone="+7999"))
+    await session.flush()
+    session.add(ContactTask(id=5, client_id=1, group_code="lost", priority=3, due_date=date.today(), status="done"))
+    session.add(ContactAttempt(task_id=5, outcome="booked", channel="phone"))
+    await session.commit()
+    r = await client_base.calls_for_day(session, date.today())
+    assert r == {"total": 1, "booked": 1, "no_booking": 0, "no_answer": 0, "returned_lost": 1}

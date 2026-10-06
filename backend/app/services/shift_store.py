@@ -10,12 +10,13 @@
 import re
 from datetime import UTC, date, datetime
 
+from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.models import Client, Shift, ShiftEmployee
-from app.services import cash_balances
+from app.services import cash_balances, client_base
 from app.services import shift as расчёт
 from app.services.telegram import отправить_сообщение
 
@@ -205,6 +206,15 @@ async def закрыть(session: AsyncSession, день: date | None = None) ->
             "Остатки денег ещё не внесены — касса и счёт "
             "недоступны, пока владелец не укажет их хотя бы раз."
         )
+
+    # Обзвон потерянной/рисковой базы подтягивается в закрытие автоматом
+    # (решение владельца 06.10.2026) — администратору не нужно вносить
+    # звонки руками, их уже видно в журнале обзвона.
+    try:
+        снимок["calls"] = await client_base.calls_for_day(session, день)
+    except Exception as сбой:  # noqa: BLE001
+        logger.warning(f"смена {день}: обзвон не посчитался: {сбой}")
+        снимок["warnings"].append("Данные обзвона не подтянулись — показатели звонков недоступны.")
 
     if смена is None:
         смена = Shift(shift_date=день)

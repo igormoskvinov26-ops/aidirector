@@ -888,22 +888,38 @@ async def set_do_not_call(session: AsyncSession, client_id: int, value: bool, ac
     return {"ok": True, "client_id": client_id, "do_not_call": value, "tasks_removed": removed}
 
 
-async def calls_today(session: AsyncSession, admin_staff_id: int | None = None) -> dict:
-    """Счётчик звонков за сегодня: всего, записались, без записи, не дозвонились.
-    Плюс рекорд — лучший день за 90 дней, чтобы было с чем соревноваться."""
-    today = moscow_today()
-    start = datetime.combine(today - timedelta(days=90), datetime.min.time(), tzinfo=MOSCOW)
+def _счёт(отбор) -> dict:
+    """Разбивка по исходам плюс «вернули потерянных» — booked у задачи из
+    сегмента lost (решение владельца 06.10.2026, звонки на витрину и в
+    закрытие смены)."""
+    out = {"total": 0, "booked": 0, "no_booking": 0, "no_answer": 0, "returned_lost": 0}
+    for outcome, _when, _admin, group_code in отбор:
+        out["total"] += 1
+        if outcome in ("booked", "no_booking", "no_answer"):
+            out[outcome] += 1
+        if outcome == "booked" and group_code == "lost":
+            out["returned_lost"] += 1
+    return out
+
+
+async def _попытки_с_сегментом(session: AsyncSession, start: datetime) -> list:
+    """ContactAttempt, дополненный group_code своей задачи, не раньше start."""
     rows = (await session.execute(
-        select(ContactAttempt.outcome, ContactAttempt.created_at, ContactAttempt.admin_staff_id)
+        select(ContactAttempt.outcome, ContactAttempt.created_at,
+               ContactAttempt.admin_staff_id, ContactTask.group_code)
+        .join(ContactTask, ContactAttempt.task_id == ContactTask.id)
         .where(ContactAttempt.created_at >= start)
     )).all()
-    def счёт(отбор) -> dict:
-        out = {"total": 0, "booked": 0, "no_booking": 0, "no_answer": 0}
-        for outcome, when, _ in отбор:
-            out["total"] += 1
-            if outcome in out:
-                out[outcome] += 1
-        return out
+    return rows
+
+
+async def calls_today(session: AsyncSession, admin_staff_id: int | None = None) -> dict:
+    """Счётчик звонков за сегодня: всего, записались, без записи, не дозвонились,
+    вернули потерянных. Плюс рекорд — лучший день за 90 дней, чтобы было с чем
+    соревноваться."""
+    today = moscow_today()
+    start = datetime.combine(today - timedelta(days=90), datetime.min.time(), tzinfo=MOSCOW)
+    rows = await _попытки_с_сегментом(session, start)
     по_дням: dict[date, int] = defaultdict(int)
     сегодня, моё = [], []
     for r in rows:
@@ -914,9 +930,22 @@ async def calls_today(session: AsyncSession, admin_staff_id: int | None = None) 
             if admin_staff_id is not None and r[2] == admin_staff_id:
                 моё.append(r)
     прошлые = [n for d, n in по_дням.items() if d != today]
-    return {"date": today.isoformat(), "salon": счёт(сегодня),
-            "mine": счёт(моё) if admin_staff_id is not None else None,
+    return {"date": today.isoformat(), "salon": _счёт(сегодня),
+            "mine": _счёт(моё) if admin_staff_id is not None else None,
             "record": max(прошлые) if прошлые else 0}
+
+
+async def calls_for_day(session: AsyncSession, day: date) -> dict:
+    """Звонки за конкретный день (закрытие смены, рассылка в Telegram, витрина
+    владельца) — та же разбивка, что и в calls_today, но без истории рекордов."""
+    start = datetime.combine(day, datetime.min.time(), tzinfo=MOSCOW)
+    rows = await _попытки_с_сегментом(session, start)
+    отбор = []
+    for r in rows:
+        when = r[1].astimezone(MOSCOW) if r[1].tzinfo else r[1].replace(tzinfo=MOSCOW)
+        if when.date() == day:
+            отбор.append(r)
+    return _счёт(отбор)
 
 
 async def set_admin_note(session: AsyncSession, client_id: int, note: str) -> dict:

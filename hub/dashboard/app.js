@@ -226,6 +226,21 @@ function financeCard(f) {
   `;
 }
 
+// Одна строка (запрос владельца 06.10.2026): звонков, записано, вернули
+// потерянных — то же, что уходит в закрытие смены и в Telegram.
+function callsLine(c) {
+  if (!c || !c.total) return "";
+  return `
+    <div class="card calls-line">
+      <div class="calls-line-row">
+        <span>Звонков — <b>${c.total}</b></span>
+        <span>записано — <b style="color:var(--profit)">${c.booked}</b></span>
+        <span>вернули потерянных — <b style="color:var(--gold)">${c.returned_lost}</b></span>
+      </div>
+    </div>
+  `;
+}
+
 function pulseCard(p) {
   if (!p) {
     return `<div class="card"><h2>База клиентов</h2>
@@ -309,7 +324,7 @@ function renderDashboard(url, token, data) {
 function paint(data) {
   document.getElementById("updated").textContent = data ? relTime(data.updated_at) : "";
   document.getElementById("cards").innerHTML = data
-    ? financeCard(data.finance) + pulseCard(data.base_pulse) + flowCard(data.base_flow)
+    ? financeCard(data.finance) + callsLine(data.calls) + pulseCard(data.base_pulse) + flowCard(data.base_flow)
     : `<div class="card"><div class="empty-state">Сервер ещё не получил данные от установки.
         Откройте Пульт на компьютере — синхронизация подхватит их в течение пары минут.</div></div>`;
 }

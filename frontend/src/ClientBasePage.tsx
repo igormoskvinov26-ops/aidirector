@@ -910,6 +910,14 @@ function СчётчикЗвонков({ adminId, refreshKey }: { adminId: number
               </div>
             </div>
           ))}
+          {(с.returned_lost ?? 0) > 0 && (
+            <div className="flex items-center justify-between rounded-lg bg-bronze/10 dark:bg-gold/10 px-2 py-1 text-sm">
+              <span className="flex items-center gap-2 text-bronze dark:text-gold">
+                <Trophy size={13} />Вернули потерянных
+              </span>
+              <span className="font-semibold tabular-nums text-bronze dark:text-gold">{с.returned_lost}</span>
+            </div>
+          )}
           <div className="pt-1">
             <div className="flex items-center justify-between text-[11px] text-muted-light dark:text-muted">
               <span className="flex items-center gap-1"><Trophy size={12} className={побит ? "text-bronze dark:text-gold" : ""} />

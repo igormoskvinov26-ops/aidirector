@@ -136,12 +136,17 @@ async def _витрина_владельца(session: AsyncSession) -> dict[str,
     except Exception as e:  # noqa: BLE001
         logger.warning(f"витрина: база не посчиталась: {e}")
         base_pulse = base_flow = None
-    if finance is None and base_pulse is None:
+    try:
+        calls = await client_base.calls_for_day(session, client_base.moscow_today())
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"витрина: обзвон не посчитался: {e}")
+        calls = None
+    if finance is None and base_pulse is None and calls is None:
         return None
     # Время последней правки сервер проставит сам при записи документа:
     # если включить его сюда, документ менялся бы каждый цикл обмена и
     # отправлялся бы заново даже когда ничего по сути не изменилось.
-    return {"finance": finance, "base_pulse": base_pulse, "base_flow": base_flow}
+    return {"finance": finance, "base_pulse": base_pulse, "base_flow": base_flow, "calls": calls}
 
 
 async def локальные(session: AsyncSession, today: date | None = None) -> dict[str, Any]:
