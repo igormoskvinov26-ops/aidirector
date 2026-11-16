@@ -27,7 +27,7 @@ class Employee(Base):
     __tablename__ = "employees"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    yclients_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    yclients_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
     name: Mapped[str] = mapped_column(String(255))
     specialization: Mapped[str | None] = mapped_column(String(255))
     position: Mapped[str | None] = mapped_column(String(100))
@@ -50,7 +50,7 @@ class Client(Base):
     __tablename__ = "clients"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    yclients_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    yclients_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
     name: Mapped[str] = mapped_column(String(255))
     phone: Mapped[str] = mapped_column(String(20), index=True)
     email: Mapped[str | None] = mapped_column(String(255))
@@ -89,7 +89,7 @@ class Service(Base):
     __tablename__ = "services"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    yclients_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    yclients_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
     title: Mapped[str] = mapped_column(String(255))
     category: Mapped[str | None] = mapped_column(String(100))
     price_min: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
@@ -107,7 +107,7 @@ class Product(Base):
     __tablename__ = "products"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    yclients_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    yclients_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
     title: Mapped[str] = mapped_column(String(255))
     category: Mapped[str | None] = mapped_column(String(100))
     price: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
@@ -124,7 +124,7 @@ class Visit(Base):
     __tablename__ = "visits"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    yclients_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    yclients_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
     client_id: Mapped[int] = mapped_column(ForeignKey("clients.id"), index=True)
     employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), index=True)
     datetime: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
