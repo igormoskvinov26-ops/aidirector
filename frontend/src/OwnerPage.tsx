@@ -22,6 +22,18 @@ interface Обзор {
   profit: { value: Num; plan: Num; pace: Num; margin_pct: Num; ok: boolean | null };
   history: { month: string; income: Num; expenses: Num; profit: Num; partial: boolean }[];
   recon: { diff_total: Num; compared_days: number; mismatch_days: number; days_without_bank: number };
+  forecast: Прогноз;
+}
+
+/** Прогноз на конец месяца и контрольные даты выплат (решение владельца
+ *  19.11.2026): 10-е — ЗП, 25-е — аванс/аренда/коммуналка, конец месяца —
+ *  итоги и дивиденды. Выручка — по уже существующим записям (факт плюс то,
+ *  что уже стоит в записи вперёд), ФОТ и прочие расходы — по истории. */
+interface ТочкаВыплаты { date: string; label: string; revenue: Num; passed: boolean }
+interface Прогноз {
+  revenue: Num; payroll: Num; other_expenses: Num; profit: Num;
+  payroll_pct_of_revenue: Num; months_used: number;
+  checkpoints: ТочкаВыплаты[];
 }
 
 type Режим = "income" | "expenses" | "profit" | "recon";
@@ -32,6 +44,7 @@ const руб = (v: Num | undefined) =>
   v == null ? "—" : `${Math.round(v).toLocaleString("ru-RU")} ₽`;
 const кратко = (v: number) =>
   Math.abs(v) >= 1_000_000 ? `${(v / 1_000_000).toFixed(1).replace(".", ",")} млн` : `${Math.round(v / 1000)}к`;
+const датаКоротко = (iso: string) => `${Number(iso.slice(8, 10))} ${МЕСЯЦЫ[Number(iso.slice(5, 7)) - 1]}`;
 
 // ── Спидометр денег ───────────────────────────────────────────────────────
 
@@ -263,6 +276,47 @@ export default function OwnerPage() {
               />
             </Блок>
           </div>
+
+          {д.forecast && (
+            <div className="bg-milk-card dark:bg-panel/80 border border-milk-line dark:border-line rounded-2xl p-4 shrink-0">
+              <h3 className="mb-3 text-sm font-semibold uppercase tracking-widest text-muted-light dark:text-muted">
+                Хватит ли до конца месяца
+              </h3>
+              <div className="grid gap-3 sm:grid-cols-3">
+                {д.forecast.checkpoints.map((т) => (
+                  <div key={т.date} className="rounded-xl border border-milk-line dark:border-line px-3 py-2.5">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span className="text-sm font-semibold">{датаКоротко(т.date)}</span>
+                      <span className="text-[10px] uppercase tracking-wider text-muted-light dark:text-muted">
+                        {т.passed ? "факт" : "прогноз"}
+                      </span>
+                    </div>
+                    <div className="text-xs text-muted-light dark:text-muted">{т.label}</div>
+                    <div className="mt-1 text-lg font-semibold tabular-nums">{руб(т.revenue)}</div>
+                    <div className="text-[11px] text-muted-light dark:text-muted">выручка нарастающим итогом</div>
+                  </div>
+                ))}
+                <div className="rounded-xl border border-bronze/40 dark:border-gold/40 px-3 py-2.5">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="text-sm font-semibold">{датаКоротко(`${д.month}-${String(д.days_in_month).padStart(2, "0")}`)}</span>
+                    <span className="text-[10px] uppercase tracking-wider text-bronze dark:text-gold">итоги</span>
+                  </div>
+                  <div className="text-xs text-muted-light dark:text-muted">Итоги месяца и дивиденды</div>
+                  <div className="mt-1 text-lg font-semibold tabular-nums"
+                    style={{ color: д.forecast.profit == null ? undefined : д.forecast.profit >= 0 ? цвета.прибыль : цвета.убыток }}>
+                    {руб(д.forecast.profit)}
+                  </div>
+                  <div className="text-[11px] text-muted-light dark:text-muted">
+                    прибыль = {руб(д.forecast.revenue)} − ФОТ {руб(д.forecast.payroll)} − прочее {руб(д.forecast.other_expenses)}
+                  </div>
+                </div>
+              </div>
+              <p className="mt-2 text-[11px] text-muted-light dark:text-muted">
+                Выручка — факт плюс уже стоящее в записи. ФОТ — средняя доля от выручки за {д.forecast.months_used} прошл.
+                {д.forecast.months_used === 1 ? "ый месяц" : " мес."}, прочие расходы (аренда, коммуналка, закупки, маркетинг) — их средняя сумма.
+              </p>
+            </div>
+          )}
 
           <div className="bg-milk-card dark:bg-panel/80 border border-milk-line dark:border-line rounded-2xl p-4 flex flex-col flex-1 min-h-[240px]">
             <h3 className="mb-2 shrink-0 text-sm font-semibold uppercase tracking-widest text-muted-light dark:text-muted">
