@@ -74,12 +74,19 @@ if %ERRORLEVEL% GEQ 8 (
 )
 echo Собираю и запускаю Директора. Первый раз это занимает несколько минут ...
 powershell -NoProfile -ExecutionPolicy Bypass -File "%TARGET%\bootstrap.ps1" -Mode install
+set "BOOTSTRAP_CODE=%ERRORLEVEL%"
 rem top-seed.env приложение уже прочитало и стёрло внутри контейнера при
 rem старте — эта копия на диске здесь больше не нужна.
 if exist "%TARGET%\app\backend\top-seed.env" del /f /q "%TARGET%\app\backend\top-seed.env"
 echo.
-echo Готово, если выше нет ошибок. Откройте Директор ярлыком как обычно.
-echo Журнал: %TARGET%\log\bootstrap.log
+if "%BOOTSTRAP_CODE%"=="0" (
+  echo Готово. Откройте Директор ярлыком как обычно.
+) else (
+  echo ОШИБКА: обновление не применилось ^(код %BOOTSTRAP_CODE%^).
+  echo Файлы скопированы, но сборка/миграция базы не завершилась успешно —
+  echo старая версия всё ещё работает. Пришлите разработчику файл журнала:
+  echo %TARGET%\log\bootstrap.log
+)
 pause
 BAT
 
