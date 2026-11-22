@@ -45,6 +45,11 @@ git ls-files -z backend frontend local scripts assets .env.example .dockerignore
 # копию и в пакет: .bat сам решит, менять ли её на диске.
 cp "$here/bootstrap.ps1" "$pkg/bootstrap.ps1"
 
+# Снятие диагностики — тоже рядом с app/, тоже обновляется каждый раз.
+# Работает независимо от того, запускается ли сам Директор.
+cp "$here/Собрать-Диагностику.ps1" "$pkg/Собрать-Диагностику.ps1"
+cp "$here/Собрать-Диагностику.bat" "$pkg/Собрать-Диагностику.bat"
+
 if find "$pkg/app" -name '.env' -o -name '.env.*' ! -name '.env.example' | grep -q .; then
     echo "В payloadе оказался файл настроек — сборка остановлена." >&2
     exit 1
@@ -97,6 +102,8 @@ if %ERRORLEVEL% GEQ 8 (
   exit /b 1
 )
 if exist "%~dp0bootstrap.ps1" copy /y "%~dp0bootstrap.ps1" "%TARGET%\bootstrap.ps1" >nul
+if exist "%~dp0Собрать-Диагностику.ps1" copy /y "%~dp0Собрать-Диагностику.ps1" "%TARGET%\Собрать-Диагностику.ps1" >nul
+if exist "%~dp0Собрать-Диагностику.bat" copy /y "%~dp0Собрать-Диагностику.bat" "%TARGET%\Собрать-Диагностику.bat" >nul
 echo Собираю и запускаю Директора. Первый раз это занимает несколько минут ...
 powershell -NoProfile -ExecutionPolicy Bypass -File "%TARGET%\bootstrap.ps1" -Mode install
 set "BOOTSTRAP_CODE=%ERRORLEVEL%"
