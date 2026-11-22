@@ -156,6 +156,51 @@ function Test-Settings {
     return -not $blanks
 }
 
+# ── Резервная копия базы ──────────────────────────────────────────────────
+
+function Backup-Database {
+    # Перед изменением структуры базы (решение владельца 22.11.2026: за
+    # неделю обновление дважды роняло рабочую установку). Копия — лучшее
+    # усилие: если снять её не удалось (нет pg_dump, диск занят и т.п.),
+    # обновление всё равно должно продолжиться, а не остановиться на этом.
+    param([string]$Docker)
+
+    $backupDir = Join-Path $Base 'backups'
+    if (-not (Test-Path $backupDir)) { New-Item -ItemType Directory -Path $backupDir -Force | Out-Null }
+
+    $pgUser = (Select-String -Path $EnvFile -Pattern '^POSTGRES_USER=(.+)' -ErrorAction SilentlyContinue |
+               Select-Object -First 1).Matches.Groups[1].Value
+    $pgDb = (Select-String -Path $EnvFile -Pattern '^POSTGRES_DB=(.+)' -ErrorAction SilentlyContinue |
+             Select-Object -First 1).Matches.Groups[1].Value
+    if (-not $pgUser) { $pgUser = 'rubl' }
+    if (-not $pgDb) { $pgDb = 'rubl_director' }
+
+    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $file = Join-Path $backupDir "db-$stamp.dump"
+
+    Write-Log "делаю резервную копию базы перед обновлением структуры"
+    Invoke-Quietly {
+        & $Docker exec rubl_db pg_dump -U $pgUser -d $pgDb -F c -f /tmp/rubl-backup.dump
+    }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Log "резервную копию снять не удалось (pg_dump, код $LASTEXITCODE) — продолжаю без неё"
+        return
+    }
+    Invoke-Quietly { & $Docker cp "rubl_db:/tmp/rubl-backup.dump" $file }
+    $copied = $LASTEXITCODE -eq 0
+    Invoke-Quietly { & $Docker exec rubl_db rm -f /tmp/rubl-backup.dump }
+    if (-not $copied) {
+        Write-Log "не удалось скопировать резервную копию на диск — продолжаю без неё"
+        return
+    }
+
+    # Храним только последние 5 — иначе папка растёт бесконечно.
+    Get-ChildItem $backupDir -Filter 'db-*.dump' -ErrorAction SilentlyContinue |
+        Sort-Object Name -Descending | Select-Object -Skip 5 |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+    Write-Log "резервная копия базы готова: $file"
+}
+
 # ── Запуск приложения ─────────────────────────────────────────────────────
 
 function Start-Stack {
@@ -192,6 +237,8 @@ function Start-Stack {
             Invoke-Quietly { & $Docker compose --env-file $EnvFile logs --tail 30 director } | ForEach-Object { Write-Log $_ }
             throw 'приложение не запустилось'
         }
+
+        Backup-Database -Docker $Docker
 
         Invoke-Quietly { & $Docker compose --env-file $EnvFile exec -T director alembic upgrade head }
         if ($LASTEXITCODE -ne 0) { throw 'не удалось обновить структуру базы' }

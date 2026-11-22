@@ -187,9 +187,20 @@ async def task_outcome(
         admin_staff_id = int(admin_staff_id) if admin_staff_id not in (None, "") else None
     except (TypeError, ValueError):
         admin_staff_id = None
-    return await client_base.record_outcome(
-        db, task_id, outcome, channel, comment, actor_id, admin_staff_id
+    # client_id — тот, которого админ реально видел на карточке; сверяется
+    # с текущим состоянием задачи перед записью (решение владельца 22.11.2026).
+    client_id = body.get("client_id")
+    try:
+        client_id = int(client_id) if client_id not in (None, "") else None
+    except (TypeError, ValueError):
+        client_id = None
+    result = await client_base.record_outcome(
+        db, task_id, outcome, channel, comment, actor_id, admin_staff_id,
+        expected_client_id=client_id,
     )
+    if not result.get("ok"):
+        raise HTTPException(status_code=409, detail=result.get("error", "не удалось записать результат"))
+    return result
 
 
 @router.post("/clients/{client_id}/do-not-call")

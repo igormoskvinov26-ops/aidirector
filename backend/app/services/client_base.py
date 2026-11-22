@@ -14,6 +14,7 @@ from datetime import date, datetime, timedelta
 from statistics import median
 from zoneinfo import ZoneInfo
 
+from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -769,7 +770,24 @@ ACTIONABLE_SEGMENTS = ["due", "risk", "late", "lost"]
 
 
 async def refresh_tasks(session: AsyncSession) -> dict:
-    """Regenerate today's contact queue from actionable segments (no duplicates)."""
+    """Пересобрать сегодняшнюю очередь обзвона из актуальных сегментов.
+
+    Решение владельца 22.11.2026 (критический баг, найденный в проде): раньше
+    эта функция на каждый цикл синхронизации (каждые несколько минут, весь
+    день) СНАЧАЛА УДАЛЯЛА ВСЕ открытые задачи, а затем заводила их заново —
+    даже тем клиентам, чей сегмент вообще не изменился. У админа, открывшего
+    очередь обзвона и работающего с ней 10-15 минут, половина карточек на
+    экране ссылалась на уже удалённые id задач: отметка результата звонка
+    уходила в record_outcome(task_id), которая тихо отвечала «задача не
+    найдена», карточка всё равно пропадала с экрана (фронтенд не проверял
+    ответ), а строка в журнал обзвона не писалась вовсе — «после отметки
+    клиент не попадает в журнал».
+
+    Теперь задача конкретного клиента в конкретном сегменте — это одна и та
+    же строка (тот же id) от цикла к циклу, пока сегмент не изменился:
+    добавляются только новые, убираются только переставшие быть актуальными,
+    у остальных id стабилен весь день.
+    """
     profiles = await build_client_profiles(session)
     today = moscow_today()
 
@@ -782,29 +800,40 @@ async def refresh_tasks(session: AsyncSession) -> dict:
     # «НЕ ЗВОНИТЬ!» — такого клиента в очередь больше не ставим.
     не_звонить = {cid for cid, c in clients.items() if c.do_not_call}
 
-    # Remove all still-open tasks (idempotent daily refresh — old days' tasks are stale).
-    from sqlalchemy import delete
-    await session.execute(
-        delete(ContactTask).where(ContactTask.status == "open")
-    )
+    актуальные = {
+        (cid, p["segment"])
+        for cid, p in profiles.items()
+        if p["segment"] in ACTIONABLE_SEGMENTS and cid not in не_звонить
+    }
+
+    существующие = (await session.execute(
+        select(ContactTask).where(ContactTask.status == "open", ContactTask.due_date == today)
+    )).scalars().all()
+    существующие_ключи = {(t.client_id, t.group_code): t for t in существующие}
+
+    # Убираем только то, что перестало быть актуальным (сегмент сменился,
+    # клиент вернулся с визитом, попал в «не звонить» и т.п.) — не всё подряд.
+    устарели = [t.id for key, t in существующие_ключи.items() if key not in актуальные]
+    if устарели:
+        from sqlalchemy import delete
+        await session.execute(delete(ContactTask).where(ContactTask.id.in_(устарели)))
 
     created = 0
-    for cid, p in profiles.items():
-        if p["segment"] not in ACTIONABLE_SEGMENTS or cid in не_звонить:
-            continue
-        task = ContactTask(
+    for cid, segment in актуальные:
+        if (cid, segment) in существующие_ключи:
+            continue  # уже в очереди сегодня — id трогать нельзя, админ мог открыть эту карточку
+        session.add(ContactTask(
             client_id=cid,
-            group_code=p["segment"],
-            priority=TASK_PRIORITY.get(p["segment"], 1),
+            group_code=segment,
+            priority=TASK_PRIORITY.get(segment, 1),
             due_date=today,
             status="open",
             script_version="v1",
-        )
-        session.add(task)
+        ))
         created += 1
 
     await session.commit()
-    return {"tasks_created": created, "date": today.isoformat()}
+    return {"tasks_created": created, "tasks_removed": len(устарели), "date": today.isoformat()}
 
 
 async def get_last_service_map(session: AsyncSession, client_ids: list[int]) -> dict[int, str]:
@@ -971,10 +1000,27 @@ async def record_outcome(
     comment: str | None,
     actor_id: str | None,
     admin_staff_id: int | None = None,
+    expected_client_id: int | None = None,
 ) -> dict:
+    """Записать результат звонка по задаче ``task_id``.
+
+    ``expected_client_id`` — вторая линия защиты (решение владельца
+    22.11.2026, найденный в проде критический баг): фронтенд передаёт id
+    клиента, которого админ реально видел на карточке. Если задача к этому
+    моменту уже ссылается на другого клиента (очередь успела пересобраться
+    у кого-то ещё между открытием страницы и нажатием кнопки) — отказываем,
+    а не пишем звонок не тому клиенту молча. При отсутствии параметра
+    (старые вызовы, внутренние) проверка пропускается.
+    """
     task = await session.get(ContactTask, task_id)
     if task is None:
         return {"ok": False, "error": "task not found"}
+    if expected_client_id is not None and task.client_id != expected_client_id:
+        logger.warning(
+            f"обзвон: задача {task_id} теперь у клиента {task.client_id}, "
+            f"а админ видел {expected_client_id} — отказ вместо ложной записи"
+        )
+        return {"ok": False, "error": "client mismatch: очередь обновилась, обновите страницу"}
     task.status = "done"
     attempt = ContactAttempt(
         task_id=task_id,

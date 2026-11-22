@@ -39,6 +39,12 @@ git ls-files -z backend frontend local scripts assets .env.example .dockerignore
     | tar --null -cf - -T - \
     | tar -xf - -C "$pkg/app"
 
+# bootstrap.ps1 ставится рядом с app/, не внутри него — и раньше обновление
+# его вообще не трогало: баг в самом .bat (всегда печатал «Готово») мог
+# жить сколько угодно, обновления бы его не чинили. Теперь кладём свежую
+# копию и в пакет: .bat сам решит, менять ли её на диске.
+cp "$here/bootstrap.ps1" "$pkg/bootstrap.ps1"
+
 if find "$pkg/app" -name '.env' -o -name '.env.*' ! -name '.env.example' | grep -q .; then
     echo "В payloadе оказался файл настроек — сборка остановлена." >&2
     exit 1
@@ -65,6 +71,24 @@ if not exist "%TARGET%\bootstrap.ps1" (
   pause
   exit /b 1
 )
+
+rem Резервная копия текущей версии — если обновление упадёт, старая версия
+rem не теряется бесследно (решение владельца 22.11.2026: обновление дважды
+rem роняло работающую установку за неделю).
+set "BACKUPS=%TARGET%\backups"
+if not exist "%BACKUPS%" mkdir "%BACKUPS%" >nul 2>&1
+set "STAMP="
+for /f %%i in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd-HHmmss"') do set "STAMP=%%i"
+if defined STAMP (
+  echo Делаю резервную копию текущей версии ...
+  robocopy "%TARGET%\app" "%BACKUPS%\app-%STAMP%" /E /XD node_modules .venv __pycache__ output .git /XF .env /NFL /NDL /NJH /NJS /NP >nul
+  copy /y "%TARGET%\bootstrap.ps1" "%BACKUPS%\bootstrap-%STAMP%.ps1" >nul 2>&1
+  rem Храним только последние 3 копии — иначе папка растёт бесконечно.
+  powershell -NoProfile -Command "Get-ChildItem '%BACKUPS%' -Directory -Filter 'app-*' | Sort-Object Name -Descending | Select-Object -Skip 3 | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue; Get-ChildItem '%BACKUPS%' -Filter 'bootstrap-*.ps1' | Sort-Object Name -Descending | Select-Object -Skip 3 | Remove-Item -Force -ErrorAction SilentlyContinue"
+) else (
+  echo Резервную копию снять не удалось — продолжаю без неё.
+)
+
 echo Копирую файлы в %TARGET%\app ...
 robocopy "%~dp0app" "%TARGET%\app" /E /XD node_modules .venv __pycache__ output .git /XF .env /NFL /NDL /NJH /NJS /NP >nul
 if %ERRORLEVEL% GEQ 8 (
@@ -72,6 +96,7 @@ if %ERRORLEVEL% GEQ 8 (
   pause
   exit /b 1
 )
+if exist "%~dp0bootstrap.ps1" copy /y "%~dp0bootstrap.ps1" "%TARGET%\bootstrap.ps1" >nul
 echo Собираю и запускаю Директора. Первый раз это занимает несколько минут ...
 powershell -NoProfile -ExecutionPolicy Bypass -File "%TARGET%\bootstrap.ps1" -Mode install
 set "BOOTSTRAP_CODE=%ERRORLEVEL%"

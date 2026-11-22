@@ -572,6 +572,7 @@ function AdminView({
   const [busy, setBusy] = useState<number | null>(null);
   const тёмнаяАдмин = useDark();
   const [journalKey, setJournalKey] = useState(0);
+  const [ошибкаКарточки, setОшибкаКарточки] = useState<string | null>(null);
 
   const fetchTasks = async () => {
     setLoading(true);
@@ -588,10 +589,11 @@ function AdminView({
     fetchTasks();
   }, []);
 
-  const recordOutcome = async (id: number, outcome: string, channel: string) => {
+  const recordOutcome = async (id: number, clientId: number, outcome: string, channel: string) => {
     setBusy(id);
+    setОшибкаКарточки(null);
     try {
-      await fetch(`/api/client-base/tasks/${id}/outcome`, {
+      const r = await fetch(`/api/client-base/tasks/${id}/outcome`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -599,12 +601,27 @@ function AdminView({
           channel,
           actor_id: выбранный?.name ?? "admin",
           admin_staff_id: выбранный?.staff_id ?? null,
+          client_id: clientId,
         }),
       });
+      if (!r.ok) {
+        // Очередь успела пересобраться — карточка на экране устарела.
+        // Убирать её молча нельзя: звонок в журнал не попал, это и есть
+        // критический баг, который отсюда и пошёл (решение 22.11.2026).
+        const тело = await r.json().catch(() => ({}));
+        setОшибкаКарточки(
+          тело.detail || "Не удалось записать результат — обновите список и попробуйте снова."
+        );
+        await fetchTasks();
+        return;
+      }
       setTasks((prev) => prev.filter((t) => t.id !== id));
       setJournalKey((k) => k + 1);
-    } catch {}
-    setBusy(null);
+    } catch {
+      setОшибкаКарточки("Сервер не отвечает — результат не записан, попробуйте ещё раз.");
+    } finally {
+      setBusy(null);
+    }
   };
 
   const неЗвонить = async (id: number, clientId: number) => {
@@ -675,6 +692,13 @@ function AdminView({
         <СчётчикЗвонков adminId={выбранный?.staff_id ?? null} refreshKey={journalKey} />
       </div>
 
+      {ошибкаКарточки && (
+        <div role="alert" className="flex items-center justify-between gap-3 rounded-xl border border-loss/40 bg-loss/10 px-4 py-2.5 text-sm text-loss">
+          <span>{ошибкаКарточки}</span>
+          <button onClick={() => setОшибкаКарточки(null)} className="shrink-0 hover:underline">скрыть</button>
+        </div>
+      )}
+
       <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-muted-light dark:text-muted">
         <div className="flex items-center gap-2">
           <ClipboardList size={16} />
@@ -706,7 +730,7 @@ function AdminView({
               key={t.id}
               task={t}
               busy={busy === t.id}
-              onOutcome={(o, c) => recordOutcome(t.id, o, c)}
+              onOutcome={(o, c) => recordOutcome(t.id, t.client_id, o, c)}
               onSaveNote={(note) => saveNote(t.id, t.client_id, note)}
               onDoNotCall={() => неЗвонить(t.id, t.client_id)}
             />
