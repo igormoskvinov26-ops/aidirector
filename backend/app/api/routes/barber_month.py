@@ -49,6 +49,17 @@ def _only_own(masters: list[dict], staff_id: int | None) -> list[dict]:
     return [m for m in masters if int(m["staff_id"]) == staff_id]
 
 
+def _warnings_for_master(warnings: list[str], own_name: str | None) -> list[str]:
+    """Предупреждения о рассинхронизации id (barber_month.report) именные —
+    начинаются с «Имя». Мастер должен видеть только своё, не чужие деньги
+    и не чужие проблемы с настройками. Общие предупреждения (график,
+    косметика, список сотрудников) с « не начинаются и остаются у всех."""
+    return [
+        w for w in warnings
+        if not w.startswith("«") or (own_name and w.startswith(f"«{own_name}»"))
+    ]
+
+
 def _вклад(строка: dict) -> dict:
     """Сколько мастер принёс салону к текущему моменту.
 
@@ -237,8 +248,19 @@ async def payroll(request: Request) -> dict:
         result["scope"] = "all"
         return result
 
-    result["masters"] = _only_own(result["masters"], getattr(request.state, "staff_id", None))
+    own_staff_id = getattr(request.state, "staff_id", None)
+    result["masters"] = _only_own(result["masters"], own_staff_id)
     result["scope"] = "own"
+
+    from app.config import settings
+
+    own_rule = next(
+        (r for r in settings.barber_payroll_rules if own_staff_id is not None and int(r["staff_id"]) == own_staff_id),
+        None,
+    )
+    result["warnings"] = _warnings_for_master(
+        result["warnings"], own_rule["name"] if own_rule else None
+    )
     return result
 
 
