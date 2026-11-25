@@ -39,11 +39,13 @@ git ls-files -z backend frontend local scripts assets .env.example .dockerignore
     | tar --null -cf - -T - \
     | tar -xf - -C "$pkg/app"
 
-# bootstrap.ps1 ставится рядом с app/, не внутри него — и раньше обновление
-# его вообще не трогало: баг в самом .bat (всегда печатал «Готово») мог
-# жить сколько угодно, обновления бы его не чинили. Теперь кладём свежую
-# копию и в пакет: .bat сам решит, менять ли её на диске.
-cp "$here/bootstrap.ps1" "$pkg/bootstrap.ps1"
+# bootstrap.ps1 в пакет НЕ кладётся. На машинах стоит версия поставщика из
+# полного установщика — она новее той, что в этом репозитории (в ней есть,
+# например, согласование пароля базы с .env, которое отрабатывает на каждой
+# установке). 9.17.7–9.17.11 затирали её здешней копией, и обновление
+# перестало проходить (журнал владельца, 25.11.2026). Пока здешний
+# bootstrap.ps1 не сверен с поставщицким, обновление его не трогает, а .bat
+# ниже возвращает оригинал из резервной копии, если его успели заменить.
 
 # Снятие диагностики — тоже рядом с app/, тоже обновляется каждый раз.
 # Работает независимо от того, запускается ли сам Директор.
@@ -60,34 +62,59 @@ if [ -n "$TOP_LOGIN" ] && [ -n "$TOP_PASSWORD" ]; then
     echo "Добавлен top-seed.env для автозаведения top ($TOP_LOGIN)."
 fi
 
+# Обновить-Директор.bat. Устроен по образцу того, что два месяца работало
+# (до 9.17.7): robocopy файлов и РОВНО ОДИН вызов PowerShell — bootstrap.ps1
+# -Mode install. Всё, что добавлено сверху, — чистый batch, без PowerShell:
+#
+#  1. Возврат bootstrap.ps1 поставщика. 9.17.7–9.17.11 подменяли его здешним
+#     (узнаётся по строке rubl-backup.dump — она есть только в здешнем).
+#     Оригинал 9.17.10 успел сохранить в backups\bootstrap-*.ps1; берём
+#     копию без этой строки и не короче 5 КБ (защита от обрывка).
+#  2. Резервная копия текущей app\ — robocopy /MIR в один слот app-previous.
+#     Без меток времени: метку в batch не получить без for /f (команда) или
+#     PowerShell, а оба варианта перед docker compose уже ломали установку.
+#  3. Простой текстовый прогресс docker compose/buildx. На машине владельца
+#     docker compose up начал мгновенно падать с «failed to get console: The
+#     handle is invalid» — он пытается рисовать интерактивный прогресс в
+#     консоли, которой у него нет. COMPOSE_PROGRESS/BUILDKIT_PROGRESS=plain
+#     это отключают; старые версии неизвестные переменные просто игнорируют.
+#     setx — чтобы и автозапуск при входе в систему шёл тем же путём.
+#  4. Одна повторная попытка: в журнале владельца сбои docker compose up
+#     (18.09, 30.09) проходили со второго раза.
+#
+# Комментарии внутри .bat — только ASCII: кириллица в rem сразу после
+# chcp 65001 уже ломалась у cmd.exe (Собрать-Диагностику.bat, 25.11.2026).
 cat > "$pkg/Обновить-Директор.bat" << BAT
 @echo off
 chcp 65001 >nul
-rem ========================================================================
-rem  Обновление РублЪ Директор до $VERSION (программа в окне называется «Пульт»).
-rem  Копирует новые файлы поверх установленных. Ваш .env, база, логины и
-rem  папка output не затрагиваются. Затем запускает ту же фоновую сборку,
-rem  что и установщик.
-rem ========================================================================
+rem Director update to $VERSION. See installer/build-win-update.sh for details.
 set "TARGET=%LOCALAPPDATA%\RublDirector"
+set "BACKUPS=%TARGET%\backups"
 if not exist "%TARGET%\bootstrap.ps1" (
   echo Директор не найден в %TARGET%.
   echo Сначала поставьте полный установщик, потом запустите это обновление.
   pause
   exit /b 1
 )
+if not exist "%BACKUPS%" mkdir "%BACKUPS%"
 
-rem Резервная копия текущей версии — если обновление упадёт, старая версия
-rem не теряется бесследно (решение владельца 22.11.2026: обновление дважды
-rem роняло работающую установку за неделю).
-rem
-rem Важно: обычный вызов powershell -File, НЕ for /f с захватом вывода.
-rem for /f ('команда') ломает дескриптор консоли cmd.exe для всех
-rem последующих команд в этом же .bat, включая docker compose up —
-rem воспроизведено на реальной машине 25.11.2026 ("failed to get console:
-rem The handle is invalid", docker compose up падал мгновенно с кодом 1).
+rem Step 1: put back the vendor bootstrap.ps1 if an earlier update replaced it.
+findstr /c:"rubl-backup.dump" "%TARGET%\bootstrap.ps1" >nul 2>&1
+if errorlevel 1 goto bootstrap_ok
+set "VENDOR_BS="
+for %%f in ("%BACKUPS%\bootstrap-*.ps1") do (
+  if %%~zf GTR 5000 (
+    findstr /c:"rubl-backup.dump" "%%~f" >nul 2>&1 || set "VENDOR_BS=%%~f"
+  )
+)
+if not defined VENDOR_BS goto bootstrap_ok
+echo Возвращаю штатный bootstrap.ps1 из резервной копии ...
+copy /y "%VENDOR_BS%" "%TARGET%\bootstrap.ps1" >nul
+:bootstrap_ok
+
+rem Step 2: backup of the current app folder (batch only, no PowerShell).
 echo Делаю резервную копию текущей версии ...
-powershell -NoProfile -ExecutionPolicy Bypass -File "%TARGET%\bootstrap.ps1" -Mode backup-only
+robocopy "%TARGET%\app" "%BACKUPS%\app-previous" /MIR /XD node_modules .venv __pycache__ output .git /XF .env /NFL /NDL /NJH /NJS /NP >nul
 
 echo Копирую файлы в %TARGET%\app ...
 robocopy "%~dp0app" "%TARGET%\app" /E /XD node_modules .venv __pycache__ output .git /XF .env /NFL /NDL /NJH /NJS /NP >nul
@@ -96,23 +123,38 @@ if %ERRORLEVEL% GEQ 8 (
   pause
   exit /b 1
 )
-if exist "%~dp0bootstrap.ps1" copy /y "%~dp0bootstrap.ps1" "%TARGET%\bootstrap.ps1" >nul
 if exist "%~dp0run-diagnostics.ps1" copy /y "%~dp0run-diagnostics.ps1" "%TARGET%\run-diagnostics.ps1" >nul
 if exist "%~dp0Собрать-Диагностику.bat" copy /y "%~dp0Собрать-Диагностику.bat" "%TARGET%\Собрать-Диагностику.bat" >nul
-echo Собираю и запускаю Директора. Первый раз это занимает несколько минут ...
+
+rem Step 3: plain-text progress for docker compose and buildx (no console UI).
+set "COMPOSE_PROGRESS=plain"
+set "BUILDKIT_PROGRESS=plain"
+set "COMPOSE_ANSI=never"
+set "COMPOSE_MENU=false"
+setx COMPOSE_PROGRESS plain >nul 2>&1
+setx BUILDKIT_PROGRESS plain >nul 2>&1
+setx COMPOSE_ANSI never >nul 2>&1
+setx COMPOSE_MENU false >nul 2>&1
+
+rem Step 4: build and start, one automatic retry.
+echo Собираю и запускаю Директора. Это может занять несколько минут ...
 powershell -NoProfile -ExecutionPolicy Bypass -File "%TARGET%\bootstrap.ps1" -Mode install
 set "BOOTSTRAP_CODE=%ERRORLEVEL%"
-rem top-seed.env приложение уже прочитало и стёрло внутри контейнера при
-rem старте — эта копия на диске здесь больше не нужна.
+if "%BOOTSTRAP_CODE%"=="0" goto finish
+echo.
+echo Первая попытка не удалась, код %BOOTSTRAP_CODE%. Пробую ещё раз через 20 секунд ...
+ping -n 21 127.0.0.1 >nul
+powershell -NoProfile -ExecutionPolicy Bypass -File "%TARGET%\bootstrap.ps1" -Mode install
+set "BOOTSTRAP_CODE=%ERRORLEVEL%"
+:finish
 if exist "%TARGET%\app\backend\top-seed.env" del /f /q "%TARGET%\app\backend\top-seed.env"
 echo.
 if "%BOOTSTRAP_CODE%"=="0" (
   echo Готово. Откройте Директор ярлыком как обычно.
 ) else (
-  echo ОШИБКА: обновление не применилось ^(код %BOOTSTRAP_CODE%^).
-  echo Файлы скопированы, но сборка/миграция базы не завершилась успешно —
-  echo старая версия всё ещё работает. Пришлите разработчику файл журнала:
-  echo %TARGET%\log\bootstrap.log
+  echo ОШИБКА: обновление не применилось, код %BOOTSTRAP_CODE%.
+  echo Старая версия Директора продолжает работать.
+  echo Запустите Собрать-Диагностику.bat из этой папки и пришлите файл.
 )
 pause
 BAT
