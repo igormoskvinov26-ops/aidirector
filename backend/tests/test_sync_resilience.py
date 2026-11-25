@@ -55,8 +55,16 @@ class ПоддельныйКлиент:
 
 
 class ПоддельнаяСессия:
+    откатов = 0
+
     async def __aenter__(self) -> "ПоддельнаяСессия":
         return self
+
+    async def commit(self) -> None:
+        return None
+
+    async def rollback(self) -> None:
+        ПоддельнаяСессия.откатов += 1
 
     async def __aexit__(self, *_: object) -> None:
         return None
@@ -177,3 +185,16 @@ async def test_несколько_отказов_перечисляются(monk
 
     assert "сотрудники" in итог["error"]
     assert "продажи" in итог["error"]
+
+
+@pytest.mark.asyncio
+async def test_после_отказа_шага_транзакция_откатывается(monkeypatch, стенд):
+    """Без отката ошибка базы в визитах роняла и продажи: «current transaction
+    is aborted» (журнал салона 25.11.2026)."""
+    ПоддельнаяСессия.откатов = 0
+    клиент = ПоддельныйКлиент(падает={"visits"})
+    поставить_клиент(monkeypatch, клиент)
+    итог = await sync.sync_all()
+    assert ПоддельнаяСессия.откатов == 1
+    assert "sales" in клиент.вызвано
+    assert итог.get("sales") == 1

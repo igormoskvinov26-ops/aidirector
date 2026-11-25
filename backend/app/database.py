@@ -86,3 +86,55 @@ async def init_db() -> None:
     """
     async with engine.connect() as conn:
         await conn.execute(text("SELECT 1"))
+
+
+# Таблицы, где yclients_id — номер из общего счётчика YCLIENTS. Он уже
+# перевалил за потолок INTEGER (2 147 483 647), и выгрузка визитов падает,
+# пока колонка не расширена. Это делает миграция 0013; здесь — страховка на
+# случай, если установщик её не применил (так и было на машине салона
+# 16–25.11.2026: обновление базы падало, а приложение уже работало на новом
+# коде, и визиты не грузились).
+ТАБЛИЦЫ_С_YCLIENTS_ID = ("employees", "clients", "services", "products", "visits", "sales")
+
+
+async def расширить_yclients_id(движок=None) -> list[str]:
+    """Довести yclients_id до BIGINT там, где он ещё INTEGER. Не падает.
+
+    Каждая таблица — своей короткой транзакцией с ограниченным ожиданием
+    блокировки: одновременно держится не больше одной таблицы, поэтому
+    взаимной блокировки с работающей миграцией или выгрузкой не бывает.
+    Возвращает список расширенных таблиц.
+    """
+    движок = движок or engine
+    if движок.dialect.name != "postgresql":
+        return []
+    расширено: list[str] = []
+    for таблица in ТАБЛИЦЫ_С_YCLIENTS_ID:
+        for попытка in range(1, 4):
+            try:
+                async with движок.begin() as conn:
+                    тип = (
+                        await conn.execute(
+                            text(
+                                "SELECT data_type FROM information_schema.columns "
+                                "WHERE table_schema = current_schema() "
+                                "AND table_name = :t AND column_name = 'yclients_id'"
+                            ),
+                            {"t": таблица},
+                        )
+                    ).scalar()
+                    if тип != "integer":
+                        break
+                    await conn.execute(text("SET LOCAL lock_timeout = '10s'"))
+                    await conn.execute(
+                        text(f'ALTER TABLE "{таблица}" ALTER COLUMN yclients_id TYPE BIGINT')
+                    )
+                расширено.append(таблица)
+                logger.warning(f"{таблица}.yclients_id расширен до BIGINT при запуске")
+                break
+            except Exception as сбой:  # noqa: BLE001
+                logger.warning(
+                    f"{таблица}.yclients_id: расширить не удалось "
+                    f"(попытка {попытка} из 3): {type(сбой).__name__}: {сбой}"
+                )
+    return расширено

@@ -34,7 +34,7 @@ from app.api.routes.monthly_report import router as monthly_report_router
 from app.api.routes.settings import router as settings_router
 from app.api.yclients import YclientsНеНастроен
 from app.config import settings
-from app.database import check_db, init_db
+from app.database import check_db, init_db, расширить_yclients_id
 from app.main_roles import ROLE_MASTER, ROLE_OPERATOR, ROLE_OWNER
 from app.services import branches, configuration, credentials, salon
 
@@ -272,6 +272,7 @@ async def lifespan(app: FastAPI):
     # where client-base, finance and AI silently returned 500 forever.
     await init_db()
     logger.info("Database ready")
+    await расширить_yclients_id()
 
     settings.output_dir.mkdir(parents=True, exist_ok=True)
     settings.stories_dir.mkdir(parents=True, exist_ok=True)
