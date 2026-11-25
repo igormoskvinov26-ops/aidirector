@@ -15,7 +15,7 @@ BACKEND = Path(__file__).resolve().parents[1]
 def test_одна_голова():
     config = Config()
     config.set_main_option("script_location", str(BACKEND / "alembic"))
-    assert ScriptDirectory.from_config(config).get_heads() == ["0017_yclients_id_bigint"]
+    assert ScriptDirectory.from_config(config).get_heads() == ["0018_client_state_stamps"]
 
 
 def test_файлы_917_не_попадают_в_образ():

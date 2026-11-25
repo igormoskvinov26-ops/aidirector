@@ -90,6 +90,12 @@ class Client(Base):
     loyalty: Mapped[str | None] = mapped_column(String(8))
     loyalty_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     loyalty_by: Mapped[str | None] = mapped_column(String(64))
+    # Когда последний раз менялось каждое поле состояния обзвона клиента:
+    # {"call_status": "2026-11-25T10:00:00+00:00", "loyalty": ..., "tags": ...}.
+    # По ним общий сервер решает, чья правка свежее, — салона или Мака, и
+    # сливает правки разных полей (разбор жалобы 22.11.2026). Ставится само,
+    # см. _метка_состояния внизу файла.
+    state_stamps: Mapped[dict | None] = mapped_column(JSON)
     total_visits: Mapped[int] = mapped_column(Integer, default=0)
     total_spent: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
     last_visit_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -680,3 +686,64 @@ class Script(Base):
     updated_by: Mapped[str | None] = mapped_column(String(64))
 
     __table_args__ = (UniqueConstraint("kind", "key", "variant", name="uq_script_kind_key_variant"),)
+
+
+# --------------------------------------------------------------------------- #
+# Метка свежести состояния клиента для обмена через общий сервер
+# --------------------------------------------------------------------------- #
+
+ПОЛЯ_С_МЕТКАМИ = ("call_status", "next_contact_at", "loyalty", "do_not_call")
+# Обмен с общим сервером сам переносит метки с той стороны, где правка была,
+# и на время применения ставит этот флаг: своё «сейчас» тут ставить нельзя.
+ПРИМЕНЯЮ_ЧУЖОЕ = "hub_apply"
+
+
+def _отметить(клиент: "Client", поля: list[str], когда: str) -> None:
+    метки = dict(клиент.state_stamps or {})  # новый объект: правку на месте JSON не заметит
+    for поле in поля:
+        метки[поле] = когда
+    клиент.state_stamps = метки
+
+
+def _метка_состояния(session, _context, _instances) -> None:
+    """Перед записью в базу: у кого из клиентов поменялось состояние обзвона —
+    тем полям метку «сейчас». Срабатывает на любое место в коде, где эти поля
+    меняют, включая будущие, — забыть поставить метку руками нельзя."""
+    from datetime import UTC
+
+    from sqlalchemy import inspect
+
+    if session.info.get(ПРИМЕНЯЮ_ЧУЖОЕ):
+        return
+    сейчас = datetime.now(UTC).isoformat()
+    теги_тронуты: set[int] = set()
+    for obj in list(session.new) + list(session.dirty):
+        if isinstance(obj, Client):
+            insp = inspect(obj)
+            if obj in session.new:
+                поля = [п for п in ПОЛЯ_С_МЕТКАМИ if getattr(obj, п)]
+            else:
+                поля = [п for п in ПОЛЯ_С_МЕТКАМИ if insp.attrs[п].history.has_changes()]
+            if поля:
+                _отметить(obj, поля, сейчас)
+        elif isinstance(obj, ClientTagLink) and obj in session.new and obj.client_id:
+            теги_тронуты.add(obj.client_id)
+    for obj in session.deleted:
+        if isinstance(obj, ClientTagLink) and obj.client_id:
+            теги_тронуты.add(obj.client_id)
+    with session.no_autoflush:
+        for client_id in теги_тронуты:
+            клиент = session.get(Client, client_id)
+            if клиент is not None:
+                _отметить(клиент, ["tags"], сейчас)
+
+
+def _подключить_метку() -> None:
+    from sqlalchemy import event
+    from sqlalchemy.orm import Session
+
+    if not event.contains(Session, "before_flush", _метка_состояния):
+        event.listen(Session, "before_flush", _метка_состояния)
+
+
+_подключить_метку()

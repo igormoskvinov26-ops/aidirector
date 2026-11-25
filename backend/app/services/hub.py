@@ -30,6 +30,8 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import (
+    ПОЛЯ_С_МЕТКАМИ,
+    ПРИМЕНЯЮ_ЧУЖОЕ,
     AcquiringRow,
     AppSetting,
     CashBalances,
@@ -167,7 +169,9 @@ async def локальные(session: AsyncSession, today: date | None = None) -
 
 # Поля состояния клиента, которые разрешено выгружать. Имени и телефона здесь
 # нет и быть не должно — сервер за рубежом (решение владельца 16.10.2026).
-ПОЛЯ_СОСТОЯНИЯ = ("yclients_id", "next_contact_at", "call_status", "loyalty", "do_not_call", "tags")
+# Метки «stamps» — только время правки каждого поля, без имён и телефонов.
+ПОЛЯ_СОСТОЯНИЯ = ("yclients_id", "next_contact_at", "call_status", "loyalty", "do_not_call", "tags",
+                  "stamps")
 
 
 async def _состояние_клиентов(session: AsyncSession) -> list[dict]:
@@ -186,15 +190,31 @@ async def _состояние_клиентов(session: AsyncSession) -> list[di
             | (Client.loyalty.is_not(None))
             | (Client.do_not_call.is_(True))
             | (Client.id.in_(теги.keys() or [0]))
+            # Состояние сняли (светофор, тег) — строка всё равно нужна, иначе
+            # другой компьютер так и не узнает, что его сняли.
+            | (Client.state_stamps.is_not(None))
         )
     )).scalars()
     return [
         {"yclients_id": c.yclients_id,
          "next_contact_at": c.next_contact_at.isoformat() if c.next_contact_at else None,
          "call_status": c.call_status, "loyalty": c.loyalty,
-         "do_not_call": bool(c.do_not_call), "tags": теги.get(c.id, [])}
+         "do_not_call": bool(c.do_not_call), "tags": теги.get(c.id, []),
+         "stamps": c.state_stamps or {}}
         for c in строки
     ]
+
+
+def _момент(значение) -> datetime | None:
+    """Метка свежести к сравнимому виду: SQLite отдаёт время без пояса."""
+    if значение is None:
+        return None
+    if isinstance(значение, str):
+        try:
+            значение = datetime.fromisoformat(значение)
+        except ValueError:
+            return None
+    return значение.replace(tzinfo=UTC) if значение.tzinfo is None else значение.astimezone(UTC)
 
 
 # Поля, которые разрешено выгружать по звонку. Список закрытый: добавить сюда
@@ -248,6 +268,56 @@ async def _обзвон_в_документы(session: AsyncSession, today: date
             "record_id": попытка.yclients_record_id,
         })
     return {f"calls:{ym}:{моя}": items for ym, items in по_месяцам.items()}
+
+
+async def _применить_состояние(session: AsyncSession, свои: dict, коды: dict, строка: dict) -> None:
+    """Строка состояния одного клиента с другого компьютера — поле за полем.
+
+    Поле берётся, только если его правка там свежее, чем здесь: иначе
+    встречная правка с другого компьютера затирала только что поставленную
+    здесь отметку («Записан», «НЕ ЗВОНИТЬ», тег) — разбор жалобы 22.11.2026.
+    Правки разных полей одного клиента сливаются (здесь статус, там светофор).
+    Строка без меток (прислала версия до 9.25.6) меняет только те поля,
+    которые здесь ещё ни разу не правились, — как прежний обмен.
+    """
+    c = свои.get(строка.get("yclients_id"))
+    if c is None:
+        return  # такого клиента в этой базе нет — ничего не придумываем
+    старая_версия = "stamps" not in строка
+    чужие = строка.get("stamps") or {}
+    свои_метки = dict(c.state_stamps or {})
+    взять: list[str] = []
+    for поле in (*ПОЛЯ_С_МЕТКАМИ, "tags"):
+        своя, чужая = _момент(свои_метки.get(поле)), _момент(чужие.get(поле))
+        if своя is None:
+            if чужая is not None or старая_версия:
+                взять.append(поле)
+        elif чужая is not None and чужая > своя:
+            взять.append(поле)
+    if not взять:
+        return
+    if "next_contact_at" in взять:
+        n = строка.get("next_contact_at")
+        c.next_contact_at = date.fromisoformat(n) if n else None
+    if "call_status" in взять:
+        c.call_status = строка.get("call_status")
+    if "loyalty" in взять:
+        c.loyalty = строка.get("loyalty")
+    if "do_not_call" in взять:
+        c.do_not_call = bool(строка.get("do_not_call"))
+    for поле in взять:
+        if чужие.get(поле):
+            свои_метки[поле] = чужие[поле]
+    c.state_stamps = свои_метки or None
+    if "tags" in взять:
+        нужные = {коды[к] for к in строка.get("tags", []) if к in коды}
+        есть = set((await session.execute(
+            select(ClientTagLink.tag_id).where(ClientTagLink.client_id == c.id))).scalars())
+        for tag_id in нужные - есть:
+            session.add(ClientTagLink(client_id=c.id, tag_id=tag_id))
+        if есть - нужные:
+            await session.execute(delete(ClientTagLink).where(
+                ClientTagLink.client_id == c.id, ClientTagLink.tag_id.in_(есть - нужные)))
 
 
 async def _применить(session: AsyncSession, key: str, value: Any) -> None:
@@ -310,23 +380,13 @@ async def _применить(session: AsyncSession, key: str, value: Any) -> No
         # Состояние привязано к номеру клиента в YCLIENTS: имён на сервере нет.
         свои = {c.yclients_id: c for c in (await session.execute(select(Client))).scalars()}
         коды = {t.code: t.id for t in (await session.execute(select(ClientTag))).scalars()}
-        for строка in value:
-            c = свои.get(строка.get("yclients_id"))
-            if c is None:
-                continue  # такого клиента в этой базе нет — ничего не придумываем
-            n = строка.get("next_contact_at")
-            c.next_contact_at = date.fromisoformat(n) if n else None
-            c.call_status = строка.get("call_status")
-            c.loyalty = строка.get("loyalty")
-            c.do_not_call = bool(строка.get("do_not_call"))
-            нужные = {коды[к] for к in строка.get("tags", []) if к in коды}
-            есть = set((await session.execute(
-                select(ClientTagLink.tag_id).where(ClientTagLink.client_id == c.id))).scalars())
-            for tag_id in нужные - есть:
-                session.add(ClientTagLink(client_id=c.id, tag_id=tag_id))
-            if есть - нужные:
-                await session.execute(delete(ClientTagLink).where(
-                    ClientTagLink.client_id == c.id, ClientTagLink.tag_id.in_(есть - нужные)))
+        session.info[ПРИМЕНЯЮ_ЧУЖОЕ] = True
+        try:
+            for строка in value:
+                await _применить_состояние(session, свои, коды, строка)
+            await session.flush()
+        finally:
+            session.info.pop(ПРИМЕНЯЮ_ЧУЖОЕ, None)
     elif key.startswith("calls:"):
         # Чужие звонки в свои таблицы не пишем: клиентов с такими id здесь
         # может не быть. Держим как кэш — журнал обзвона показывает их рядом
@@ -417,7 +477,13 @@ async def обмен(session: AsyncSession, client: httpx.AsyncClient, today: da
             continue
         await _применить(session, key, d["value"])
         now_local = (await локальные(session, today)).get(key, d["value"])
-        known[key] = {"h": _хеш(now_local), "seq": d["seq"]}
+        # Состояние клиентов сливается построчно по свежести. Если после
+        # слияния своё отличается от пришедшего (здесь есть правки новее),
+        # запоминаем хеш пришедшего — тогда следующий цикл отправит слитое на
+        # сервер. Иначе правка, получившая 409, так и не доезжала до другого
+        # компьютера.
+        принято = d["value"] if key == "client_state" else now_local
+        known[key] = {"h": _хеш(принято), "seq": d["seq"]}
         pulled += 1
     state["cursor"] = body["seq"]
     await _сохранить_состояние(session, state)

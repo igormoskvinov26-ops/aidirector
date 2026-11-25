@@ -1249,7 +1249,13 @@ async def delete_tag(session: AsyncSession, tag_id: int) -> dict:
     тег = await session.get(ClientTag, tag_id)
     if тег is None:
         return {"ok": True}
-    await session.execute(_delete(ClientTagLink).where(ClientTagLink.tag_id == tag_id))
+    # Поштучно, а не массовым DELETE: у каждого клиента с этим тегом должна
+    # смениться метка свежести, иначе общий сервер вернёт тег обратно.
+    for связь in (await session.execute(
+        select(ClientTagLink).where(ClientTagLink.tag_id == tag_id)
+    )).scalars().all():
+        await session.delete(связь)
+    await session.flush()  # связи — раньше самого тега: на них ссылается внешний ключ
     await session.execute(_delete(Script).where(Script.kind == "tag", Script.key == тег.code))
     await session.delete(тег)
     await session.commit()
@@ -1259,14 +1265,14 @@ async def delete_tag(session: AsyncSession, tag_id: int) -> dict:
 async def set_client_tag(session: AsyncSession, client_id: int, tag_id: int,
                          value: bool, actor: str | None) -> dict:
     """Повесить или снять тег. Повторное навешивание ничего не ломает."""
-    from sqlalchemy import delete as _delete
-
     есть = await session.scalar(select(ClientTagLink).where(
         ClientTagLink.client_id == client_id, ClientTagLink.tag_id == tag_id))
     if value and есть is None:
         session.add(ClientTagLink(client_id=client_id, tag_id=tag_id, created_by=actor))
     elif not value and есть is not None:
-        await session.execute(_delete(ClientTagLink).where(ClientTagLink.id == есть.id))
+        # Через session.delete, а не массовым DELETE: так снятие тега видит
+        # метка свежести состояния клиента (models._метка_состояния).
+        await session.delete(есть)
     await session.commit()
     return {"ok": True, "client_id": client_id, "tag_id": tag_id, "value": value}
 
