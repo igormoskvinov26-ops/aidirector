@@ -47,7 +47,7 @@ cp "$here/bootstrap.ps1" "$pkg/bootstrap.ps1"
 
 # Снятие диагностики — тоже рядом с app/, тоже обновляется каждый раз.
 # Работает независимо от того, запускается ли сам Директор.
-cp "$here/Собрать-Диагностику.ps1" "$pkg/Собрать-Диагностику.ps1"
+cp "$here/run-diagnostics.ps1" "$pkg/run-diagnostics.ps1"
 cp "$here/Собрать-Диагностику.bat" "$pkg/Собрать-Диагностику.bat"
 
 if find "$pkg/app" -name '.env' -o -name '.env.*' ! -name '.env.example' | grep -q .; then
@@ -102,7 +102,7 @@ if %ERRORLEVEL% GEQ 8 (
   exit /b 1
 )
 if exist "%~dp0bootstrap.ps1" copy /y "%~dp0bootstrap.ps1" "%TARGET%\bootstrap.ps1" >nul
-if exist "%~dp0Собрать-Диагностику.ps1" copy /y "%~dp0Собрать-Диагностику.ps1" "%TARGET%\Собрать-Диагностику.ps1" >nul
+if exist "%~dp0run-diagnostics.ps1" copy /y "%~dp0run-diagnostics.ps1" "%TARGET%\run-diagnostics.ps1" >nul
 if exist "%~dp0Собрать-Диагностику.bat" copy /y "%~dp0Собрать-Диагностику.bat" "%TARGET%\Собрать-Диагностику.bat" >nul
 echo Собираю и запускаю Директора. Первый раз это занимает несколько минут ...
 powershell -NoProfile -ExecutionPolicy Bypass -File "%TARGET%\bootstrap.ps1" -Mode install
@@ -121,6 +121,12 @@ if "%BOOTSTRAP_CODE%"=="0" (
 )
 pause
 BAT
+
+# CRLF, не LF: cmd.exe читает .bat блоками и иногда путает многобайтовые
+# символы кириллицы в комментариях сразу после chcp 65001, если файл в
+# Unix-окончаниях строк — воспроизведено на реальной машине 22.11.2026
+# (слетела отдельная Собрать-Диагностику.bat ровно по этой причине).
+sed -i 's/$/\r/' "$pkg/Обновить-Директор.bat"
 
 cat > "$pkg/ПРОЧТИ МЕНЯ.txt" << TXT
 Обновление до $VERSION

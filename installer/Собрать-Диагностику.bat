@@ -1,11 +1,9 @@
 @echo off
 chcp 65001 >nul
-rem ==========================================================================
-rem  Снимает диагностику Директора: журнал запуска, состояние Docker,
-rem  последние строки логов контейнеров — всё в один файл на Рабочем столе.
-rem
-rem  Работает, даже если сам Директор не запускается или виснет: это не
-rem  часть приложения, а отдельная проверка снаружи.
-rem ==========================================================================
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0Собрать-Диагностику.ps1"
+rem Diagnostics collector for the Director app.
+rem Comments in this file are kept plain ASCII on purpose: Cyrillic right
+rem after "chcp 65001" has been seen to get garbled by cmd.exe on some
+rem Windows builds (it reads the file in blocks before chcp takes effect).
+rem All actual explanations live in PROCHTI MENYA.txt and the .ps1 file.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0run-diagnostics.ps1"
 pause

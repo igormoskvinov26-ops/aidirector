@@ -84,7 +84,7 @@ Section "Директор"
     DetailPrint "Распаковываю Директора в $INSTDIR"
     SetOutPath "$INSTDIR"
     File "bootstrap.ps1"
-    File "Собрать-Диагностику.ps1"
+    File "run-diagnostics.ps1"
     File "Собрать-Диагностику.bat"
     File "director.ico"
 
