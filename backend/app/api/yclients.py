@@ -161,6 +161,17 @@ class YclientsОтказ(httpx.HTTPStatusError):
         super().__init__(текст, request=response.request, response=response)
 
 
+class Выгрузка(list):
+    """Список строк ответа плюс признак, что забрано всё, что есть.
+
+    По нему выгрузка решает, можно ли считать отсутствующую запись удалённой
+    в YCLIENTS: по оборванной выгрузке так делать нельзя — «отменились» бы
+    настоящие визиты. Признак живёт в самом списке, поэтому переживает и кэш.
+    """
+
+    полная: bool = False
+
+
 class YClientsClient:
     def __init__(self, company_id: int | None = None, user_token: str | None = None):
         # Ключи берутся через configuration, а не напрямую из .env: владелец
@@ -246,6 +257,7 @@ class YClientsClient:
         август приходило 40 визитов из примерно 370, и молча — без ошибки.
         """
         all_data: list[dict[str, Any]] = []
+        полная = False
         page = 1
         query = (params or {}).copy()
         # Размер страницы просим под двумя именами. Какое понимает конкретный
@@ -271,6 +283,7 @@ class YClientsClient:
 
             if isinstance(result, list):
                 all_data.extend(result)
+                полная = True
                 break
 
             # Разбор конверта: отказ адреса больше не выглядит как «страниц
@@ -278,6 +291,7 @@ class YClientsClient:
             # неполная выгрузка молча считалась удачной.
             data = данные_ответа(result, path)
             if not data:
+                полная = True
                 break
 
             # Если адрес не понимает параметр page, он будет отдавать одну и ту
@@ -294,6 +308,7 @@ class YClientsClient:
             total = meta.get("total_count", 0) if isinstance(meta, dict) else 0
 
             if total > 0 and len(all_data) >= total:
+                полная = True
                 break
 
             # Предел страниц считаем от обещанного числа записей, а не держим
@@ -339,7 +354,9 @@ class YClientsClient:
             + f", страниц {page - 1}"
         )
 
-        return all_data
+        итог = Выгрузка(all_data)
+        итог.полная = полная
+        return итог
 
     def _ck(self, name: str, *parts: object) -> str:
         """Cache key scoped to the company this client talks to."""

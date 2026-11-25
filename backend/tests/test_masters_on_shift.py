@@ -52,7 +52,7 @@ async def test_мастер_на_смене_без_закрытых_записе
     await session.flush()
     for e in (дм, ар, кс, да):
         session.add(ShiftEmployee(shift_id=смена.id, staff_id=e.yclients_id,
-                                  staff_name_snapshot=e.name))
+                                  staff_name_snapshot=e.name, arrival_time="10:00"))
     await session.commit()
 
     состав = await finance._today_by_master(session, день)
@@ -88,3 +88,21 @@ async def test_работавший_мастер_не_выпадает_если_
 
     assert sorted(m["name"] for m in await finance._today_by_master(session, день)) == [
         "Дмитрий", "Ксения"]
+
+
+@pytest.mark.asyncio
+async def test_в_графике_но_не_пришёл_и_без_записей_не_на_смене(session):
+    """Арташ стоял в графике YCLIENTS (попал в состав смены), но не вышел."""
+    c, (дм, ар, кс, да) = await _салон(session)
+    session.add_all([_визит(c, дм, 1, "completed"), _визит(c, кс, 2, "completed")])
+    день = datetime.now(UTC).date()
+    смена = Shift(shift_date=день)
+    session.add(смена)
+    await session.flush()
+    for e, приход in ((дм, "10:00"), (ар, None), (кс, "11:00"), (да, "12:00")):
+        session.add(ShiftEmployee(shift_id=смена.id, staff_id=e.yclients_id,
+                                  staff_name_snapshot=e.name, arrival_time=приход))
+    await session.commit()
+
+    состав = sorted(m["name"] for m in await finance._today_by_master(session, день))
+    assert состав == ["Дарья", "Дмитрий", "Ксения"]  # Дарья пришла, записей ещё нет

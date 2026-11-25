@@ -360,6 +360,9 @@ class VisitRepository:
 
             raw_status = item.get("visit_attendance") if item.get("visit_attendance") is not None else item.get("status")
             normalized_status = _normalize_visit_status(raw_status)
+            if item.get("deleted"):
+                # Удалённая в YCLIENTS запись: денег по ней не будет.
+                normalized_status = "cancelled"
             visit_datetime = _parse_datetime(item.get("datetime"))
 
             if visit_datetime is None:
@@ -380,7 +383,16 @@ class VisitRepository:
                 is_new_client=bool(клиент.get("is_new")),
             ).on_conflict_do_update(
                 index_elements=["yclients_id"],
+                # Мастер и клиент обновляются тоже: администратор переносит
+                # запись на другого мастера, когда записанный не вышел. Раньше
+                # Пульт оставлял её за прежним, и тот попадал «на смену» с
+                # чужой выручкой (жалоба владельца 25.11.2026: Арташа не было,
+                # а в «Сегодня» он был с 2 430 ₽).
                 set_={
+                    "employee_id": employee_db_id,
+                    "client_id": client_db_id,
+                    "length_minutes": _целое(item.get("seance_length") or item.get("length")) // 60,
+                    "comment": item.get("comment"),
                     "datetime": visit_datetime,
                     "status": normalized_status,
                     "total_amount": total_amount,
@@ -430,6 +442,47 @@ class VisitRepository:
 
         await session.commit()
         return count
+
+    @staticmethod
+    async def отменить_пропавшие(
+        session: AsyncSession, data: list[dict], date_from: str, date_to: str
+    ) -> int:
+        """Записи окна выгрузки, которых больше нет в YCLIENTS, — в отменённые.
+
+        Запись, удалённую в YCLIENTS, выгрузка просто перестаёт присылать, и
+        раньше в Пульте она оставалась навсегда: «запланированный» визит
+        держал мастера «на смене» и добавлял выручку, которой не будет.
+
+        Вызывать только по полной выгрузке (Выгрузка.полная): по оборванной
+        «отменились» бы настоящие визиты. Если запись потом вернётся в окно,
+        обычная выгрузка восстановит её статус.
+        """
+        from datetime import timedelta
+        from zoneinfo import ZoneInfo
+
+        from sqlalchemy import update
+
+        москва = ZoneInfo("Europe/Moscow")
+        начало = datetime.combine(date.fromisoformat(date_from), datetime.min.time(), tzinfo=москва)
+        конец = datetime.combine(
+            date.fromisoformat(date_to) + timedelta(days=1), datetime.min.time(), tzinfo=москва
+        )
+        есть = {_целое(item.get("id")) for item in data or [] if isinstance(item, dict)}
+        строки = (await session.execute(
+            select(Visit.id, Visit.yclients_id).where(
+                Visit.datetime >= начало, Visit.datetime < конец, Visit.status != "cancelled"
+            )
+        )).all()
+        пропали = [vid for vid, yid in строки if int(yid) not in есть]
+        if not пропали:
+            return 0
+        for i in range(0, len(пропали), 500):
+            await session.execute(
+                update(Visit).where(Visit.id.in_(пропали[i:i + 500])).values(status="cancelled")
+            )
+        await session.commit()
+        logger.info(f"визиты: {len(пропали)} записей больше нет в YCLIENTS — помечены отменёнными")
+        return len(пропали)
 
 
 class ServiceRepository:

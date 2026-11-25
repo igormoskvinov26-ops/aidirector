@@ -731,29 +731,33 @@ async def _today_by_master(session: AsyncSession, day: date) -> list[dict]:
 async def _на_смене(session: AsyncSession, day: date) -> dict[int, str]:
     """Кто вышел на смену в этот день: {id сотрудника: имя}.
 
-    Источник тот же, что у раздела «Смена»: состав, сохранённый при открытии
-    смены (мастера по графику YCLIENTS и записям на день). Пока смена не
-    открыта — мастера, у которых на этот день есть записи, кроме отменённых
-    и неявок. Служебные «сотрудники» (лист ожидания) не считаются.
+    На смене тот, кому администратор отметил приход в разделе «Смена», или у
+    кого на этот день есть записи, кроме отменённых и неявок. Одного графика
+    YCLIENTS мало: мастер стоит в графике, но не вышел — и он попадал бы в
+    «Сегодня» со своим гарантом (жалоба владельца 25.11.2026: Арташа не было).
+    Служебные «сотрудники» (лист ожидания) не считаются.
     """
     skip = set(await _service_ids(session))
-    штат = (await session.execute(
+    пришли = (await session.execute(
         select(ShiftEmployee.staff_id)
         .join(Shift, Shift.id == ShiftEmployee.shift_id)
-        .where(Shift.shift_date == day)
+        .where(Shift.shift_date == day, ShiftEmployee.arrival_time.is_not(None),
+               ShiftEmployee.arrival_time != "")
     )).scalars().all()
-    if штат:
-        rows = await session.execute(
-            select(Employee.id, Employee.name).where(Employee.yclients_id.in_(штат))
-        )
-    else:
-        rows = await session.execute(
-            select(Employee.id, Employee.name)
-            .join(Visit, Visit.employee_id == Employee.id)
-            .where(func.date(Visit.datetime) == day, Visit.status.in_(COUNTED_STATUSES))
-            .distinct()
-        )
-    return {int(i): n for i, n in rows if int(i) not in skip}
+    состав: dict[int, str] = {}
+    if пришли:
+        for i, n in await session.execute(
+            select(Employee.id, Employee.name).where(Employee.yclients_id.in_(пришли))
+        ):
+            состав[int(i)] = n
+    for i, n in await session.execute(
+        select(Employee.id, Employee.name)
+        .join(Visit, Visit.employee_id == Employee.id)
+        .where(func.date(Visit.datetime) == day, Visit.status.in_(COUNTED_STATUSES))
+        .distinct()
+    ):
+        состав[int(i)] = n
+    return {i: n for i, n in состав.items() if i not in skip}
 
 
 def _break_even_for_split(

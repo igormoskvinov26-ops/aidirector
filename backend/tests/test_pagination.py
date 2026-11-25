@@ -237,3 +237,37 @@ async def test_размер_страницы_просится_двумя_име�
     assert увиденные["page_size"] == 200
     assert увиденные["count"] == 200
     await клиент.close()
+
+
+@pytest.mark.asyncio
+async def test_признак_полной_выгрузки(client, monkeypatch):
+    """По нему выгрузка решает, можно ли считать пропавшую запись удалённой."""
+    monkeypatch.setattr("app.api.yclients.RATE_LIMIT_DELAY", 0)
+
+    async def по_total(path, params=None):
+        страницы = {1: _страница(1, 50, всего=80), 2: _страница(2, 30, всего=80)}
+        return ПоддельныйОтвет(страницы[params["page"]])
+
+    monkeypatch.setattr(client, "_request", по_total)
+    assert (await client._get_paginated("/records/1")).полная
+
+    async def до_пустой(path, params=None):
+        return ПоддельныйОтвет({1: _страница(1, 50), 2: {"data": []}}[params["page"]])
+
+    monkeypatch.setattr(client, "_request", до_пустой)
+    assert (await client._get_paginated("/records/1")).полная
+
+    async def повтор(path, params=None):
+        return ПоддельныйОтвет(_страница(1, 50))  # адрес не понимает page
+
+    monkeypatch.setattr(client, "_request", повтор)
+    assert not (await client._get_paginated("/records/1")).полная
+
+    monkeypatch.setattr("app.api.yclients.ПРЕДЕЛ_СТРАНИЦ", 2)
+    monkeypatch.setattr("app.api.yclients.ЖЁСТКИЙ_ПРЕДЕЛ_СТРАНИЦ", 2)
+
+    async def без_конца(path, params=None):
+        return ПоддельныйОтвет(_страница(params["page"], 50))
+
+    monkeypatch.setattr(client, "_request", без_конца)
+    assert not (await client._get_paginated("/records/1")).полная

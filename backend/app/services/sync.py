@@ -231,6 +231,11 @@ async def sync_all(
                         session, records_data, employee_map, client_map, service_map
                     )
                     stats["visits"] = visit_count
+                    # Удалённые в YCLIENTS записи — только по полной выгрузке.
+                    if records_data and getattr(records_data, "полная", False):
+                        stats["visits_gone"] = await VisitRepository.отменить_пропавшие(
+                            session, records_data, date_from, date_to
+                        )
                 except Exception as беда:
                     await сбой(session, "visits", беда)
 
