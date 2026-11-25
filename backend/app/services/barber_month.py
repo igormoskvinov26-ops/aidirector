@@ -1,7 +1,8 @@
 """Read-only current-month barber statistics. No writes to CRM or payroll."""
 import asyncio
 import calendar
-from datetime import datetime, timedelta
+from collections import defaultdict
+from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from zoneinfo import ZoneInfo
 
@@ -26,6 +27,40 @@ def period(now):
     start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     end = start.replace(day=calendar.monthrange(now.year, now.month)[1]) + timedelta(days=1)
     return start, end
+
+
+async def future_booked_by_day(client, now: datetime) -> dict[date, Decimal]:
+    """Сумма уже записанного на оставшиеся до конца месяца дни — по дням.
+
+    Решение владельца 05.10.2026: отдельная цифра от кассовой выручки — это
+    ещё не заработанные деньги, а то, что уже стоит в записи (не выполнено,
+    не отменено и не неявка). Разбивка по дням (решение владельца 19.11.2026)
+    нужна, чтобы считать выручку не только на конец месяца, а и на
+    произвольную контрольную дату внутри него (день выплаты ЗП, аванса и т.п.) —
+    без повторных обращений к YCLIENTS на каждую дату.
+    """
+    _, end = period(now)
+    now = now.astimezone(MOSCOW)
+    записи = await pages(
+        client, f'/records/{client.company_id}', now.date().isoformat(),
+        (end - timedelta(days=1)).date().isoformat(),
+    )
+    by_day: dict[date, Decimal] = defaultdict(lambda: Decimal(0))
+    for record in записи:
+        if record.get('deleted'):
+            continue
+        dt = timestamp(record.get('datetime') or record.get('date'))
+        if dt <= now or dt >= end:
+            continue
+        if visit_attendance(record) not in (0, 2):
+            continue
+        by_day[dt.date()] += amount(record)
+    return dict(by_day)
+
+
+async def future_booked_revenue(client, now: datetime) -> Decimal:
+    """Сумма уже записанного на оставшиеся до конца месяца дни, одним числом."""
+    return sum((await future_booked_by_day(client, now)).values(), Decimal(0))
 
 
 def visit_attendance(record):
