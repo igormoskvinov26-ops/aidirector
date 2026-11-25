@@ -55,3 +55,22 @@ async def test_свой_звонок_не_двоится(session):
     (ключ, звонки), = документы.items()
     await hub._применить(session, ключ.rsplit(":", 1)[0], звонки)  # старый общий документ
     assert len((await client_base.call_log(session, None, None))["rows"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_звонок_с_другого_компьютера_помечен(session):
+    """Звонок, отмеченный на Маке, в журнале салона не выдаётся за свой
+    (разбор жалобы 22.11.2026: «попадают те, кому не звонили»)."""
+    await _звонок(session)
+    session.add(Client(id=2, yclients_id=502, name="Пётр", phone="+79990000002"))
+    await session.commit()
+    сейчас = datetime.now(UTC).isoformat()
+    чужой = [{"yclients_id": 502, "at": сейчас, "outcome": "no_answer", "group_code": "lost",
+              "admin": "Дарья", "was_lost": False, "verification": None, "record_id": None}]
+    await hub._применить(session, f"calls:{сейчас[:7]}:другаямашина", чужой)
+    await session.commit()
+
+    строки = (await client_base.call_log(session, None, None))["rows"]
+    по_номеру = {r["yclients_id"]: r for r in строки}
+    assert по_номеру[501]["source"] == "own"
+    assert по_номеру[502]["source"] == "other" and по_номеру[502]["name"] == "Пётр"

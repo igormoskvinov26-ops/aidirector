@@ -18,6 +18,8 @@ interface Строка {
   booking: "confirmed" | "not_confirmed" | "pending" | "error" | null;
   was_lost: boolean;
   admin: string | null;
+  /** «other» — звонок отмечен на другом компьютере (Мак владельца), не здесь. */
+  source?: "own" | "other";
   /** Дата и время записи, которую сверка нашла в YCLIENTS. */
   booking_at: string | null;
   booking_visit: string | null;
@@ -68,7 +70,7 @@ function значение(r: Строка, к: Колонка): string {
     case "phone": return r.phone ?? "";
     case "status": return r.outcome_label;
     case "tag": return r.tags.map((t) => t.name).join(" ");
-    case "admin": return r.admin ?? "";
+    case "admin": return (r.admin ?? "") + (r.source === "other" ? " (другой компьютер)" : "");
     case "call_date": return дата(r.call_date);
     case "next": return дата(r.next_contact_at);
     case "booking": return r.booking ? ЗАПИСЬ[r.booking]?.label ?? "" : "—";
@@ -272,7 +274,15 @@ export default function ЖурналОбзвона({ role }: { role: "owner" | "
                       ))}
                     </div>
                   </td>
-                  <td className="px-3 py-2.5 whitespace-nowrap">{r.admin || <span className="text-muted-light dark:text-muted">—</span>}</td>
+                  <td className="px-3 py-2.5 whitespace-nowrap">
+                    {r.admin || <span className="text-muted-light dark:text-muted">—</span>}
+                    {r.source === "other" && (
+                      <span className="ml-1.5 rounded px-1.5 py-0.5 text-[11px] text-muted-light dark:text-muted border border-milk-line dark:border-line"
+                            title="Звонок отмечен на другом компьютере и пришёл через общий сервер">
+                        другой компьютер
+                      </span>
+                    )}
+                  </td>
                   <td className="px-3 py-2.5 tabular-nums">{дата(r.call_date)}</td>
                   <td className="px-3 py-2.5 tabular-nums">{дата(r.next_contact_at) || <span className="text-muted-light dark:text-muted">—</span>}</td>
                   <td className="px-3 py-2.5">

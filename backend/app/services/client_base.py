@@ -2023,6 +2023,9 @@ async def _звонки_других_компьютеров(session: AsyncSessio
             "booking": (з.get("verification") or "pending") if исход == "booked" else None,
             "was_lost": bool(з.get("was_lost")),
             "admin": з.get("admin"),
+            # Звонок сделан на другом компьютере (Мак владельца), а не здесь.
+            # Журнал помечает такие строки, чтобы их не принимали за свои.
+            "source": "other",
             "booking_at": _в_москву(запись[0]) if запись else None,
             "booking_visit": запись[1] if запись else None,
         })
@@ -2082,6 +2085,7 @@ async def call_log(session: AsyncSession, с: date | None, по: date | None) ->
             "booking": (попытка.verification_status or "pending") if попытка.outcome == "booked" else None,
             "was_lost": bool(попытка.was_lost),
             "admin": попытка.actor_id,
+            "source": "own",
             "booking_at": _в_москву(записи[попытка.yclients_record_id][0])
             if попытка.yclients_record_id in записи else None,
             "booking_visit": записи[попытка.yclients_record_id][1] if попытка.yclients_record_id in записи else None,
