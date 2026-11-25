@@ -7,10 +7,10 @@
 Повторное нажатие кнопки показывает уже существующую, а не заводит вторую.
 """
 
+import logging
 import re
 from datetime import UTC, date, datetime
 
-from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -19,6 +19,8 @@ from app.models.models import Client, Shift, ShiftEmployee
 from app.services import cash_balances, client_base
 from app.services import shift as расчёт
 from app.services.telegram import отправить_сообщение
+
+logger = logging.getLogger(__name__)
 
 УСЛУГИ = "services"
 ТОВАРЫ = "products"
@@ -179,11 +181,6 @@ async def открыть(session: AsyncSession, день: date | None = None) ->
     смена.opened_at = datetime.now(UTC)
     await _мастера_смены(session, смена, снимок["masters"])
     await session.commit()
-
-    from app.services import hub
-
-    hub.запустить_витрину_в_фоне()
-
     return await текущая(session, день)
 
 
@@ -195,6 +192,18 @@ async def закрыть(session: AsyncSession, день: date | None = None) ->
         return await текущая(session, день)
 
     снимок = await расчёт.собрать_закрытие(день)
+    # Сверяем возвращённых с YCLIENTS по телефону (запрос владельца
+    # 11.10.2026): к закрытию смены у каждого «Записан» должен стоять статус.
+    # Сбой сверки закрытие не роняет — статусы останутся «ждёт».
+    try:
+        from app.services import monthly_report
+
+        await monthly_report.verify_pending(session)
+    except Exception as e:  # noqa: BLE001 — закрытие важнее сверки
+        logger.warning(f"Сверка обзвона с YCLIENTS при закрытии не удалась: {e}")
+    # Обзвон за этот день — из нашей базы: сколько звонков сделали, скольких
+    # записали и скольких подняли из потерянных (запрос владельца 11.10.2026).
+    снимок["calls"] = await client_base.calls_on(session, день)
     остатки = await cash_balances.получить(session)
     добавка = cash_balances.в_блок_денег(остатки, день)
     предупреждение_остатков = добавка.pop("warning", None)
@@ -206,15 +215,6 @@ async def закрыть(session: AsyncSession, день: date | None = None) ->
             "Остатки денег ещё не внесены — касса и счёт "
             "недоступны, пока владелец не укажет их хотя бы раз."
         )
-
-    # Обзвон потерянной/рисковой базы подтягивается в закрытие автоматом
-    # (решение владельца 06.10.2026) — администратору не нужно вносить
-    # звонки руками, их уже видно в журнале обзвона.
-    try:
-        снимок["calls"] = await client_base.calls_for_day(session, день)
-    except Exception as сбой:  # noqa: BLE001
-        logger.warning(f"смена {день}: обзвон не посчитался: {сбой}")
-        снимок["warnings"].append("Данные обзвона не подтянулись — показатели звонков недоступны.")
 
     if смена is None:
         смена = Shift(shift_date=день)
@@ -228,11 +228,6 @@ async def закрыть(session: AsyncSession, день: date | None = None) ->
     смена.closed_at = datetime.now(UTC)
     await _мастера_смены(session, смена, снимок["masters"])
     await session.commit()
-
-    from app.services import hub
-
-    hub.запустить_витрину_в_фоне()
-
     return await текущая(session, день)
 
 

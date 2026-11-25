@@ -1,5 +1,5 @@
 import Gauge from "./Gauge";
-import { Component, useEffect, useMemo, useRef, useState } from "react";
+import { Component, useEffect, useMemo, useState } from "react";
 import type { ErrorInfo, ReactNode } from "react";
 import {
   Bar,
@@ -29,9 +29,15 @@ import {
   Activity,
   Sunrise,
   Settings,
+  ClipboardList,
+  ExternalLink,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from "lucide-react";
 import { useDark, палитраГрафика } from "./тема";
-import ClientBasePage from "./ClientBasePage";
+import ClientBasePage, { РабочееМесто } from "./ClientBasePage";
+import ЖурналОбзвона from "./ЖурналОбзвона";
+import { СОБЫТИЕ } from "./фокус";
 import BarberMonthPage from "./BarberMonthPage";
 import BasePulsePage from "./BasePulsePage";
 import ShiftPage from "./ShiftPage";
@@ -1926,6 +1932,103 @@ function BookingsPage() {
   );
 }
 
+const АДМИН_ВКЛАДКИ = [
+  { id: "shift", label: "Смена", icon: Sunrise },
+  { id: "clients", label: "Клиентская база", icon: Users },
+  { id: "log", label: "Журнал обзвона", icon: ClipboardList },
+] as const;
+type АдминВкладка = (typeof АДМИН_ВКЛАДКИ)[number]["id"];
+
+/** Интерфейс администратора (запрос владельца 29.10.2026): только Смена,
+ *  обзвон и журнал. Открывается сам под ролью администратора, а владельцу —
+ *  по ссылке /#admin. */
+function АдминИнтерфейс({ role, имя, theme, setTheme, salonName }: {
+  role: Role;
+  имя: string | null;
+  theme: "dark" | "light";
+  setTheme: (t: "dark" | "light") => void;
+  salonName: string;
+}) {
+  const [вкладка, setВкладкаRaw] = useState<АдминВкладка>(() => {
+    try {
+      const v = localStorage.getItem("rubl-admin-tab");
+      if (v === "shift" || v === "clients" || v === "log") return v;
+    } catch { /* приватное окно */ }
+    return "clients";
+  });
+  // «К клиенту» из журнала обзвона — переключиться на базу.
+  useEffect(() => {
+    const on = () => setВкладка("clients");
+    window.addEventListener(СОБЫТИЕ, on);
+    return () => window.removeEventListener(СОБЫТИЕ, on);
+  }, []);
+  const setВкладка = (v: АдминВкладка) => {
+    setВкладкаRaw(v);
+    try { localStorage.setItem("rubl-admin-tab", v); } catch { /* не критично */ }
+  };
+
+  return (
+    <div className="min-h-screen text-ink-soft dark:text-cream">
+      <header className="sticky top-0 z-10 border-b border-milk-line dark:border-line/50 bg-milk-card/90 dark:bg-ink/85 backdrop-blur-xl">
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-2 px-4 py-2.5 md:px-8">
+          <div className="flex items-center gap-2.5">
+            {salonName === "РублЪ"
+              ? <img src={logo} alt="РублЪ" className="h-9 w-auto" />
+              : <span className="text-lg font-bold">{salonName}</span>}
+            <span className="text-xs text-muted-light dark:text-muted">Администратор</span>
+          </div>
+          <nav className="flex items-center gap-1">
+            {АДМИН_ВКЛАДКИ.map((в) => {
+              const Icon = в.icon;
+              const активна = вкладка === в.id;
+              return (
+                <button
+                  key={в.id}
+                  onClick={() => setВкладка(в.id)}
+                  className={`flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm transition-all ${
+                    активна
+                      ? "bg-milk-deep dark:bg-panel-deep font-medium text-ink-soft dark:text-cream shadow-[inset_0_-2px_0_var(--color-bronze)] dark:shadow-[inset_0_-2px_0_var(--color-gold)]"
+                      : "text-muted-light dark:text-muted hover:text-ink-soft dark:hover:text-cream"
+                  }`}
+                >
+                  <Icon size={16} className={активна ? "text-bronze dark:text-gold" : ""} />
+                  {в.label}
+                </button>
+              );
+            })}
+          </nav>
+          <div className="ml-auto flex items-center gap-3 text-xs text-muted-light dark:text-muted">
+            <SyncBadge />
+            <button
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+              title={theme === "dark" ? "Светлая тема" : "Тёмная тема"}
+              className="rounded-lg p-2 hover:bg-milk-deep dark:hover:bg-panel"
+            >
+              {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+            </button>
+            {role === "owner" && (
+              <a href="/" onClick={() => { window.location.hash = ""; }} className="underline underline-offset-2 hover:text-ink-soft dark:hover:text-cream">
+                полный Пульт
+              </a>
+            )}
+            <span>{имя ?? "Администратор"}</span>
+          </div>
+        </div>
+      </header>
+      <main className="px-4 py-6 md:px-8">
+        {/* Клиентская база загружена всегда, даже на другой вкладке: переход к
+            клиенту из журнала не ждёт выгрузки всей базы (замечание 30.10.2026).
+            Смена и журнал открываются заново — так они всегда свежие. */}
+        {вкладка === "shift" && <PageBoundary key="shift"><ShiftPage role={role} /></PageBoundary>}
+        <div hidden={вкладка !== "clients"}>
+          <PageBoundary><РабочееМесто role={role} видим={вкладка === "clients"} /></PageBoundary>
+        </div>
+        {вкладка === "log" && <PageBoundary key="log"><ЖурналОбзвона role={role} /></PageBoundary>}
+      </main>
+    </div>
+  );
+}
+
 export default function App() {
   const [loading, setLoading] = useState(true);
   const [role, setRole] = useState<Role>("master");
@@ -1940,6 +2043,7 @@ export default function App() {
   const [нехватает, setНехватает] = useState<string[]>([]);
   const [salon, setSalon] = useState<{ name: string; has_logo: boolean; backgrounds?: { light: number | null; dark: number | null } }>({ name: "РублЪ", has_logo: false });
   // Свои фоны из «Настройки → Заведение» подменяют встроенные через CSS-переменные.
+
   useEffect(() => {
     const html = document.documentElement;
     const bg = salon.backgrounds;
@@ -1965,6 +2069,14 @@ export default function App() {
     localStorage.setItem("rubl-theme", theme);
   }, [theme]);
 
+  const [свёрнута, setСвёрнутаRaw] = useState(() => {
+    try { return localStorage.getItem("rubl-sidebar") === "collapsed"; } catch { return false; }
+  });
+  const setСвёрнута = (v: boolean) => {
+    setСвёрнутаRaw(v);
+    try { localStorage.setItem("rubl-sidebar", v ? "collapsed" : "open"); } catch { /* не критично */ }
+  };
+
   const [фон, setФон] = useState(() => {
     try { return localStorage.getItem("rubl-фон") !== "off"; } catch { return true; }
   });
@@ -1973,75 +2085,16 @@ export default function App() {
     try { localStorage.setItem("rubl-фон", фон ? "on" : "off"); } catch { /* не критично */ }
   }, [фон]);
 
-  // Листание разделов колесом: страница целиком на экране, колесо — «следующий
-  // пункт меню». Если внутри есть что прокрутить (таблица, боковая панель),
-  // колесо сначала крутит её. Узкий экран листает обычной лентой.
-  const [направление, setНаправление] = useState<"вниз" | "вверх">("вниз");
+  // Владелец открывает интерфейс администратора ссылкой /#admin.
+  const [админПоСсылке, setАдминПоСсылке] = useState(() => window.location.hash === "#admin");
+  useEffect(() => {
+    const on = () => setАдминПоСсылке(window.location.hash === "#admin");
+    window.addEventListener("hashchange", on);
+    return () => window.removeEventListener("hashchange", on);
+  }, []);
   const видимые = NAV.filter(
     (i) => PAGES_BY_ROLE[role].includes(i.id) && (i.id !== "control" || top),
   );
-  // Настройки — под чертой и колесом не листаются.
-  const листаемые = видимые.filter((i) => i.id !== "settings");
-  const idx = листаемые.findIndex((i) => i.id === page);
-  const следующий = idx < 0 ? undefined : листаемые[idx + 1];
-  const перейти = useRef((_d: 1 | -1) => {});
-  перейти.current = (d) => {
-    if (idx < 0) return;
-    const n = листаемые[idx + d];
-    if (n) { setНаправление(d > 0 ? "вниз" : "вверх"); setPage(n.id); }
-  };
-  useEffect(() => {
-    if (loading) return;
-    let acc = 0, last = 0, сброс = 0, былаПрокрутка = 0;
-    const on = (e: WheelEvent) => {
-      if (e.ctrlKey || window.innerWidth < 1024 || document.querySelector("[data-overlay]")) return;
-      let el = e.target as HTMLElement | null;
-      while (el && el !== document.body) {
-        if (el.tagName === "INPUT" && document.activeElement === el) return;
-        const s = getComputedStyle(el);
-        if (/(auto|scroll)/.test(s.overflowY) && el.scrollHeight > el.clientHeight + 1) {
-          const вверхуЛи = el.scrollTop <= 0;
-          const внизуЛи = el.scrollTop + el.clientHeight >= el.scrollHeight - 1;
-          if ((e.deltaY > 0 && !внизуЛи) || (e.deltaY < 0 && !вверхуЛи)) {
-            былаПрокрутка = Date.now();
-            acc = 0;
-            return;
-          }
-          // Дошли до края: пока колесо крутится непрерывно (в том числе по
-          // инерции), страницу не листаем — иначе до конца не доскроллить.
-          // Листание начинается после паузы в полсекунды.
-          if (Date.now() - былаПрокрутка < 500) {
-            былаПрокрутка = Date.now();
-            acc = 0;
-            return;
-          }
-        }
-        el = el.parentElement;
-      }
-      const now = Date.now();
-      if (now - last < 800) { acc = 0; return; }
-      acc += e.deltaY;
-      window.clearTimeout(сброс);
-      сброс = window.setTimeout(() => { acc = 0; }, 250);
-      if (Math.abs(acc) >= 120) {
-        перейти.current(acc > 0 ? 1 : -1);
-        acc = 0;
-        last = now;
-      }
-    };
-    const key = (e: KeyboardEvent) => {
-      if (!e.altKey) return;
-      if (e.key === "ArrowDown") перейти.current(1);
-      else if (e.key === "ArrowUp") перейти.current(-1);
-    };
-    window.addEventListener("wheel", on, { passive: true });
-    window.addEventListener("keydown", key);
-    return () => {
-      window.removeEventListener("wheel", on);
-      window.removeEventListener("keydown", key);
-    };
-  }, [loading]);
-
   useEffect(() => {
     // Роль выясняем до всего остального: от неё зависит и меню, и то, какая
     // вкладка откроется. Данные каждая вкладка грузит сама — общей загрузки
@@ -2100,6 +2153,13 @@ export default function App() {
 
   if (loading) return <Spinner />;
 
+  if (role === "operator" || (админПоСсылке && role === "owner")) {
+    return (
+      <АдминИнтерфейс role={role} имя={userName} theme={theme} setTheme={setTheme}
+                      salonName={salon.name} />
+    );
+  }
+
   if (нуженМастер) {
     // Перезагрузка, а не смена состояния: после того как владелец заведён,
     // браузер должен спросить логин и пароль, а спрашивает он их только на
@@ -2109,34 +2169,55 @@ export default function App() {
 
   return (
     <div className="min-h-screen text-ink-soft dark:text-cream flex">
-      {/* Sidebar */}
-      <aside className="w-60 border-r border-milk-line dark:border-line/50 flex flex-col fixed h-full bg-milk-card/90 dark:bg-ink/80 backdrop-blur-xl z-10">
-        <div className="p-5 overflow-y-auto min-h-0">
-          <div className="mb-5">
-            {salon.has_logo ? (
-              <img src="/api/salon/logo" alt={salon.name} className="w-full max-h-24 object-contain object-left mb-2" />
-            ) : salon.name === "РублЪ" ? (
-              <img src={logo} alt="РублЪ" className="w-full max-h-24 object-contain object-left mb-2" />
+      {/* Боковая панель: развёрнутая (значки и подписи) или свёрнутая —
+          только значки, подпись во всплывающей подсказке (запрос 30.10.2026). */}
+      <aside className={`${свёрнута ? "w-16" : "w-60"} border-r border-milk-line dark:border-line/50 flex flex-col fixed h-full bg-milk-card/90 dark:bg-ink/80 backdrop-blur-xl z-10 transition-[width] duration-200`}>
+        <div className={`${свёрнута ? "px-2 py-3" : "p-5"} overflow-y-auto overflow-x-hidden min-h-0`}>
+          <div className={`flex items-start ${свёрнута ? "flex-col items-center gap-2 mb-3" : "justify-between mb-5"}`}>
+            {свёрнута ? (
+              salon.has_logo ? (
+                <img src="/api/salon/logo" alt={salon.name} className="h-10 w-10 object-contain" />
+              ) : salon.name === "РублЪ" ? (
+                <img src={logo} alt="РублЪ" className="h-10 w-auto object-contain" />
+              ) : (
+                <div className="h-10 w-10 rounded-xl bg-bronze dark:bg-gold text-milk dark:text-ink flex items-center justify-center text-xl font-bold">
+                  {salon.name.trim().slice(0, 1).toUpperCase()}
+                </div>
+              )
             ) : (
-              <div className="h-20 w-20 rounded-2xl bg-bronze dark:bg-gold text-milk dark:text-ink flex items-center justify-center text-4xl font-bold mb-3">
-                {salon.name.trim().slice(0, 1).toUpperCase()}
+              <div className="min-w-0">
+                {salon.has_logo ? (
+                  <img src="/api/salon/logo" alt={salon.name} className="w-full max-h-24 object-contain object-left mb-2" />
+                ) : salon.name === "РублЪ" ? (
+                  <img src={logo} alt="РублЪ" className="w-full max-h-24 object-contain object-left mb-2" />
+                ) : (
+                  <div className="h-20 w-20 rounded-2xl bg-bronze dark:bg-gold text-milk dark:text-ink flex items-center justify-center text-4xl font-bold mb-3">
+                    {salon.name.trim().slice(0, 1).toUpperCase()}
+                  </div>
+                )}
+                <div className="text-2xl font-bold tracking-tight leading-tight break-words">
+                  {salon.name === "РублЪ" ? (
+                    <>
+                      Рубл<span className="text-bronze dark:text-gold">Ъ</span>
+                    </>
+                  ) : (
+                    salon.name
+                  )}
+                </div>
+                <div className="text-xs text-muted-light dark:text-muted mt-1">Пульт</div>
               </div>
             )}
-            <div className="min-w-0">
-              <div className="text-2xl font-bold tracking-tight leading-tight break-words">
-                {salon.name === "РублЪ" ? (
-                  <>
-                    Рубл<span className="text-bronze dark:text-gold">Ъ</span>
-                  </>
-                ) : (
-                  salon.name
-                )}
-              </div>
-              <div className="text-xs text-muted-light dark:text-muted mt-1">Пульт</div>
-            </div>
+            <button
+              onClick={() => setСвёрнута(!свёрнута)}
+              title={свёрнута ? "Развернуть панель" : "Свернуть панель"}
+              aria-label={свёрнута ? "Развернуть панель" : "Свернуть панель"}
+              className="shrink-0 rounded-lg p-1.5 text-muted-light dark:text-muted hover:bg-milk-deep dark:hover:bg-panel hover:text-ink-soft dark:hover:text-cream"
+            >
+              {свёрнута ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
+            </button>
           </div>
 
-          {role === "owner" && <BranchSwitcher />}
+          {role === "owner" && !свёрнута && <BranchSwitcher />}
 
           <nav className="space-y-1">
             {видимые.map((item) => {
@@ -2144,20 +2225,22 @@ export default function App() {
               const active = page === item.id;
               return (
                 <div key={item.id}>
-                {item.id === "settings" && листаемые.length > 0 && (
+                {item.id === "settings" && (
                   <hr className="my-2 border-milk-line dark:border-line/60" />
                 )}
                 <button
-                  onClick={() => { setНаправление(листаемые.findIndex((i) => i.id === item.id) > idx ? "вниз" : "вверх"); setPage(item.id); }}
-                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-sm text-left whitespace-nowrap transition-all duration-200 ${
+                  onClick={() => setPage(item.id)}
+                  title={свёрнута ? item.label : undefined}
+                  aria-label={item.label}
+                  className={`w-full flex items-center ${свёрнута ? "justify-center px-0" : "gap-3 px-3"} py-2 rounded-xl text-sm text-left whitespace-nowrap transition-all duration-200 ${
                     active
                       ? "bg-milk-deep dark:bg-panel-deep/80 text-ink-soft dark:text-cream font-medium shadow-[inset_3px_0_0_var(--color-bronze)] dark:shadow-[inset_3px_0_0_var(--color-gold)]"
                       : "text-muted-light dark:text-muted hover:text-ink-soft dark:hover:text-cream hover:bg-milk-deep dark:hover:bg-panel"
                   }`}
                 >
                   <Icon size={18} className={active ? "text-bronze dark:text-gold" : ""} />
-                  {item.label}
-                  {active && (
+                  {!свёрнута && item.label}
+                  {active && !свёрнута && (
                     <span className="ml-auto w-1.5 h-1.5 rounded-full bg-bronze dark:bg-gold" />
                   )}
                 </button>
@@ -2167,43 +2250,51 @@ export default function App() {
           </nav>
         </div>
 
-        <div className="mt-auto p-5 pt-3 border-t border-milk-line dark:border-line/50 shrink-0">
+        <div className={`mt-auto ${свёрнута ? "px-2 py-3 flex flex-col items-center gap-1" : "p-5 pt-3"} border-t border-milk-line dark:border-line/50 shrink-0`}>
           <button
             onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-muted-light dark:text-muted hover:bg-milk-deep dark:hover:bg-panel transition-colors"
+            title={theme === "dark" ? "Светлая тема" : "Тёмная тема"}
+            className={`${свёрнута ? "justify-center px-2" : "w-full px-3"} flex items-center gap-2 py-2 rounded-lg text-sm text-muted-light dark:text-muted hover:bg-milk-deep dark:hover:bg-panel transition-colors`}
           >
             {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
-            {theme === "dark" ? "Светлая тема" : "Тёмная тема"}
+            {!свёрнута && (theme === "dark" ? "Светлая тема" : "Тёмная тема")}
           </button>
           <button
             onClick={() => setФон(!фон)}
-            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-muted-light dark:text-muted hover:bg-milk-deep dark:hover:bg-panel transition-colors"
+            title={фон ? "Фон: вкл" : "Фон: выкл"}
+            className={`${свёрнута ? "justify-center px-2" : "w-full px-3"} flex items-center gap-2 py-2 rounded-lg text-sm text-muted-light dark:text-muted hover:bg-milk-deep dark:hover:bg-panel transition-colors`}
           >
             <Image size={16} />
-            {фон ? "Фон: вкл" : "Фон: выкл"}
+            {!свёрнута && (фон ? "Фон: вкл" : "Фон: выкл")}
           </button>
-          {/* Свежесть данных. Здесь, а не на каждой странице по отдельности:
-              боковая панель видна везде, и надпись не придётся повторять. */}
-          <div className="mt-3">
-            <SyncBadge />
-          </div>
+          {!свёрнута && (
+            <>
+              {/* Свежесть данных. Здесь, а не на каждой странице по отдельности:
+                  боковая панель видна везде, и надпись не придётся повторять. */}
+              <div className="mt-3">
+                <SyncBadge />
+              </div>
 
-          {/* Кто вошёл. Мастеру это важнее всего: он должен видеть, что перед
-              ним его собственный расчёт, а не чужой. */}
-          <div className="text-xs text-muted-light dark:text-muted mt-3">
-            {userName
-              ? userName
-              : role === "owner"
-                ? "Управляющий"
-                : role === "operator"
-                  ? "Администратор"
-                  : "Мастер"}
-          </div>
+              {/* Кто вошёл. Мастеру это важнее всего: он должен видеть, что перед
+                  ним его собственный расчёт, а не чужой. */}
+              <div className="text-xs text-muted-light dark:text-muted mt-3 flex items-center justify-between">
+                <span>{userName
+                  ? userName
+                  : role === "owner" ? "Управляющий" : "Мастер"}</span>
+              </div>
+            </>
+          )}
+          {role === "owner" && (
+            <a href="/#admin" target="_blank" rel="noopener" title="Интерфейс администратора"
+               className={`${свёрнута ? "p-2" : "mt-2"} inline-flex items-center gap-1.5 text-xs text-muted-light dark:text-muted hover:text-ink-soft dark:hover:text-cream`}>
+              <ExternalLink size={свёрнута ? 16 : 12} /> {!свёрнута && "Интерфейс администратора"}
+            </a>
+          )}
         </div>
       </aside>
 
       {/* Main */}
-      <main className="flex-1 ml-60 p-8 h-screen overflow-y-auto">
+      <main className={`flex-1 ${свёрнута ? "ml-16" : "ml-60"} p-8 h-screen overflow-y-auto transition-[margin] duration-200`}>
         <div className="max-w-[1280px] mx-auto">
           {нехватает.length > 0 && page !== "settings" && (
             <div className="mb-6 rounded-xl border border-amber-500/40 bg-amber-500/5 px-4 py-3 flex items-start gap-3">
@@ -2234,7 +2325,7 @@ export default function App() {
             /* key по разделу: при переходе React создаёт ограждение заново,
                и сломанная страница не держит его поднятым до перезагрузки
                окна. Сбрасывать состояние вручную для этого не нужно. */
-            <div key={page} className={направление === "вниз" ? "раздел-вниз" : "раздел-вверх"}>
+            <div key={page}>
             <PageBoundary>
               {page === "planfact" && <PlanFactPage />}
               {page === "bookings" && <BookingsPage />}
@@ -2252,28 +2343,6 @@ export default function App() {
         </div>
       </main>
 
-      {/* Точки справа — где мы в меню; подсказка снизу — куда ведёт колесо. */}
-      {листаемые.length > 1 && idx >= 0 && (
-        <nav aria-label="Разделы" className="hidden lg:flex fixed right-4 top-1/2 -translate-y-1/2 flex-col gap-3 z-20">
-          {листаемые.map((i) => (
-            <button
-              key={i.id}
-              title={i.label}
-              aria-label={i.label}
-              onClick={() => { setНаправление(листаемые.indexOf(i) > idx ? "вниз" : "вверх"); setPage(i.id); }}
-              className={`rounded-full transition-all ${i.id === page ? "w-2 h-6 bg-bronze dark:bg-gold" : "w-2 h-2 bg-muted-light/60 dark:bg-muted/60 hover:bg-bronze dark:hover:bg-gold"}`}
-            />
-          ))}
-        </nav>
-      )}
-      {следующий && (
-        <button
-          onClick={() => перейти.current(1)}
-          className="hidden lg:block fixed bottom-3 left-[calc(50%+7.5rem)] -translate-x-1/2 z-20 text-xs px-3 py-1 rounded-full border border-milk-line dark:border-line bg-milk-card/80 dark:bg-panel/70 text-muted-light dark:text-muted hover:text-ink-soft dark:hover:text-cream"
-        >
-          Прокрутите вниз — {следующий.label} ↓
-        </button>
-      )}
     </div>
   );
 }

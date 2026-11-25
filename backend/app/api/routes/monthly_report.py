@@ -108,6 +108,14 @@ async def save_settings(
         raise HTTPException(422, f"Настройки не сохранены: {exc}") from exc
 
 
+@router.get("/admins")
+async def admins(request: Request, db: AsyncSession = Depends(get_db)) -> dict:
+    """Все администраторы со скрытыми — для настройки, кто звонит."""
+    _owner(request)
+    cfg = await mr.load_settings(db)
+    return {"admins": await mr.current_admins(db, скрытых=True), "hidden": cfg.get("hidden_admins") or []}
+
+
 @router.get("/fields-probe")
 async def fields_probe(request: Request) -> dict:
     _owner(request)

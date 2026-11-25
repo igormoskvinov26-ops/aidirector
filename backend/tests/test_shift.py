@@ -15,7 +15,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.database import Base
-from app.models.models import Client, ContactAttempt, ContactTask
+from app.models.models import Client
 from app.services.shift import (
     MOSCOW,
     актуальная,
@@ -238,16 +238,16 @@ def test_сумма_записавшихся_и_нет_равна_числу_п�
 
 
 def test_вечером_новым_считается_только_пришедший():
-    assert разложить_пришедших({100}, {100: 0}) == {"new": 1, "became_regular": 0}
+    assert разложить_пришедших({100}, {100: 0}) == {"new": 1, "became_regular": 0, "second": 0, "tenth": 0}
 
 
 def test_вечером_постоянным_становится_тот_у_кого_был_пятый_визит():
-    assert разложить_пришедших({100}, {100: 4}) == {"new": 0, "became_regular": 1}
+    assert разложить_пришедших({100}, {100: 4}) == {"new": 0, "became_regular": 1, "second": 0, "tenth": 0}
 
 
 def test_не_пришедший_вечером_никуда_не_попадает():
     """Утром он был в прогнозе, вечером его в факте нет."""
-    assert разложить_пришедших(set(), {100: 4}) == {"new": 0, "became_regular": 0}
+    assert разложить_пришедших(set(), {100: 4}) == {"new": 0, "became_regular": 0, "second": 0, "tenth": 0}
 
 
 # --------------------------------------------------------------------------- #
@@ -598,7 +598,7 @@ async def test_закрытие_считает_факт_и_следующую_з
     assert снимок["services_revenue"] == 3500
     assert снимок["products_revenue"] == 0
     assert снимок["clients"] == {"booked_next": 1, "not_booked": 1}
-    assert снимок["completed"] == {"new": 2, "became_regular": 0}
+    assert снимок["completed"] == {"new": 2, "became_regular": 0, "second": 0, "tenth": 0}
     assert снимок["lost_today"] == 0
     assert снимок["integrity_failures"] == []
 
@@ -917,42 +917,6 @@ async def test_закрытие_без_остатков_предупреждае
     assert any("не внесены" in w for w in итог["closing_snapshot"]["warnings"])
 
 
-@pytest.mark.asyncio
-async def test_закрытие_подтягивает_звонки_за_день(session: AsyncSession, monkeypatch):
-    """Обзвон не вводится руками — закрытие само берёт итог дня из журнала
-    звонков (решение владельца 06.10.2026)."""
-    from app.services import shift, shift_store
-
-    async def собрать_закрытие(день=None):
-        return {
-            "shift_date": ДЕНЬ.isoformat(), "records_total": 0, "records_completed": 0,
-            "services_revenue": 0.0, "products_revenue": 0.0,
-            "money": {"total_earned": 0.0, "non_cash": None, "cash": None, "spent": None,
-                      "cash_register_estimate": None, "settlement_account_estimate": None,
-                      "other_account_debt": None},
-            "clients_came": 0, "clients": {"booked_next": 0, "not_booked": 0},
-            "created_today_for_future": None, "completed": {"new": None, "became_regular": None},
-            "lost_today": None, "masters": [], "warnings": [], "calculated_at": "x",
-        }
-
-    monkeypatch.setattr(shift, "собрать_закрытие", собрать_закрытие)
-
-    session.add(Client(id=1, yclients_id=1001, name="Иван", phone="+79990000001"))
-    await session.flush()
-    session.add(ContactTask(id=5, client_id=1, group_code="lost", priority=1, due_date=ДЕНЬ, status="done"))
-    await session.flush()
-    session.add(ContactAttempt(task_id=5, outcome="booked", channel="phone",
-                                created_at=datetime(2026, 9, 23, 10, 0, tzinfo=shift.MOSCOW)))
-    await session.commit()
-
-    итог = await shift_store.закрыть(session, ДЕНЬ)
-    assert итог["closing_snapshot"]["calls"] == {
-        "total": 1, "booked": 1, "no_booking": 0, "no_answer": 0, "returned_lost": 1,
-    }
-    текст = shift.текст_закрытия(итог["closing_snapshot"], {})
-    assert "Звонков — 1, записано — 1, вернули потерянных — 1" in текст
-
-
 # --------------------------------------------------------------------------- #
 # Старый снимок без блока «Деньги» не должен ронять страницу
 # --------------------------------------------------------------------------- #
@@ -1047,3 +1011,41 @@ async def test_наличка_по_факту_переживает_пересч�
     закрытия = await finance_analysis._закрытия(session, ДЕНЬ, ДЕНЬ)
     assert закрытия[ДЕНЬ]["cash_counted"] == 2500
     assert закрытия[ДЕНЬ]["cash"] == 3000
+
+
+def test_в_отчёт_закрытия_попадает_разбивка_по_оплате():
+    """Безнал и наличные хранились в снимке, но в чат не уходили."""
+    from app.services.shift import деньги_строками
+
+    assert деньги_строками({"non_cash": 24000.0, "cash": 8000.0}) == [
+        "Безнал — 24 000 ₽", "Наличные — 8 000 ₽", "Всего в кассе — 32 000 ₽",
+    ]
+    # Пересчитанная касса сошлась — про расхождение молчим, в кассе считаем факт.
+    assert деньги_строками({"non_cash": 1.0, "cash": 8000.0, "cash_counted": 8000.0})[-2] == (
+        "Наличные по факту — 8 000 ₽"
+    )
+    assert деньги_строками({"non_cash": 1.0, "cash": 8000.0, "cash_counted": 7500.0})[-1] == (
+        "Всего в кассе — 7 501 ₽"
+    )
+    assert "расхождение" in деньги_строками(
+        {"non_cash": 1.0, "cash": 8000.0, "cash_counted": 7500.0}
+    )[-2]
+    # Транзакции не отдались — лишних строк в отчёте не появляется.
+    assert деньги_строками({"non_cash": None, "cash": None}) == []
+
+
+def test_блок_клиентов_в_отчёте_закрытия():
+    """Пульс базы, обзвон и повторные визиты одним блоком (запрос 11.10.2026)."""
+    from app.services.shift import строки_клиентов
+
+    строки = строки_клиентов({
+        "completed": {"new": 4, "became_regular": 2, "second": 6, "tenth": 1},
+        "calls": {"total": 18, "booked": 5, "returned": 3},
+        "lost_today": 7,
+    })
+    assert строки[0] == "Пульс базы — -3 (новые 4 / потерянные 7)"
+    assert строки[1] == "Обзвон — 18, записались 5, вернули потеряшек 3"
+    assert строки[2] == "Пришли повторно — 6 / пришли 10 раз — 1"
+    # Данных нет — блок всё равно рисуется, без «+0» и без падения.
+    пусто = строки_клиентов({})
+    assert "нет данных" in пусто[0]

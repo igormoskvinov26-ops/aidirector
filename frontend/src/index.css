@@ -186,13 +186,15 @@ table {
   --стекло-тёмное: rgb(21 19 17 / 0.74);
 }
 
+/* Светлая тема: страница белая, без текстуры (решение владельца 30.10.2026);
+   блоки остаются своего молочного цвета, чтобы читались на белом. */
 body {
-  background-image:
-    linear-gradient(rgb(255 250 240 / 0.14), rgb(255 250 240 / 0.3)),
-    url("./assets/bg/plaster.jpg");
   background-size: cover;
   background-position: center;
   background-attachment: fixed;
+}
+html:not(.dark) body {
+  background-color: #ffffff;
 }
 
 .dark body {
@@ -215,7 +217,9 @@ html.свой-фон-тёмный.dark:not(.без-фона) body {
 
 html.без-фона body { background-image: none; }
 
-html:not(.без-фона) [class*="bg-milk-card"] {
+/* Стекло на светлой — только поверх своего фона из «Настройки → Заведение»;
+   на белой странице блоки сплошные, своего цвета. */
+html.свой-фон-светлый:not(.без-фона):not(.dark) [class*="bg-milk-card"] {
   background-color: var(--стекло-светлое);
   -webkit-backdrop-filter: blur(14px);
   backdrop-filter: blur(14px);
@@ -238,13 +242,82 @@ h1 {
   letter-spacing: 0;
 }
 
-/* Переход между разделами скроллом: сдвиг на пару десятков пикселей и
-   проявление. Направление — куда уходит «лента» разделов. */
-@keyframes из-низа { from { opacity: 0; transform: translateY(28px); } to { opacity: 1; transform: none; } }
-@keyframes из-верха { from { opacity: 0; transform: translateY(-28px); } to { opacity: 1; transform: none; } }
-.раздел-вниз { animation: из-низа 0.45s cubic-bezier(.2, .8, .2, 1); }
-.раздел-вверх { animation: из-верха 0.45s cubic-bezier(.2, .8, .2, 1); }
-
 @media (prefers-reduced-motion: reduce) {
-  .раздел-вниз, .раздел-вверх, .animate-in { animation: none; }
+  .animate-in { animation: none; }
+}
+
+/* Таблица базы: полосы прокрутки видны всегда и заметны — на Маке иначе
+   горизонтальную прокрутку не найти (замечание владельца 30.10.2026). */
+.rubl-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.rubl-scroll::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--color-bronze) 55%, transparent);
+  border-radius: 5px;
+}
+.rubl-scroll {
+  scrollbar-width: auto;
+  scrollbar-color: color-mix(in srgb, var(--color-bronze) 55%, transparent) transparent;
+}
+
+/* Рабочие таблицы (база и журнал обзвона) — одна типографика.
+   Шапка: заметнее, чем раньше (была 11px бледно-серым, терялась).
+   Фильтры: тихие поля без рамки, рамка — при наведении и фокусе, чтобы
+   строка фильтров не спорила со строками клиентов.
+   Строки: лёгкая «зебра» — глаз не соскакивает на соседнюю строку на
+   широком экране (разбор 30.10.2026). */
+.rubl-table thead tr:first-child th {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: color-mix(in srgb, var(--color-ink-soft) 62%, transparent);
+}
+.dark .rubl-table thead tr:first-child th {
+  color: color-mix(in srgb, var(--color-cream) 62%, transparent);
+}
+.rubl-table tbody > tr:nth-child(even):not(.rubl-tone) > td {
+  background: color-mix(in srgb, var(--color-milk-deep) 35%, transparent);
+}
+.dark .rubl-table tbody > tr:nth-child(even):not(.rubl-tone) > td {
+  background: color-mix(in srgb, var(--color-panel-deep) 55%, transparent);
+}
+.rubl-table tbody > tr:hover:not(.rubl-tone) > td {
+  background: color-mix(in srgb, var(--color-bronze) 8%, transparent);
+}
+.dark .rubl-table tbody > tr:hover:not(.rubl-tone) > td {
+  background: color-mix(in srgb, var(--color-gold) 8%, transparent);
+}
+.rubl-filter {
+  width: 100%;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: color-mix(in srgb, var(--color-milk-deep) 55%, transparent);
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--color-ink-soft);
+  outline: none;
+  transition: border-color 0.15s, background-color 0.15s;
+}
+.rubl-filter:hover { border-color: var(--color-milk-line); }
+.rubl-filter:focus { border-color: var(--color-bronze); background: #fff; }
+.rubl-filter::placeholder { color: color-mix(in srgb, var(--color-muted-light) 75%, transparent); }
+.dark .rubl-filter { background: var(--color-panel-deep); color: var(--color-cream); }
+.dark .rubl-filter:hover { border-color: var(--color-line); }
+.dark .rubl-filter:focus { border-color: var(--color-gold); background: var(--color-panel); }
+
+/* Большие таблицы (база, журнал) — без стекла. Размытие под рамкой с
+   собственной прокруткой и липкой шапкой браузер пересчитывает на каждый
+   кадр; на слабом ноутбуке салона он переставал рисовать таблицу: найденный
+   клиент мелькал и пропадал (видео 02.11.2026). Фон под таблицей сплошной. */
+.rubl-solid {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  background-color: var(--color-milk-card) !important;
+}
+.dark .rubl-solid {
+  background-color: var(--color-panel) !important;
 }

@@ -11,7 +11,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { AlertTriangle, ArrowDown, ArrowRight, ArrowUp, ChevronLeft, ChevronRight, Pencil, RefreshCw, Upload, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowRight, ArrowUp, ChevronLeft, ChevronRight, Mail, Pencil, RefreshCw, Upload, X } from "lucide-react";
 import { useDark, палитраГрафика } from "./тема";
 
 // ── Типы ответа /api/finance-analysis ─────────────────────────────────────
@@ -27,6 +27,8 @@ interface День {
   /** Наличка за день, пересчитанная админом при закрытии смены. */
   cash_fact?: Num;
   cash_diff?: Num;
+  /** Из каких отчётов сложился банк за день: карты, СБП и прочие. */
+  bank_by_source?: Record<string, number>;
   status: "ok" | "mismatch" | "no_bank" | "no_shift" | "no_data" | "pending";
 }
 
@@ -586,10 +588,56 @@ function сдвигМесяца(ym: string, на: number): string {
 
 /** Два близких тона на столбец: тёмный низ (эквайринг) и светлее верх
  *  (наличка). Золото — YCLIENTS, зелень — факт. Без резких скачков цвета. */
+/* Цвет столбца говорит не «чей он», а «сошлось ли» (решение владельца
+   07.10.2026). Низ столбца — эквайринг, верх — наличка, как и было: низ
+   темнее, верх светлее. Зелёный — пара сошлась; красным красится та
+   сторона, где денег МЕНЬШЕ: именно её и надо искать. Серый — сравнивать
+   не с чем: нет отчёта банка или админ не вносил наличку. */
 const СВЕРКА = {
-  тёмная: { айкЭкв: "#a8843f", айкНал: "#dcc08a", банк: "#4f8f63", касса: "#a3cf8c" },
-  светлая: { айкЭкв: "#8c6a2e", айкНал: "#cfae6c", банк: "#3f7a50", касса: "#8fbf78" },
+  тёмная: {
+    низОк: "#3f7f59", верхОк: "#7cc496",
+    низПлохо: "#a8463c", верхПлохо: "#e07a70",
+    низНет: "#5f564a", верхНет: "#8b8073",
+  },
+  светлая: {
+    низОк: "#2f6b48", верхОк: "#6aa87f",
+    низПлохо: "#9a342a", верхПлохо: "#cf6a5e",
+    низНет: "#9b9184", верхНет: "#c2b9ab",
+  },
 };
+
+const ДОПУСК_РУБ = 1;
+
+/** Ответ /api/finance-analysis/mail — что Пульт нашёл в почте в прошлый раз. */
+interface Почта {
+  configured: boolean;
+  mailbox?: string;
+  folder?: string;
+  checked_at?: string;
+  ok?: boolean;
+  message?: string;
+}
+
+const когдаКратко = (iso: string) =>
+  new Date(iso).toLocaleString("ru-RU", {
+    timeZone: "Europe/Moscow", day: "2-digit", month: "2-digit",
+    hour: "2-digit", minute: "2-digit",
+  });
+
+/** Сошлась ли пара и какая сторона меньше. */
+function сверить(своё: Num, чужое: Num): "ок" | "меньше" | "больше" | "нет" {
+  if (своё == null || чужое == null) return "нет";
+  if (Math.abs(своё - чужое) <= ДОПУСК_РУБ) return "ок";
+  return своё < чужое ? "меньше" : "больше";
+}
+
+function цветСверки(
+  сверка: typeof СВЕРКА.тёмная, итог: ReturnType<typeof сверить>, верх: boolean,
+): string {
+  if (итог === "нет") return верх ? сверка.верхНет : сверка.низНет;
+  if (итог === "меньше") return верх ? сверка.верхПлохо : сверка.низПлохо;
+  return верх ? сверка.верхОк : сверка.низОк;
+}
 
 function причины(д: День): string[] {
   const out: string[] = [];
@@ -606,7 +654,12 @@ function ПодсказкаСверки({
   active, payload, label, фон, рамка,
 }: {
   active?: boolean;
-  payload?: { payload: { айкЭкв: Num; айкНал: Num; банк: Num; кассаНал: Num } }[];
+  payload?: {
+    payload: {
+      айкЭкв: Num; айкНал: Num; банк: Num; кассаНал: Num;
+      источники?: Record<string, number>;
+    };
+  }[];
   label?: string;
   фон: string;
   рамка: string;
@@ -631,7 +684,14 @@ function ПодсказкаСверки({
       {строка("наличка", р.айкНал)}
       {строка("итого", айк, true)}
       <div className="mt-1 text-muted-light dark:text-muted">Факт</div>
-      {строка("банк", р.банк)}
+      {/* Карты и СБП приходят разными отчётами: когда их больше одного,
+          показываем каждый, иначе одна строка «банк». */}
+      {Object.keys(р.источники ?? {}).length > 1
+        ? Object.entries(р.источники ?? {}).map(([имя, сумма]) =>
+            // «СБП» — сокращение, его строчными писать нельзя; «Эквайринг» —
+            // обычное слово, в столбце подписей оно со строчной.
+            строка(имя === имя.toUpperCase() ? имя : имя.toLowerCase(), сумма))
+        : строка("банк", р.банк)}
       {строка("наличка в кассе", р.кассаНал)}
       {строка("итого", факт, true)}
       {разница != null && (
@@ -658,6 +718,29 @@ export function СверкаПоДням({ компактно = false }: { ко�
   const [шлём, setШлём] = useState(false);
   const [итог, setИтог] = useState<{ ok: boolean; текст: string } | null>(null);
   const файлРеф = useRef<HTMLInputElement>(null);
+  // Почта: Пульт сам забирает отчёт банка, если в настройках заведён ящик.
+  const [почта, setПочта] = useState<Почта | null>(null);
+  const [проверяем, setПроверяем] = useState(false);
+  useEffect(() => {
+    void (async () => {
+      const r = await fetch("/api/finance-analysis/mail").catch(() => null);
+      if (r?.ok) setПочта(await r.json());
+    })();
+  }, []);
+  const проверитьПочту = async () => {
+    setПроверяем(true);
+    try {
+      const r = await fetch("/api/finance-analysis/mail/check", { method: "POST" });
+      if (r.ok) {
+        setПочта(await r.json());
+        await загрузить();
+      }
+    } catch {
+      /* статус останется прежним, кнопку можно нажать ещё раз */
+    } finally {
+      setПроверяем(false);
+    }
+  };
 
   const отправить = async (файл: File, день: string | null) => {
     setШлём(true);
@@ -703,13 +786,19 @@ export function СверкаПоДням({ компактно = false }: { ко�
         d.setDate(пн.getDate() + i);
         const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
         const д = поДате.get(iso);
+        const айкЭкв = д?.non_cash ?? null;
+        const айкНал = д?.cash ?? null;
+        const банк = д?.bank ?? null;
+        const кассаНал = д?.cash_fact ?? null;
         return {
           iso,
           день: `${ДНИ[d.getDay()]} ${датаКратко(iso)}`,
-          айкЭкв: д?.non_cash ?? null,
-          айкНал: д?.cash ?? null,
-          банк: д?.bank ?? null,
-          кассаНал: д?.cash_fact ?? null,
+          айкЭкв, айкНал, банк, кассаНал,
+          источники: д?.bank_by_source ?? {},
+          экв: сверить(айкЭкв, банк),
+          эквФакт: сверить(банк, айкЭкв),
+          нал: сверить(айкНал, кассаНал),
+          налФакт: сверить(кассаНал, айкНал),
         };
       })
     : [];
@@ -739,18 +828,31 @@ export function СверкаПоДням({ компактно = false }: { ко�
       />
       <div className="flex flex-wrap items-center justify-between gap-3 shrink-0">
         <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-light dark:text-muted">
+          <span>Слева YCLIENTS, справа факт · низ — эквайринг, верх — наличка</span>
           <span className="flex items-center gap-1.5">
-            <span className="h-3 w-3 rounded-sm" style={{ background: сверка.айкЭкв }} />
-            <span className="-ml-1 h-3 w-3 rounded-sm" style={{ background: сверка.айкНал }} />
-            YCLIENTS: эквайринг + наличка
+            <span className="h-3 w-3 rounded-sm" style={{ background: сверка.низОк }} />
+            сошлось
           </span>
           <span className="flex items-center gap-1.5">
-            <span className="h-3 w-3 rounded-sm" style={{ background: сверка.банк }} />
-            <span className="-ml-1 h-3 w-3 rounded-sm" style={{ background: сверка.касса }} />
-            Факт: банк + наличка в кассе
+            <span className="h-3 w-3 rounded-sm" style={{ background: сверка.низПлохо }} />
+            где меньше
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="h-3 w-3 rounded-sm" style={{ background: сверка.низНет }} />
+            не с чем сравнить
           </span>
         </div>
         <div className="flex items-center gap-2 text-sm">
+          {почта?.configured && (
+            <button
+              onClick={() => void проверитьПочту()}
+              disabled={проверяем}
+              title={`Ящик ${почта.mailbox}, папка «${почта.folder}»`}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-milk-line dark:border-line px-3 py-1 text-xs hover:border-bronze dark:hover:border-gold disabled:opacity-50"
+            >
+              <Mail size={12} /> {проверяем ? "Смотрю почту…" : "Проверить почту"}
+            </button>
+          )}
           <button
             onClick={() => выбратьФайл(null)}
             disabled={шлём}
@@ -775,6 +877,11 @@ export function СверкаПоДням({ компактно = false }: { ко�
       </div>
       {ошибка && <p role="alert" className="text-sm text-loss">{ошибка}</p>}
       {итог && <p role={итог.ok ? "status" : "alert"} className={`text-xs ${итог.ok ? "text-profit" : "text-loss"}`}>{итог.текст}</p>}
+      {почта?.configured && почта.checked_at && (
+        <p className={`text-xs ${почта.ok === false ? "text-loss" : "text-muted-light dark:text-muted"}`}>
+          Почта {почта.mailbox}, папка «{почта.folder}»: проверено {когдаКратко(почта.checked_at)} — {почта.message}
+        </p>
+      )}
       <div className={`min-h-[180px] flex-1 ${компактно ? "" : "h-[260px]"}`}>
         <ResponsiveContainer width="100%" height="100%">
           <BarChart
@@ -798,15 +905,25 @@ export function СверкаПоДням({ компактно = false }: { ко�
               tickFormatter={(v) => (v >= 1000 ? `${Math.round(v / 1000)}к` : String(v))}
             />
             <Tooltip cursor={{ fill: тёмная ? "#ffffff0d" : "#0000000a" }} content={<ПодсказкаСверки фон={цвета.подсказкаФон} рамка={цвета.подсказкаРамка} />} />
-            <Bar dataKey="айкЭкв" stackId="айк" fill={сверка.айкЭкв} />
-            <Bar dataKey="айкНал" stackId="айк" fill={сверка.айкНал} radius={[3, 3, 0, 0]} />
-            <Bar dataKey="банк" stackId="факт" fill={сверка.банк} />
-            <Bar dataKey="кассаНал" stackId="факт" fill={сверка.касса} radius={[3, 3, 0, 0]} />
+            <Bar dataKey="айкЭкв" stackId="айк">
+              {график.map((г, i) => <Cell key={i} fill={цветСверки(сверка, г.экв, false)} />)}
+            </Bar>
+            <Bar dataKey="айкНал" stackId="айк" radius={[3, 3, 0, 0]}>
+              {график.map((г, i) => <Cell key={i} fill={цветСверки(сверка, г.нал, true)} />)}
+            </Bar>
+            <Bar dataKey="банк" stackId="факт">
+              {график.map((г, i) => <Cell key={i} fill={цветСверки(сверка, г.эквФакт, false)} />)}
+            </Bar>
+            <Bar dataKey="кассаНал" stackId="факт" radius={[3, 3, 0, 0]}>
+              {график.map((г, i) => <Cell key={i} fill={цветСверки(сверка, г.налФакт, true)} />)}
+            </Bar>
           </BarChart>
         </ResponsiveContainer>
       </div>
       <p className="shrink-0 text-[11px] text-muted-light dark:text-muted">
         Наведите на день — покажу числа. Щёлкните по дню — загрузите отчёт банка за этот день.
+        Отчёты по картам и по СБП грузите отдельными файлами: Пульт различит их по шапке
+        и сложит за день.
         {расходятся.length > 0 && ` Не сошлось за месяц: ${расходятся.map((д) => датаКратко(д.date)).join(", ")}.`}
       </p>
     </div>

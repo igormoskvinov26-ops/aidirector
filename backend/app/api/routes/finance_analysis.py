@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.main_roles import ROLE_OWNER
-from app.services import acquiring, cash_balances, finance_analysis, owner_overview
+from app.services import acquiring, cash_balances, finance_analysis, mail_acquiring, owner_overview
 from app.services.monthly_report import parse_month
 
 router = APIRouter(prefix="/api/finance-analysis", tags=["finance-analysis"])
@@ -56,6 +56,20 @@ async def overview(request: Request, db: AsyncSession = Depends(get_db)) -> dict
         return await owner_overview.построить(db)
     except Exception as exc:
         raise HTTPException(502, "Не удалось построить страницу: проверьте связь с YCLIENTS.") from exc
+
+
+@router.get("/mail")
+async def mail_state(request: Request, db: AsyncSession = Depends(get_db)) -> dict:
+    """Что Пульт нашёл в почте в последний раз. Пустой ответ — почта не настроена."""
+    _top(request)
+    return await mail_acquiring.состояние(db)
+
+
+@router.post("/mail/check")
+async def mail_check(request: Request, db: AsyncSession = Depends(get_db)) -> dict:
+    """Сходить в почту прямо сейчас, не дожидаясь очередной выгрузки."""
+    _top(request)
+    return await mail_acquiring.забрать(db)
 
 
 @router.post("/acquiring")

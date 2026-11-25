@@ -100,11 +100,7 @@ def разнести(транзакции: list[dict]) -> tuple[dict, list[dict]
             title = _статья(t)
             расходы.append({
                 "date": день, "title": title, "amount": -сумма, "cash": касса,
-                # Без категории — то же системное движение денег, что и
-                # «перевод»/«инкасс»: решение владельца 05.10.2026, сверено с
-                # отчётом «Расходы» в самом YCLIENTS — он такие операции не
-                # считает тратой (у инкассации там просто не задана статья).
-                "transfer": title == БЕЗ_СТАТЬИ or any(w in title.lower() for w in ПЕРЕВОДЫ),
+                "transfer": any(w in title.lower() for w in ПЕРЕВОДЫ),
                 "comment": str(t.get("comment") or "")[:80],
             })
     return dict(движения), расходы
@@ -191,11 +187,9 @@ def расходы_по_статьям(items: list[dict], prev_items: list[dict]
         if (a["share_pct"] or 0) >= 5 and a["delta_pct"] is not None and a["delta_pct"] >= 30:
             watch.append(f"«{a['title']}» выросла на {a['delta_pct']:.0f}% к прошлому месяцу "
                          f"({a['total']:,.0f} ₽)".replace(",", " "))
-    без_статьи = sum((x["amount"] for x in items if x["title"] == БЕЗ_СТАТЬИ), D0)
-    if без_статьи:
-        watch.append(f"Расходы без статьи на {float(без_статьи):,.0f} ₽ не входят в сумму "
-                     "выше (как инкассация и переводы) — подпишите статью в YCLIENTS, "
-                     "если это не так.".replace(",", " "))
+    if БЕЗ_СТАТЬИ in by:
+        watch.append(f"Есть расходы без статьи на {float(by[БЕЗ_СТАТЬИ]['total']):,.0f} ₽: "
+                     "без статьи неясно, куда ушли деньги.".replace(",", " "))
     прочее = groups.get("Прочее", D0)
     if total and прочее / total >= Decimal("0.15"):
         watch.append(f"Группа «Прочее» — {float(прочее / total * 100):.0f}% расходов: "
@@ -307,7 +301,9 @@ async def build(session: AsyncSession, ym: str, today: date | None = None) -> di
         days.append({"date": d.isoformat(), "non_cash": _f(c["non_cash"]) if c else None,
                      "cash": _f(c["cash"]) if c else None,
                      "bank": _f(b["amount"]) if b else None, "diff": _f(diff),
-                     "cash_fact": _f(факт), "cash_diff": _f(cash_diff), "status": status})
+                     "cash_fact": _f(факт), "cash_diff": _f(cash_diff), "status": status,
+                     # Из каких отчётов сложился банк за день: карты, СБП и прочие.
+                     "bank_by_source": {k: _f(v) for k, v in (b or {}).get("by_source", {}).items()}})
         if c:
             итог["non_cash"] += c["non_cash"]
             итог["cash"] += c["cash"]

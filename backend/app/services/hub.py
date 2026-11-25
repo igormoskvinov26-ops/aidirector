@@ -33,6 +33,11 @@ from app.models.models import (
     AcquiringRow,
     AppSetting,
     CashBalances,
+    Client,
+    ClientTag,
+    ClientTagLink,
+    ContactAttempt,
+    ContactTask,
     ReportSetting,
     Shift,
     ShiftEmployee,
@@ -41,12 +46,15 @@ from app.services import configuration
 
 STATE_KEY = "hub_state"
 PULSE_KEY = "pulse_start_date"
-DASHBOARD_KEY = "owner_dashboard"
 SHIFT_WINDOW_DAYS = 45
 ACQ_WINDOW_DAYS = 120
-INTERVAL_SECONDS = 300  # решение владельца 05.10.2026: пореже, чтобы не грузить канал
+# Аналитика обзвона за столько дней. Общий сервер стоит за рубежом, поэтому
+# в документ попадает только yclients_id клиента и цифры: ни имени, ни
+# телефона, ни комментария (решение владельца 16.10.2026).
+CALLS_WINDOW_DAYS = 180
+CALLS_CACHE_KEY = "hub_calls_cache"
+INTERVAL_SECONDS = 45
 _lock = asyncio.Lock()
-_lock_витрины = asyncio.Lock()
 status: dict[str, Any] = {"ok": None, "at": None, "error": None, "pushed": 0, "pulled": 0}
 
 
@@ -112,43 +120,6 @@ async def _смена_в_документ(session: AsyncSession, смена: Shi
     }
 
 
-async def _витрина_владельца(session: AsyncSession) -> dict[str, Any] | None:
-    """Агрегаты для дашборда владельца на телефоне — только суммы и счётчики.
-
-    Решение владельца 04.10.2026: то же правило, что и для остальных
-    документов — клиентов, телефонов и записей здесь нет, только посчитанные
-    итоги (выручка/расходы/прибыль, сегменты базы, приток-отток по дням).
-    Любая из частей может не посчитаться (YCLIENTS недоступен) — тогда
-    просто не включаем её, а не роняем весь обмен.
-    """
-    from app.services import client_base, owner_overview
-
-    finance = None
-    if configuration.настроена("yclients"):
-        today = client_base.moscow_today()
-        try:
-            finance = await owner_overview.построить(session, today)
-        except Exception as e:  # noqa: BLE001 — YCLIENTS может быть недоступен
-            logger.warning(f"витрина: финансы не посчитались: {e}")
-    try:
-        base_pulse = await client_base.build_base_pulse(session)
-        base_flow = await client_base.build_base_flow(session)
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"витрина: база не посчиталась: {e}")
-        base_pulse = base_flow = None
-    try:
-        calls = await client_base.calls_for_day(session, client_base.moscow_today())
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"витрина: обзвон не посчитался: {e}")
-        calls = None
-    if finance is None and base_pulse is None and calls is None:
-        return None
-    # Время последней правки сервер проставит сам при записи документа:
-    # если включить его сюда, документ менялся бы каждый цикл обмена и
-    # отправлялся бы заново даже когда ничего по сути не изменилось.
-    return {"finance": finance, "base_pulse": base_pulse, "base_flow": base_flow, "calls": calls}
-
-
 async def локальные(session: AsyncSession, today: date | None = None) -> dict[str, Any]:
     today = today or datetime.now(UTC).date()
     docs: dict[str, Any] = {}
@@ -175,10 +146,108 @@ async def локальные(session: AsyncSession, today: date | None = None) -
     )).scalars()
     for r in rows:
         by_day.setdefault(r.op_date.isoformat(), []).append(
-            {"amount": str(r.amount), "fee": str(r.fee), "net": str(r.net), "file": r.source_file})
+            {"amount": str(r.amount), "fee": str(r.fee), "net": str(r.net),
+             "file": r.source_file, "source": r.source or ""})
     for day, items in by_day.items():
         docs[f"acq:{day}"] = items
+    docs.update(await _обзвон_в_документы(session, today))
+    # Пустые документы не гоняем: иначе каждая установка шлёт «ничего» по кругу.
+    состояние = await _состояние_клиентов(session)
+    if состояние:
+        docs["client_state"] = состояние
+    теги = [
+        {"code": t.code, "name": t.name, "color": t.color,
+         "exclude_from_calls": t.exclude_from_calls, "promo": t.promo, "sort": t.sort}
+        for t in (await session.execute(select(ClientTag).order_by(ClientTag.sort, ClientTag.id))).scalars()
+    ]
+    if теги:
+        docs["client_tags"] = теги
     return docs
+
+
+# Поля состояния клиента, которые разрешено выгружать. Имени и телефона здесь
+# нет и быть не должно — сервер за рубежом (решение владельца 16.10.2026).
+ПОЛЯ_СОСТОЯНИЯ = ("yclients_id", "next_contact_at", "call_status", "loyalty", "do_not_call", "tags")
+
+
+async def _состояние_клиентов(session: AsyncSession) -> list[dict]:
+    """Плановые звонки, статусы, светофор и теги — по номеру клиента в YCLIENTS."""
+    теги: dict[int, list[str]] = {}
+    for cid, код in (await session.execute(
+        select(ClientTagLink.client_id, ClientTag.code)
+        .join(ClientTag, ClientTag.id == ClientTagLink.tag_id)
+    )).all():
+        теги.setdefault(cid, []).append(код)
+
+    строки = (await session.execute(
+        select(Client).where(
+            (Client.next_contact_at.is_not(None))
+            | (Client.call_status.is_not(None))
+            | (Client.loyalty.is_not(None))
+            | (Client.do_not_call.is_(True))
+            | (Client.id.in_(теги.keys() or [0]))
+        )
+    )).scalars()
+    return [
+        {"yclients_id": c.yclients_id,
+         "next_contact_at": c.next_contact_at.isoformat() if c.next_contact_at else None,
+         "call_status": c.call_status, "loyalty": c.loyalty,
+         "do_not_call": bool(c.do_not_call), "tags": теги.get(c.id, [])}
+        for c in строки
+    ]
+
+
+# Поля, которые разрешено выгружать по звонку. Список закрытый: добавить сюда
+# имя или телефон — значит нарушить обещание владельцу, поэтому состав
+# документа проверяется тестом.
+ПОЛЯ_ЗВОНКА = ("yclients_id", "at", "outcome", "group_code", "admin", "was_lost", "verification",
+               "record_id")
+МАШИНА_KEY = "install_id"
+
+
+async def машина(session: AsyncSession) -> str:
+    """Короткий номер этой установки. Звонки каждый компьютер выгружает своим
+    документом (calls:<месяц>:<номер>): общий на два компьютера документ они
+    перетирали бы друг у друга, и звонки салона не доезжали до Мака."""
+    import uuid
+
+    row = await session.get(AppSetting, МАШИНА_KEY)
+    if row is None or not row.value:
+        row = AppSetting(key=МАШИНА_KEY, value=uuid.uuid4().hex[:8])
+        session.add(row)
+        await session.flush()
+    return row.value
+
+
+async def _обзвон_в_документы(session: AsyncSession, today: date) -> dict[str, Any]:
+    """Аналитика обзвона помесячно: только yclients_id клиента и цифры."""
+    начало = today - timedelta(days=CALLS_WINDOW_DAYS)
+    строки = (await session.execute(
+        select(ContactAttempt, ContactTask.group_code, Client.yclients_id)
+        .join(ContactTask, ContactTask.id == ContactAttempt.task_id)
+        .join(Client, Client.id == ContactTask.client_id)
+        .where(ContactAttempt.created_at >= datetime(начало.year, начало.month, начало.day, tzinfo=UTC))
+        .order_by(ContactAttempt.created_at)
+    )).all()
+    по_месяцам: dict[str, list] = {}
+    моя = await машина(session)
+    for попытка, группа, yclients_id in строки:
+        когда = попытка.created_at
+        если_без_зоны = когда.replace(tzinfo=UTC) if когда.tzinfo is None else когда
+        ym = если_без_зоны.strftime("%Y-%m")
+        по_месяцам.setdefault(ym, []).append({
+            "yclients_id": yclients_id,
+            "at": _utc(попытка.created_at),
+            "outcome": попытка.outcome,
+            "group_code": группа,
+            "admin": попытка.actor_id,
+            "was_lost": bool(попытка.was_lost),
+            "verification": попытка.verification_status,
+            # Номер записи YCLIENTS — по нему другой компьютер найдёт дату
+            # записи в своей базе визитов. Имени и телефона здесь нет.
+            "record_id": попытка.yclients_record_id,
+        })
+    return {f"calls:{ym}:{моя}": items for ym, items in по_месяцам.items()}
 
 
 async def _применить(session: AsyncSession, key: str, value: Any) -> None:
@@ -225,12 +294,59 @@ async def _применить(session: AsyncSession, key: str, value: Any) -> No
         for e in value["employees"]:
             session.add(ShiftEmployee(shift_id=смена.id, staff_id=e["staff_id"], staff_name_snapshot=e["name"],
                                       arrival_time=e["arrival"], departure_time=e["departure"]))
+    elif key == "client_tags":
+        известные = {t.code: t for t in (await session.execute(select(ClientTag))).scalars()}
+        for i, т in enumerate(value):
+            тег = известные.get(т["code"])
+            if тег is None:
+                session.add(ClientTag(code=т["code"], name=т["name"], color=т.get("color"),
+                                      exclude_from_calls=т.get("exclude_from_calls", False),
+                                      promo=т.get("promo", False), sort=т.get("sort", i)))
+            else:
+                тег.name, тег.color = т["name"], т.get("color")
+                тег.exclude_from_calls = т.get("exclude_from_calls", False)
+                тег.promo = т.get("promo", False)
+    elif key == "client_state":
+        # Состояние привязано к номеру клиента в YCLIENTS: имён на сервере нет.
+        свои = {c.yclients_id: c for c in (await session.execute(select(Client))).scalars()}
+        коды = {t.code: t.id for t in (await session.execute(select(ClientTag))).scalars()}
+        for строка in value:
+            c = свои.get(строка.get("yclients_id"))
+            if c is None:
+                continue  # такого клиента в этой базе нет — ничего не придумываем
+            n = строка.get("next_contact_at")
+            c.next_contact_at = date.fromisoformat(n) if n else None
+            c.call_status = строка.get("call_status")
+            c.loyalty = строка.get("loyalty")
+            c.do_not_call = bool(строка.get("do_not_call"))
+            нужные = {коды[к] for к in строка.get("tags", []) if к in коды}
+            есть = set((await session.execute(
+                select(ClientTagLink.tag_id).where(ClientTagLink.client_id == c.id))).scalars())
+            for tag_id in нужные - есть:
+                session.add(ClientTagLink(client_id=c.id, tag_id=tag_id))
+            if есть - нужные:
+                await session.execute(delete(ClientTagLink).where(
+                    ClientTagLink.client_id == c.id, ClientTagLink.tag_id.in_(есть - нужные)))
+    elif key.startswith("calls:"):
+        # Чужие звонки в свои таблицы не пишем: клиентов с такими id здесь
+        # может не быть. Держим как кэш — журнал обзвона показывает их рядом
+        # со своими. Свой документ, вернувшийся с сервера, не нужен.
+        if key.endswith(":" + await машина(session)):
+            return
+        row = await session.get(AppSetting, CALLS_CACHE_KEY)
+        кэш = json.loads(row.value) if row and row.value else {}
+        кэш[key[6:]] = value
+        if row is None:
+            session.add(AppSetting(key=CALLS_CACHE_KEY, value=json.dumps(кэш, ensure_ascii=False)))
+        else:
+            row.value = json.dumps(кэш, ensure_ascii=False)
     elif key.startswith("acq:"):
         day = date.fromisoformat(key[4:])
         await session.execute(delete(AcquiringRow).where(AcquiringRow.op_date == day))
         for r in value:
             session.add(AcquiringRow(op_date=day, amount=Decimal(r["amount"]), fee=Decimal(r["fee"]),
-                                     net=Decimal(r["net"]), source_file=r["file"]))
+                                     net=Decimal(r["net"]), source_file=r["file"],
+                                     source=r.get("source", "")))
     else:
         return
     await session.commit()
@@ -332,59 +448,3 @@ async def run_hub_loop() -> None:
     while True:
         await один_цикл()
         await asyncio.sleep(INTERVAL_SECONDS)
-
-
-async def протолкнуть_витрину(session: AsyncSession, client: httpx.AsyncClient) -> bool:
-    """Отдельный, нечастый пуш дашборда владельца — не часть общего цикла обмена.
-
-    Выделен из обмен()/локальные(): витрина считает выручку по YCLIENTS за
-    полгода, и гонять это каждые 45 секунд вместе с остальными документами
-    слишком дорого и подставляет основной цикл синхронизации под сетевые
-    сбои YCLIENTS. Использует тот же hub_state, что и обмен() — состояния
-    не расходятся.
-    """
-    витрина = await _витрина_владельца(session)
-    if витрина is None:
-        return False
-    state = await _состояние(session)
-    known: dict = state["docs"]
-    h = _хеш(витрина)
-    st = known.get(DASHBOARD_KEY)
-    if st and st["h"] == h:
-        return False
-    key = f"{_префикс()}{DASHBOARD_KEY}"
-    body = {"value": витрина, "base_seq": st["seq"] if st else 0}
-    r = await client.put(f"/v1/doc/{key}", json=body)
-    if r.status_code == 409:
-        return False
-    r.raise_for_status()
-    known[DASHBOARD_KEY] = {"h": h, "seq": r.json()["seq"]}
-    await _сохранить_состояние(session, state)
-    return True
-
-
-def запустить_витрину_в_фоне() -> None:
-    """Пуш витрины по событию — вызывать при открытии и закрытии смены.
-
-    Решение владельца 05.10.2026: этих двух моментов в сутках достаточно —
-    именно тогда показатели меняются настолько, что их стоит пересчитать.
-    Остальное время дёргать YCLIENTS ради той же картины бессмысленно,
-    поэтому отдельного таймера здесь больше нет (было 10 минут).
-    Не блокирует вызывающий код: считает и отправляет в фоне.
-    """
-    if not настроен():
-        return
-    asyncio.create_task(_витрина_в_фоне())
-
-
-async def _витрина_в_фоне() -> None:
-    from app.database import async_session
-
-    if _lock_витрины.locked():
-        return
-    async with _lock_витрины:
-        try:
-            async with _клиент() as c, async_session() as session:
-                await протолкнуть_витрину(session, c)
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"витрина: не отправилась: {e}")

@@ -11,6 +11,7 @@ import io
 from collections import defaultdict
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
+from typing import Any
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -90,6 +91,24 @@ def _колонка(шапка: list[str], *, нужно: tuple[str, ...], пр�
     return подходят[0] if подходят else None
 
 
+# Какой это поток отчётов. Банк шлёт карты и СБП разными файлами за один и
+# тот же день: складывать их надо, а не затирать одним другой. По имени файла
+# различить нельзя — у Альфа-Банка оно вида «94771706.csv», то есть из одних
+# цифр. Поэтому смотрим и в имя, и в шапку самого файла: в реестре СБП слова
+# «СБП» или «быстрых платежей» встречаются в заголовке или в названии
+# колонок. Всё остальное считаем эквайрингом — третьего потока у салона нет,
+# а если появится, он сольётся с картами, и это будет видно в подсказке на
+# графике сверки сразу.
+СБП = ("сбп", "sbp", "быстрых платеж", "fast payment")
+
+
+def _поток(filename: str, таблица: list[list[object]], до_строки: int) -> str:
+    текст = filename.lower() + " " + " ".join(
+        _текст(ячейка) for строка in таблица[: до_строки + 1] for ячейка in строка
+    )
+    return "СБП" if any(слово in текст for слово in СБП) else "Эквайринг"
+
+
 def разобрать(content: bytes, filename: str) -> dict:
     """Строки отчёта: [{date, amount, fee, net}] и сведения о найденных колонках."""
     таблица = _таблица(content, filename)
@@ -148,6 +167,7 @@ def разобрать(content: bytes, filename: str) -> dict:
     сумма_строк = sum((r["amount"] for r in rows), Decimal(0))
     return {
         "rows": rows, "skipped": пропущено, "header_total": итог_шапки,
+        "source": _поток(filename, таблица, номер),
         "matches_header": None if итог_шапки is None else abs(итог_шапки - сумма_строк) <= CENT,
         "columns": {"date": шапка[d], "amount": шапка[a],
                     "fee": шапка[f] if f is not None else None,
@@ -165,18 +185,26 @@ async def сохранить(
     разбор = разобрать(content, filename)
     rows = разбор["rows"]
     даты = {r["date"] for r in rows}
+    поток_ = разбор["source"]
     if день is not None and день not in даты:
         raise ValueError(
             f"В файле нет операций за {день:%d.%m.%Y}: в нём {min(даты):%d.%m}–{max(даты):%d.%m}. "
             "Проверьте, тот ли это отчёт."
         )
-    await session.execute(delete(AcquiringRow).where(AcquiringRow.op_date.in_(даты)))
+    # Заменяем только свой поток. Пустой поток — строки, загруженные до
+    # появления этого поля: их тоже убираем, иначе старое и новое сложатся.
+    await session.execute(
+        delete(AcquiringRow).where(
+            AcquiringRow.op_date.in_(даты),
+            AcquiringRow.source.in_([поток_, ""]),
+        )
+    )
     for r in rows:
         session.add(AcquiringRow(op_date=r["date"], amount=r["amount"], fee=r["fee"],
-                                 net=r["net"], source_file=filename[:255]))
+                                 net=r["net"], source_file=filename[:255], source=поток_))
     await session.commit()
     return {
-        "rows": len(rows), "skipped": разбор["skipped"], "days": len(даты),
+        "rows": len(rows), "skipped": разбор["skipped"], "days": len(даты), "source": поток_,
         "date_from": min(даты).isoformat(), "date_to": max(даты).isoformat(),
         "amount": float(sum(r["amount"] for r in rows)),
         "fee": float(sum(r["fee"] for r in rows)),
@@ -188,15 +216,22 @@ async def сохранить(
 
 
 async def по_дням(session: AsyncSession, start: date, end: date) -> dict[date, dict[str, Decimal]]:
-    """Суммы отчёта банка по дням включительно: оборот, комиссия, зачисление."""
+    """Суммы отчётов банка по дням включительно: оборот, комиссия, зачисление.
+
+    Потоки за день складываются: карты и СБП — деньги одного дня. Разбивка
+    по потокам лежит в ``by_source`` — по ней видно, что именно загружено.
+    """
     res = await session.execute(
         select(AcquiringRow).where(AcquiringRow.op_date >= start, AcquiringRow.op_date <= end)
     )
-    days: dict[date, dict[str, Decimal]] = defaultdict(
-        lambda: {"amount": Decimal(0), "fee": Decimal(0), "net": Decimal(0)}
+    days: dict[date, dict[str, Any]] = defaultdict(
+        lambda: {"amount": Decimal(0), "fee": Decimal(0), "net": Decimal(0), "by_source": {}}
     )
     for r in res.scalars():
-        days[r.op_date]["amount"] += r.amount
-        days[r.op_date]["fee"] += r.fee
-        days[r.op_date]["net"] += r.net
+        день = days[r.op_date]
+        день["amount"] += r.amount
+        день["fee"] += r.fee
+        день["net"] += r.net
+        имя = r.source or "Отчёт"
+        день["by_source"][имя] = день["by_source"].get(имя, Decimal(0)) + r.amount
     return dict(days)

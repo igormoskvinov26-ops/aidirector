@@ -14,7 +14,7 @@ from fastapi import (
     Request,
     UploadFile,
 )
-from fastapi.responses import FileResponse
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -152,9 +152,10 @@ async def sync_status(db: AsyncSession = Depends(get_db)) -> dict:
 @router.get("/tasks")
 async def tasks(
     status: str = Query("open"),
+    admin: str | None = Query(None, description="Имя админа — подставляется в скрипт"),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    return await client_base.get_tasks(db, status)
+    return await client_base.get_tasks(db, status, admin)
 
 
 @router.patch("/clients/{client_id}/note")
@@ -187,20 +188,17 @@ async def task_outcome(
         admin_staff_id = int(admin_staff_id) if admin_staff_id not in (None, "") else None
     except (TypeError, ValueError):
         admin_staff_id = None
-    # client_id — тот, которого админ реально видел на карточке; сверяется
-    # с текущим состоянием задачи перед записью (решение владельца 22.11.2026).
-    client_id = body.get("client_id")
+    значение = body.get("next_contact")
     try:
-        client_id = int(client_id) if client_id not in (None, "") else None
-    except (TypeError, ValueError):
-        client_id = None
-    result = await client_base.record_outcome(
-        db, task_id, outcome, channel, comment, actor_id, admin_staff_id,
-        expected_client_id=client_id,
+        дата = date.fromisoformat(значение) if значение else None
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Дата в формате ГГГГ-ММ-ДД")
+    итог = await client_base.record_outcome(
+        db, task_id, outcome, channel, comment, actor_id, admin_staff_id, дата
     )
-    if not result.get("ok"):
-        raise HTTPException(status_code=409, detail=result.get("error", "не удалось записать результат"))
-    return result
+    if not итог.get("ok"):
+        raise HTTPException(status_code=400, detail=итог.get("error", "не сохранено"))
+    return итог
 
 
 @router.post("/clients/{client_id}/do-not-call")
@@ -215,6 +213,160 @@ async def do_not_call(
     if not value and getattr(request.state, "role", None) != ROLE_OWNER:
         raise HTTPException(status_code=403, detail="Снять пометку может только управляющий")
     return await client_base.set_do_not_call(db, client_id, value, body.get("actor"))
+
+
+@router.get("/returned")
+async def returned(
+    month: str | None = Query(None, description="ГГГГ-ММ, по умолчанию текущий"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Кого обзвон вернул из потерянных: статистика месяца, график, список."""
+    return await client_base.returned_clients(db, month)
+
+
+@router.get("/calls")
+async def calls(
+    period: str = Query("month", description="week|month|quarter"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Вкладка «Обзвоны»: совершённые звонки подгруппами по результату."""
+    return await client_base.calls_feed(db, period)
+
+
+@router.get("/search")
+async def search(
+    phone: str = Query("", description="Любые цифры номера, от трёх"),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """Поиск клиента по цифрам телефона — по всей базе, не только по очереди."""
+    return await client_base.search_by_phone(db, phone)
+
+
+@router.get("/base")
+async def base(db: AsyncSession = Depends(get_db)) -> dict:
+    """Вся клиентская база: очередь на сегодня — признаки строк, не отдельный список."""
+    return {"rows": await client_base.вся_база(db), "yclients_url": client_base.шаблон_yclients()}
+
+
+@router.get("/clients/{client_id}/card")
+async def client_card(client_id: int, admin: str | None = Query(None),
+                      db: AsyncSession = Depends(get_db)) -> dict:
+    """Карточка обзвона любого клиента базы (скрипт, статусы, кнопки)."""
+    карточка = await client_base.карточка_клиента(db, client_id, admin)
+    if карточка is None:
+        raise HTTPException(status_code=404, detail="клиент не найден")
+    return карточка
+
+
+@router.post("/clients/{client_id}/open")
+async def open_client(client_id: int, db: AsyncSession = Depends(get_db)) -> dict:
+    """Найденного поиском клиента — в сегодняшнюю очередь, чтобы отметить звонок."""
+    итог = await client_base.open_from_search(db, client_id)
+    if not итог.get("ok"):
+        raise HTTPException(status_code=404, detail=итог.get("error"))
+    return итог
+
+
+@router.get("/call-log")
+async def call_log(
+    date_from: date | None = Query(None, alias="from", description="ГГГГ-ММ-ДД; пусто — всё время"),
+    date_to: date | None = Query(None, alias="to", description="ГГГГ-ММ-ДД включительно"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Журнал обзвона: каждое нажатие кнопки результата, новые сверху."""
+    return await client_base.call_log(db, date_from, date_to)
+
+
+@router.get("/tags")
+async def tags(db: AsyncSession = Depends(get_db)) -> list[dict]:
+    return await client_base.tags_list(db)
+
+
+@router.post("/tags")
+async def save_tag(
+    request: Request, body: dict = Body(...), db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Завести или поправить тег.
+
+    Заводит и администратор — прямо в строке тегов на карточке обзвона
+    (решение владельца 16.10.2026). Удаление осталось за управляющим: это
+    снимает тег со всех клиентов разом.
+    """
+    return await client_base.save_tag(db, body)
+
+
+@router.delete("/tags/{tag_id}")
+async def delete_tag(
+    tag_id: int, request: Request, db: AsyncSession = Depends(get_db)
+) -> dict:
+    if getattr(request.state, "role", None) != ROLE_OWNER:
+        raise HTTPException(status_code=403, detail="Теги удаляет управляющий")
+    return await client_base.delete_tag(db, tag_id)
+
+
+@router.post("/clients/{client_id}/tags/{tag_id}")
+async def set_client_tag(
+    client_id: int, tag_id: int, body: dict = Body(default={}),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Повесить или снять тег с клиента — это делает и администратор."""
+    return await client_base.set_client_tag(
+        db, client_id, tag_id, bool(body.get("value", True)), body.get("actor")
+    )
+
+
+@router.post("/clients/{client_id}/next-contact")
+async def next_contact(
+    client_id: int, body: dict = Body(...), db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Запланировать следующий контакт. Пустая дата снимает план."""
+    значение = body.get("date")
+    try:
+        когда = date.fromisoformat(значение) if значение else None
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Дата в формате ГГГГ-ММ-ДД")
+    return await client_base.set_next_contact(db, client_id, когда, body.get("note"), body.get("actor"))
+
+
+@router.post("/clients/{client_id}/loyalty")
+async def loyalty(
+    client_id: int, body: dict = Body(...), db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Светофор лояльности. Повторное нажатие того же цвета его гасит."""
+    итог = await client_base.set_loyalty(db, client_id, body.get("value"), body.get("actor"))
+    if not итог.get("ok"):
+        raise HTTPException(status_code=400, detail=итог.get("error", "не сохранено"))
+    return итог
+
+
+@router.delete("/scripts/{kind}/{key}/{variant}")
+async def delete_script(
+    kind: str, key: str, variant: str, request: Request, db: AsyncSession = Depends(get_db)
+) -> dict:
+    if getattr(request.state, "role", None) != ROLE_OWNER:
+        raise HTTPException(status_code=403, detail="Скрипты правит управляющий")
+    return await client_base.delete_script(db, kind, key, variant)
+
+
+@router.get("/scripts")
+async def scripts(db: AsyncSession = Depends(get_db)) -> dict:
+    return await client_base.scripts_all(db)
+
+
+@router.post("/scripts")
+async def save_script(
+    request: Request, body: dict = Body(...), db: AsyncSession = Depends(get_db)
+) -> dict:
+    if getattr(request.state, "role", None) != ROLE_OWNER:
+        raise HTTPException(status_code=403, detail="Скрипты правит управляющий")
+    итог = await client_base.save_script(
+        db, body.get("kind", ""), body.get("key", ""),
+        body.get("phone_text"), body.get("message_text"), body.get("actor"),
+        body.get("variant") or "main", body.get("title"), body.get("hint"),
+    )
+    if not итог.get("ok"):
+        raise HTTPException(status_code=400, detail=итог.get("error", "не сохранено"))
+    return итог
 
 
 @router.get("/calls/today")
@@ -248,14 +400,19 @@ def _require_owner(request: Request) -> None:
 
 
 @router.get("/journal")
-async def journal_download() -> FileResponse:
+async def journal_download(db: AsyncSession = Depends(get_db)) -> Response:
+    """Excel-журнал для скачивания: только номер клиента YCLIENTS, без имени
+    и телефона — даже если на диске лежит файл прежнего вида."""
+    from urllib.parse import quote
+
     path = call_journal.journal_path()
     if not path.exists():
         raise HTTPException(status_code=404, detail="Журнал пока пуст: не было ни одного звонка")
-    return FileResponse(
-        path,
-        filename=call_journal.JOURNAL_NAME,
+    номера = await call_journal.номера_по_телефону(db) if call_journal.старый_вид(path) else None
+    return Response(
+        call_journal.выгрузка(path, номера),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(call_journal.JOURNAL_NAME)}"},
     )
 
 
@@ -272,7 +429,8 @@ async def journal_status() -> dict:
 
 
 @router.post("/journal/import")
-async def journal_import(request: Request, file: UploadFile = File(...)) -> dict:
+async def journal_import(request: Request, file: UploadFile = File(...),
+                         db: AsyncSession = Depends(get_db)) -> dict:
     """Влить журнал прошлой установки. Строки дописываются, дубли пропускаются."""
     _require_owner(request)
     suffix = Path(file.filename or "").suffix.lower()
@@ -283,7 +441,10 @@ async def journal_import(request: Request, file: UploadFile = File(...)) -> dict
         tmp.write(await file.read())
         temp_path = Path(tmp.name)
     try:
-        return call_journal.merge_journal(temp_path)
+        # Старый журнал с именами и телефонами тоже принимается: номер
+        # YCLIENTS находится по телефону, имя и телефон в файл не попадают.
+        номера = await call_journal.номера_по_телефону(db) if call_journal.старый_вид(temp_path) else None
+        return call_journal.merge_journal(temp_path, номера)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     finally:

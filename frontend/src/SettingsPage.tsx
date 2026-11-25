@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import CallScripts from "./CallScripts";
 import ReportSettings from "./ReportSettings";
 import SalonSettings from "./SalonSettings";
 import {
@@ -228,6 +229,8 @@ export default function SettingsPage() {
       <SalonSettings />
 
       <ReportSettings />
+
+      <CallScripts />
 
       <УчёткаВладельца />
 

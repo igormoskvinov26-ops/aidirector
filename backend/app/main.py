@@ -11,6 +11,8 @@ import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+APP_VERSION = "9.25.5"
+
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -34,7 +36,7 @@ from app.api.routes.monthly_report import router as monthly_report_router
 from app.api.routes.settings import router as settings_router
 from app.api.yclients import YclientsНеНастроен
 from app.config import settings
-from app.database import check_db, init_db, расширить_yclients_id
+from app.database import check_db, init_db
 from app.main_roles import ROLE_MASTER, ROLE_OPERATOR, ROLE_OWNER
 from app.services import branches, configuration, credentials, salon
 
@@ -272,7 +274,6 @@ async def lifespan(app: FastAPI):
     # where client-base, finance and AI silently returned 500 forever.
     await init_db()
     logger.info("Database ready")
-    await расширить_yclients_id()
 
     settings.output_dir.mkdir(parents=True, exist_ok=True)
     settings.stories_dir.mkdir(parents=True, exist_ok=True)
@@ -293,7 +294,6 @@ async def lifespan(app: FastAPI):
         async with async_session() as session:
             await configuration.загрузить(session)
             await credentials.загрузить(session)
-            await credentials.посеять_top_из_файла(session, "/app/top-seed.env")
             await salon.загрузить(session)
     except Exception as сбой:  # noqa: BLE001
         logger.warning(
@@ -302,6 +302,17 @@ async def lifespan(app: FastAPI):
         )
 
     await branches.восстановить_активный()
+
+    # Excel-журнал обзвона прежнего вида хранил имена и телефоны клиентов.
+    # Переписываем его без них (решение владельца 30.10.2026). Сбой здесь не
+    # должен мешать запуску — повторим при следующем.
+    try:
+        from app.services import call_journal
+
+        async with async_session() as session:
+            await call_journal.очистить_старые(session)
+    except Exception as сбой:  # noqa: BLE001
+        logger.warning(f"журнал обзвона не очищен от личных данных: {type(сбой).__name__}: {сбой}")
 
     if настройка_не_закончена():
         _объявить_код_настройки()
@@ -336,7 +347,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Rubl Пульт",
-    version="2.0.0",
+    version=APP_VERSION,
     description="AI-powered management system for Rubl Barbershop",
     lifespan=lifespan,
     docs_url="/api/docs" if settings.debug else None,
@@ -399,7 +410,7 @@ async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse
 
 @app.get("/health")
 async def health() -> dict:
-    return {"status": "ok", "version": "2.0.0", "database": await check_db()}
+    return {"status": "ok", "version": APP_VERSION, "database": await check_db()}
 
 
 @app.get("/api/me")

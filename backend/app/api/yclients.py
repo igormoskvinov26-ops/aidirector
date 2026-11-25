@@ -124,6 +124,43 @@ def _служебный(name):
     return служебный(name)
 
 
+def причина_yclients(response: httpx.Response) -> str:
+    """Что YCLIENTS сам пишет об отказе: meta.message или errors.message."""
+    try:
+        тело = response.json()
+    except ValueError:
+        return response.text.strip()[:200]
+    if isinstance(тело, dict):
+        meta = тело.get("meta") or {}
+        errors = тело.get("errors") or {}
+        for кандидат in (
+            meta.get("message") if isinstance(meta, dict) else None,
+            errors.get("message") if isinstance(errors, dict) else None,
+            тело.get("message"),
+        ):
+            if кандидат:
+                return str(кандидат)[:200]
+    return ""
+
+
+class YclientsОтказ(httpx.HTTPStatusError):
+    """Ошибка ответа YCLIENTS с его собственным объяснением.
+
+    Раньше на экране было только «Client error '403 Forbidden' for url …»,
+    а причину, которую YCLIENTS пишет в теле ответа, Пульт выбрасывал
+    (30.10.2026 по такому тексту нельзя было понять, что с доступом).
+    """
+
+    def __init__(self, response: httpx.Response):
+        причина = причина_yclients(response)
+        путь = response.request.url.path.replace("/api/v1", "")
+        текст = f"YCLIENTS отказал ({response.status_code})"
+        if причина:
+            текст += f": {причина}"
+        текст += f" [{путь}]"
+        super().__init__(текст, request=response.request, response=response)
+
+
 class YClientsClient:
     def __init__(self, company_id: int | None = None, user_token: str | None = None):
         # Ключи берутся через configuration, а не напрямую из .env: владелец
@@ -180,8 +217,18 @@ class YClientsClient:
     )
     async def _request(self, path: str, params: dict | None = None) -> httpx.Response:
         response = await self._client.get(path, params=params)
-        response.raise_for_status()
+        if response.is_error:
+            raise YclientsОтказ(response)
         return response
+
+    async def мои_филиалы(self) -> list[tuple[int, str]]:
+        """Филиалы, к которым у пользовательского токена есть доступ."""
+        r = await self._client.get("/companies", params={"my": 1, "count": 100})
+        if r.is_error:
+            raise YclientsОтказ(r)
+        данные = r.json()
+        список = данные.get("data", данные) if isinstance(данные, dict) else данные
+        return [(int(c["id"]), str(c.get("title") or "")) for c in (список or []) if isinstance(c, dict) and c.get("id")]
 
     async def _get(self, path: str, params: dict | None = None) -> dict[str, Any]:
         response = await self._request(path, params)

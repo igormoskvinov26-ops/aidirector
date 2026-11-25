@@ -61,6 +61,9 @@ BUTTON_LABELS = {
     "targets": {"extra_services_norm": 35, "sales_ratio_norm_pct": 10},
     "extra_service_ids": [],
     "admins": [],  # [{"staff_id": int, "name": str, "creator_values": [str]}]
+    # Кого не показывать среди звонящих (уволенные). В месячном отчёте за
+    # прошлые месяцы они остаются: там считается их работа (02.11.2026).
+    "hidden_admins": [],
     "attribution_window_days": 3,
     # Стандартные поля записи YCLIENTS: дата создания и ID пользователя-автора.
     "record_created_field": "create_date",
@@ -110,6 +113,8 @@ def _clean_settings(patch: dict[str, Any]) -> dict[str, Any]:
             values = [str(v).strip() for v in (a.get("creator_values") or []) if str(v).strip()]
             admins.append({"staff_id": sid, "name": name, "creator_values": values})
         out["admins"] = admins
+    if "hidden_admins" in patch:
+        out["hidden_admins"] = sorted({int(x) for x in patch["hidden_admins"] or []})
     if "attribution_window_days" in patch:
         days = int(patch["attribution_window_days"])
         if not 0 <= days <= 60:
@@ -484,6 +489,9 @@ async def auto_admins(cfg: dict[str, Any], records: list[dict]) -> list[dict]:
         return manual
     names, linked = await cached("yclients-directory", _directory, ttl=600)
     masters = {int(r["staff_id"]) for r in settings.barber_payroll_rules}
+    # Добавленный вручную (новый сотрудник ещё без своих записей) и он же,
+    # найденный потом по записям, — один человек: склеиваем по номеру и имени.
+    свои = [{**a, "creator_values": list(a.get("creator_values") or [])} for a in manual]
     found = []
     for uid in sorted(fresh, key=lambda u: -seen[u]):
         link = linked.get(uid)
@@ -491,13 +499,25 @@ async def auto_admins(cfg: dict[str, Any], records: list[dict]) -> list[dict]:
         if not staff_id or staff_id in masters:
             continue
         name = (link or {}).get("name") or names.get(uid) or f"Сотрудник №{uid}"
+        тот_же = next((a for a in свои if a["staff_id"] == staff_id
+                       or a["name"].strip().lower() == name.strip().lower()), None)
+        if тот_же:
+            тот_же["creator_values"].append(uid)
+            continue
         found.append({"staff_id": staff_id, "name": name, "creator_values": [uid]})
-    return manual + found
+    return свои + found
 
 
-async def current_admins(session: AsyncSession) -> list[dict]:
-    """Список администраторов для выбора при звонке: авторы записей за последние 30 дней."""
+async def current_admins(session: AsyncSession, скрытых: bool = False) -> list[dict]:
+    """Список администраторов для выбора при звонке: авторы записей за последние
+    30 дней плюс добавленные владельцем, без скрытых (``скрытых=True`` — со всеми)."""
     cfg = await load_settings(session)
+    скрыты = set(cfg.get("hidden_admins") or [])
+    все = await _все_админы(session, cfg)
+    return все if скрытых else [a for a in все if a["staff_id"] not in скрыты]
+
+
+async def _все_админы(session: AsyncSession, cfg: dict[str, Any]) -> list[dict]:
 
     async def load() -> list[dict]:
         from app.api.yclients import YClientsClient
@@ -509,7 +529,8 @@ async def current_admins(session: AsyncSession) -> list[dict]:
         return await auto_admins(cfg, rows)
 
     try:
-        return await cached(f"admins-now:{len(cfg.get('admins') or [])}", load, ttl=600)
+        ключ = ",".join(f"{a['staff_id']}:{a['name']}" for a in cfg.get("admins") or [])
+        return await cached(f"admins-now:{ключ}", load, ttl=600)
     except Exception as exc:  # noqa: BLE001
         logger.warning(f"администраторы не определены: {exc}")
         return list(cfg.get("admins") or [])

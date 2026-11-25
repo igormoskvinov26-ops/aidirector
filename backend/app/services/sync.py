@@ -105,7 +105,9 @@ def непустой(что: str, данные: list[Any]) -> None:
         )
 
 
-async def sync_all(date_from: str | None = None, date_to: str | None = None) -> dict[str, Any]:
+async def sync_all(
+    date_from: str | None = None, date_to: str | None = None
+) -> dict[str, Any]:
     """Pull YCLIENTS -> PostgreSQL for a bounded window.
 
     When no dates are given the window defaults to ``default_window()``. The
@@ -137,7 +139,8 @@ async def sync_all(date_from: str | None = None, date_to: str | None = None) -> 
         return {
             "status": "skipped",
             "reason": "not_configured",
-            "error": "YCLIENTS не настроен — заполните ключи в разделе «Настройки → Интеграции»",
+            "error": "YCLIENTS не настроен — заполните ключи в разделе "
+            "«Настройки → Интеграции»",
         }
 
     _sync_in_progress = True
@@ -146,23 +149,15 @@ async def sync_all(date_from: str | None = None, date_to: str | None = None) -> 
     stats: dict[str, Any] = {}
     ошибки: list[str] = []
 
-    async def сбой(session, шаг: str, беда: Exception) -> None:
+    def сбой(шаг: str, беда: Exception) -> None:
         """Записать отказ шага так, чтобы по тексту было видно место.
 
         Без названия шага на экране оставалось голое «'NoneType' object is not
         iterable» — по нему нельзя понять, сотрудники это, визиты или продажи.
-
-        Транзакция откатывается: иначе после ошибки в базе (например, число не
-        влезло в колонку) все следующие шаги падали с «current transaction is
-        aborted» — один сбой визитов ронял ещё и продажи (журнал 25.11.2026).
         """
         имя = STAGES.get(шаг, шаг)
         logger.error(f"шаг «{имя}» не прошёл: {беда}")
         ошибки.append(f"«{имя}»: {беда}")
-        try:
-            await session.rollback()
-        except Exception as откат:  # noqa: BLE001
-            logger.warning(f"откат после шага «{имя}» не удался: {откат}")
 
     try:
         async with YClientsClient() as api_client:
@@ -176,7 +171,7 @@ async def sync_all(date_from: str | None = None, date_to: str | None = None) -> 
                     employee_ids = await EmployeeRepository.upsert_many(session, staff_data)
                     stats["staff"] = len(employee_ids)
                 except Exception as беда:
-                    await сбой(session, "staff", беда)
+                    сбой("staff", беда)
 
                 # 2. Services
                 _sync_stage = "services"
@@ -187,7 +182,7 @@ async def sync_all(date_from: str | None = None, date_to: str | None = None) -> 
                     svc_count = await ServiceRepository.upsert_many(session, services_data)
                     stats["services"] = svc_count
                 except Exception as беда:
-                    await сбой(session, "services", беда)
+                    сбой("services", беда)
 
                 # 3. Clients
                 _sync_stage = "clients"
@@ -197,7 +192,7 @@ async def sync_all(date_from: str | None = None, date_to: str | None = None) -> 
                     client_count = await ClientRepository.upsert_many(session, clients_data)
                     stats["clients"] = client_count
                 except Exception as беда:
-                    await сбой(session, "clients", беда)
+                    сбой("clients", беда)
 
                 # Справочники берём из базы, а не из свежего ответа: если шаг
                 # выше не прошёл, соответствия всё равно нужны — из того, что
@@ -211,12 +206,6 @@ async def sync_all(date_from: str | None = None, date_to: str | None = None) -> 
                 services = await ServiceRepository.get_all(session)
                 service_map = {s.yclients_id: s.id for s in services}
 
-                # Закрыть читающую транзакцию до долгой выгрузки визитов из
-                # YCLIENTS (десятки секунд): иначе она всё это время держит
-                # таблицы, и обновление структуры базы ждёт её или упирается
-                # во взаимную блокировку.
-                await session.commit()
-
                 # 4. Records/Visits
                 _sync_stage = "visits"
                 try:
@@ -229,7 +218,7 @@ async def sync_all(date_from: str | None = None, date_to: str | None = None) -> 
                     )
                     stats["visits"] = visit_count
                 except Exception as беда:
-                    await сбой(session, "visits", беда)
+                    сбой("visits", беда)
 
                 # 5. Products & Sales
                 _sync_stage = "sales"
@@ -256,7 +245,7 @@ async def sync_all(date_from: str | None = None, date_to: str | None = None) -> 
                     )
                     stats["sales"] = sale_count
                 except Exception as беда:
-                    await сбой(session, "sales", беда)
+                    сбой("sales", беда)
 
         _last_sync = datetime.now()
         cache.invalidate()
@@ -293,6 +282,17 @@ async def sync_all(date_from: str | None = None, date_to: str | None = None) -> 
     return stats
 
 
+# Насколько часто просыпаемся проверить часы. Минута — компромисс: после
+# пробуждения компьютера выгрузка стартует почти сразу, а холостые проверки
+# ничего не стоят.
+ШАГ_ОЖИДАНИЯ = 60
+
+
+def пора_выгружать(следующий: datetime, сейчас: datetime) -> bool:
+    """Наступил ли срок очередной выгрузки (по настенным часам)."""
+    return сейчас >= следующий
+
+
 async def run_sync_loop(interval_minutes: int | None = None) -> None:
     """Periodically run sync_all in the background.
 
@@ -309,7 +309,16 @@ async def run_sync_loop(interval_minutes: int | None = None) -> None:
     logger.info(f"Auto-sync scheduler started (every {interval} min, limit {предел // 60} min)")
     await asyncio.sleep(10)  # let the app finish startup before the first run
 
+    следующий = datetime.now(UTC)
     while True:
+        # Ждём по настенным часам, короткими отрезками. Длинный asyncio.sleep
+        # считает время монотонными часами, а они в контейнере замирают, пока
+        # компьютер спит: салонный Пульт заснул вечером с начатым часом и
+        # утром досыпал его остаток, не выгрузив ничего за ночь (18.10.2026).
+        пауза = (следующий - datetime.now(UTC)).total_seconds()
+        if пауза > 0:
+            await asyncio.sleep(min(ШАГ_ОЖИДАНИЯ, пауза))
+            continue
         начало = datetime.now(UTC)
         try:
             # Предел на прогон. Прежде зависший ответ YCLIENTS оставлял флаг
@@ -320,6 +329,7 @@ async def run_sync_loop(interval_minutes: int | None = None) -> None:
             logger.info(f"Auto-sync finished: {stats}")
             await refresh_client_base()
             await _проверить_обзвон()
+            await _забрать_почту()
         except TimeoutError:
             текст = f"выгрузка не уложилась в {предел // 60} мин и была прервана"
             logger.error(f"Auto-sync timed out: {текст}")
@@ -327,7 +337,25 @@ async def run_sync_loop(interval_minutes: int | None = None) -> None:
         except Exception as e:
             logger.error(f"Auto-sync failed: {e}")
             await _записать_прогон(начало, {}, str(e))
-        await asyncio.sleep(interval * 60)
+        # Следующий срок считаем от «сейчас», а не прибавляем к прошлому:
+        # после долгого сна не нужно догонять десяток пропущенных прогонов.
+        следующий = datetime.now(UTC) + timedelta(minutes=interval)
+
+
+async def _забрать_почту() -> None:
+    """Отчёты банка из писем. Почта не настроена или не ответила — не беда:
+    отчёт по-прежнему можно загрузить руками, и цикл выгрузки это не роняет."""
+    from app.database import async_session
+    from app.services import configuration, mail_acquiring
+
+    if not configuration.настроена("mail"):
+        return
+    try:
+        async with async_session() as session:
+            итог = await mail_acquiring.забрать(session)
+        logger.info(f"Почта: {итог.get('message')}")
+    except Exception as сбой:  # noqa: BLE001
+        logger.warning(f"Почта: проверка не удалась: {сбой}")
 
 
 async def _проверить_обзвон() -> None:
@@ -417,11 +445,8 @@ async def проверка_связи() -> dict[str, Any]:
         }
 
     плохие = [п for п in итог if not п["ок"]]
-    пустые = [
-        п["адрес"]
-        for п in итог
-        if п["ок"] and not п["строк"] and п["адрес"] in ("сотрудники", "услуги")
-    ]
+    пустые = [п["адрес"] for п in итог if п["ок"] and not п["строк"] and п["адрес"] in
+              ("сотрудники", "услуги")]
 
     if плохие:
         вывод = "Отказ: " + "; ".join(f"{п['адрес']} — {п['ошибка']}" for п in плохие)

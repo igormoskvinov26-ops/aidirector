@@ -113,3 +113,14 @@ def test_cors_origins_parse_into_a_list():
 
 def test_cors_defaults_to_empty_not_wildcard():
     assert Settings(**BASE, _env_file=None).cors_origin_list == []
+
+
+def test_локальная_установка_не_блокирует_настройки_из_интерфейса():
+    """В контейнере .env приходит через env_file: это не «сервер», токен из
+    интерфейса должен его перекрывать (инцидент 30.10.2026)."""
+    from app.config import _из_окружения
+
+    env = {"YCLIENTS_USER_TOKEN": "old"}
+    assert _из_окружения(env, {}) == {"YCLIENTS_USER_TOKEN"}
+    assert _из_окружения({**env, "RUBL_ENV_FROM_FILE": "1"}, {}) == frozenset()
+    assert _из_окружения(env, {"YCLIENTS_USER_TOKEN": "old"}) == frozenset()

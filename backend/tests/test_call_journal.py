@@ -71,8 +71,9 @@ async def test_outcome_writes_a_row(session: AsyncSession) -> None:
     assert rows[0] == call_journal.COLUMNS
     assert len(rows) == 2
     line = dict(zip(call_journal.COLUMNS, rows[1], strict=True))
-    assert line["Клиент"] == "Иван Петров"
-    assert line["Телефон"] == "+79990000000"
+    # Клиент — только номером YCLIENTS: имени и телефона в файле нет (30.10.2026).
+    assert line["ID клиента YCLIENTS"] == "1001"
+    assert "Иван" not in str(rows) and "79990000000" not in str(rows)
     assert line["Сегмент"] == "risk"
     # В файл идут слова, а не коды: его открывает администратор, не программа.
     assert line["Результат"] == "записался"
@@ -125,8 +126,7 @@ def test_time_is_moscow_not_container(journal_dir) -> None:
 
     call_journal.append_row(
         when=call_journal._to_moscow(utc_evening),
-        client_name="Иван",
-        phone="+79990000000",
+        yclients_id=1001,
         segment="risk",
         outcome="booked",
         channel="phone",
@@ -148,10 +148,8 @@ def _write_journal(path, rows: list[list]) -> None:
 
 
 def test_import_merges_without_duplicates(journal_dir) -> None:
-    old = ["14.09.2026", "12:00", "Иван", "+79990000000",
-           "risk", "записался", "телефон", "", "Катя"]
-    new = ["14.09.2026", "13:00", "Пётр", "+79991111111",
-           "late", "не ответил", "телефон", "", "Катя"]
+    old = ["14.09.2026", "12:00", "1001", "risk", "записался", "телефон", "", "Катя"]
+    new = ["14.09.2026", "13:00", "1002", "late", "не ответил", "телефон", "", "Катя"]
     _write_journal(call_journal.journal_path(), [old])
     source = journal_dir / "из-салона.xlsx"
     _write_journal(source, [old, new])
@@ -214,8 +212,7 @@ def test_operator_downloads_but_does_not_import(journal_dir) -> None:
     """Администратор работает журналом, но не переписывает историю салона."""
     call_journal.append_row(
         when=datetime(2026, 9, 14, 12, 0),
-        client_name="Иван",
-        phone="+79990000000",
+        yclients_id=1001,
         segment="risk",
         outcome="booked",
         channel="phone",
@@ -235,7 +232,7 @@ def test_operator_downloads_but_does_not_import(journal_dir) -> None:
 
 def test_owner_imports(journal_dir) -> None:
     source = journal_dir / "из-салона.xlsx"
-    _write_journal(source, [["14.09.2026", "12:00", "Иван", "+79990000000",
+    _write_journal(source, [["14.09.2026", "12:00", "1001",
                              "risk", "записался", "телефон", "", "Катя"]])
     client = _app_client()
     owner = _auth(settings.owner_login, settings.owner_password)
@@ -257,3 +254,82 @@ def test_empty_journal_says_so(journal_dir) -> None:
 
     assert client.get("/api/client-base/journal", headers=owner).status_code == 404
     assert client.get("/api/client-base/journal/status", headers=owner).json()["exists"] is False
+
+
+def _write_old_journal(path, rows: list[list]) -> None:
+    book = Workbook()
+    book.active.append(list(call_journal.OLD_COLUMNS))
+    for row in rows:
+        book.active.append(row)
+    book.save(path)
+
+
+@pytest.mark.asyncio
+async def test_old_files_lose_names_and_phones_on_start(session: AsyncSession, journal_dir) -> None:
+    """Прежние файлы (и отодвинутые копии) переписываются без имён и телефонов."""
+    await _make_task(session)  # клиент 1001 с телефоном +79990000000
+    old_row = ["14.09.2026", "12:00", "Иван Петров", "8 (999) 000-00-00",
+               "risk", "записался", "телефон", "просил вечер", "Катя"]
+    _write_old_journal(call_journal.journal_path(), [old_row])
+    _write_old_journal(journal_dir / "обзвон-повреждён-20260901.xlsx", [old_row])
+
+    assert await call_journal.очистить_старые(session) == 2
+    assert await call_journal.очистить_старые(session) == 0  # второй раз — нечего
+
+    for path in journal_dir.glob("обзвон*.xlsx"):
+        rows = list(load_workbook(path).active.iter_rows(values_only=True))
+        assert rows[0] == call_journal.COLUMNS
+        line = dict(zip(call_journal.COLUMNS, rows[1], strict=True))
+        assert line["ID клиента YCLIENTS"] == "1001"  # нашёлся по телефону
+        assert line["Комментарий"] == "просил вечер"
+        assert "Иван" not in str(rows) and "000-00-00" not in str(rows)
+
+
+def test_import_of_old_file_drops_names(journal_dir) -> None:
+    source = journal_dir / "старый.xlsx"
+    _write_old_journal(source, [["14.09.2026", "12:00", "Иван", "+79990000000",
+                                 "risk", "записался", "телефон", "", "Катя"]])
+    report = call_journal.merge_journal(source, {"9990000000": 1001})
+    assert report["добавлено"] == 1
+    rows = _rows()
+    assert rows[1][2] == "1001" and "Иван" not in str(rows)
+
+
+def test_download_never_contains_names_or_phones(journal_dir) -> None:
+    """Скачивание собирает файл заново: старый журнал с именами наружу не уходит."""
+    import io
+
+    import asyncio
+
+    from app.database import get_db
+
+    _write_old_journal(call_journal.journal_path(), [[
+        "14.09.2026", "12:00", "Иван Петров", "+79990000000",
+        "risk", "записался", "телефон", "просил вечер", "Катя"]])
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def prepare():
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        async with maker() as s:
+            s.add(Client(id=1, yclients_id=1001, name="Иван Петров", phone="+79990000000"))
+            await s.commit()
+
+    asyncio.run(prepare())
+
+    async def db():
+        async with maker() as s:
+            yield s
+
+    client = _app_client()
+    client.app.dependency_overrides[get_db] = db
+    owner = _auth(settings.owner_login, settings.owner_password)
+    r = client.get("/api/client-base/journal", headers=owner)
+
+    assert r.status_code == 200
+    rows = list(load_workbook(io.BytesIO(r.content)).active.iter_rows(values_only=True))
+    assert rows[0] == call_journal.COLUMNS
+    assert rows[1][2] == "1001" and rows[1][6] == "просил вечер"
+    assert "Иван" not in str(rows) and "79990000000" not in str(rows)

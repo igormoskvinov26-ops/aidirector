@@ -173,9 +173,12 @@ export default function BaseFlow() {
             tick={colors.ось}
           />
           <p className="mt-2 text-center text-xs text-muted-light dark:text-muted">
-            с {short(flow.start!)}: новых {flow.days.reduce((s, d) => s + d.new, 0)} (из них вернулись{" "}
-            {flow.days.reduce((s, d) => s + d.returned, 0)}), потеряно {flow.days.reduce((s, d) => s + d.lost, 0)}
-            {" · "}сегодня {sign(today.pulse)}
+            {(() => {
+              const n = flow.days.reduce((s, d) => s + d.new, 0);
+              const r = flow.days.reduce((s, d) => s + d.returned, 0);
+              const l = flow.days.reduce((s, d) => s + d.lost, 0);
+              return <>с {short(flow.start!)}: приток {n + r} (новых {n} + вернулись {r}), отток {l} · итог {sign(today.total)} · сегодня {sign(today.pulse)}</>;
+            })()}
           </p>
         </div>
       )}

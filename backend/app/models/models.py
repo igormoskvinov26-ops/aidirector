@@ -27,7 +27,7 @@ class Employee(Base):
     __tablename__ = "employees"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    yclients_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
+    yclients_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
     name: Mapped[str] = mapped_column(String(255))
     specialization: Mapped[str | None] = mapped_column(String(255))
     position: Mapped[str | None] = mapped_column(String(100))
@@ -50,7 +50,7 @@ class Client(Base):
     __tablename__ = "clients"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    yclients_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
+    yclients_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
     name: Mapped[str] = mapped_column(String(255))
     phone: Mapped[str] = mapped_column(String(20), index=True)
     email: Mapped[str | None] = mapped_column(String(255))
@@ -69,6 +69,27 @@ class Client(Base):
     do_not_call: Mapped[bool] = mapped_column(Boolean, default=False, server_default=sa_false())
     do_not_call_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     do_not_call_by: Mapped[str | None] = mapped_column(String(64))
+    # Когда с клиентом в последний раз говорили и чем кончилось. Живёт на
+    # клиенте, а не на задаче обзвона: задачи пересобираются каждый день.
+    # «Не дозвонились» дату не ставит — разговора не было.
+    last_call_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_call_outcome: Mapped[str | None] = mapped_column(String(20))
+    # Плановая дата следующего контакта: админ решил «перезвонить через
+    # неделю». Из очереди клиента не убирает (решение владельца 16.10.2026) —
+    # до этой даты он просто уходит вниз с пометкой.
+    next_contact_at: Mapped[date | None] = mapped_column(Date)
+    next_contact_note: Mapped[str | None] = mapped_column(String(200))
+    next_contact_by: Mapped[str | None] = mapped_column(String(64))
+    # Статус последнего общения: booked | callback | no_booking | no_answer |
+    # do_not_call. Дублирует исход последней попытки, но живёт на клиенте —
+    # по нему фильтруют базу, а попытки пересобираются вместе с задачами.
+    call_status: Mapped[str | None] = mapped_column(String(20))
+    last_call_by: Mapped[str | None] = mapped_column(String(64))
+    # Светофор лояльности: green | yellow | red. Ставит администратор по тону
+    # разговора, горит в карточке постоянно (запрос владельца 16.10.2026).
+    loyalty: Mapped[str | None] = mapped_column(String(8))
+    loyalty_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    loyalty_by: Mapped[str | None] = mapped_column(String(64))
     total_visits: Mapped[int] = mapped_column(Integer, default=0)
     total_spent: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
     last_visit_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -89,7 +110,7 @@ class Service(Base):
     __tablename__ = "services"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    yclients_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
+    yclients_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
     title: Mapped[str] = mapped_column(String(255))
     category: Mapped[str | None] = mapped_column(String(100))
     price_min: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
@@ -107,7 +128,7 @@ class Product(Base):
     __tablename__ = "products"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    yclients_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
+    yclients_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
     title: Mapped[str] = mapped_column(String(255))
     category: Mapped[str | None] = mapped_column(String(100))
     price: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
@@ -124,7 +145,7 @@ class Visit(Base):
     __tablename__ = "visits"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    yclients_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
+    yclients_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
     client_id: Mapped[int] = mapped_column(ForeignKey("clients.id"), index=True)
     employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), index=True)
     datetime: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
@@ -351,6 +372,9 @@ class ContactAttempt(Base):
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     verification_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     verification_note: Mapped[str | None] = mapped_column(Text)
+    # Клиент был потерянным в момент звонка. После записи сегмент меняется,
+    # и задним числом «кого вернули» уже не посчитать.
+    was_lost: Mapped[bool] = mapped_column(Boolean, default=False, server_default=sa_false())
 
 
 class DailySegmentSnapshot(Base):
@@ -576,10 +600,12 @@ class MonthlyReportSnapshot(Base):
 
 
 class AcquiringRow(Base):
-    """Строка отчёта банка по эквайрингу: оборот, комиссия и зачисление за день.
+    """Строка отчёта банка: оборот, комиссия и зачисление за день.
 
-    Загружается владельцем файлом. Повторная загрузка за те же даты заменяет
-    прежние строки, поэтому один отчёт можно безопасно грузить дважды.
+    Загружается файлом — руками или из письма банка. За один день отчётов
+    бывает несколько: отдельно по картам, отдельно по СБП. Чтобы второй файл
+    не затирал первый, строка помнит свой поток (source), и повторная
+    загрузка заменяет только строки того же потока за те же даты.
     """
 
     __tablename__ = "acquiring_rows"
@@ -590,4 +616,67 @@ class AcquiringRow(Base):
     fee: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
     net: Mapped[Decimal] = mapped_column(Numeric(14, 2))
     source_file: Mapped[str] = mapped_column(String(255))
+    # Поток отчётов: «Эквайринг», «СБП» или имя файла без дат — см.
+    # app.services.acquiring.поток. Пусто у строк, загруженных до 0013.
+    source: Mapped[str] = mapped_column(String(40), default="", server_default="")
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ClientTag(Base):
+    """Своя категория клиента: «переехал», «записывает супруга», «акция».
+
+    Два флага меняют поведение обзвона: ``exclude_from_calls`` убирает клиента
+    из очереди (мягко, тег снимается одним кликом — в отличие от «НЕ ЗВОНИТЬ!»),
+    ``promo`` помечает тех, кого зовём на праздничные предложения.
+    """
+
+    __tablename__ = "client_tags"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    code: Mapped[str] = mapped_column(String(40), unique=True)
+    name: Mapped[str] = mapped_column(String(80))
+    color: Mapped[str | None] = mapped_column(String(16))
+    exclude_from_calls: Mapped[bool] = mapped_column(Boolean, default=False, server_default=sa_false())
+    promo: Mapped[bool] = mapped_column(Boolean, default=False, server_default=sa_false())
+    sort: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ClientTagLink(Base):
+    __tablename__ = "client_tag_links"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    client_id: Mapped[int] = mapped_column(ForeignKey("clients.id"), index=True)
+    tag_id: Mapped[int] = mapped_column(ForeignKey("client_tags.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_by: Mapped[str | None] = mapped_column(String(64))
+
+    __table_args__ = (UniqueConstraint("client_id", "tag_id", name="uq_client_tag"),)
+
+
+class Script(Base):
+    """Текст звонка и сообщения под группу обзвона или тег.
+
+    Пустая таблица — работают скрипты, зашитые в код: сервис подставляет их
+    как значение по умолчанию, а запись здесь их перекрывает.
+    """
+
+    __tablename__ = "scripts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kind: Mapped[str] = mapped_column(String(10))  # group | tag
+    key: Mapped[str] = mapped_column(String(40))
+    # Вариант разговора: «начало», «дорого», «завершение» и так далее. Скрипт
+    # возврата — это дерево, а не один текст (регламент салона от 16.10.2026).
+    variant: Mapped[str] = mapped_column(String(40), default="main", server_default="main")
+    title: Mapped[str | None] = mapped_column(String(80))
+    # Что администратору сделать после этой ветки: зафиксировать, передать
+    # руководителю, не давить на запись.
+    hint: Mapped[str | None] = mapped_column(Text)
+    sort: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    phone_text: Mapped[str | None] = mapped_column(Text)
+    message_text: Mapped[str | None] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_by: Mapped[str | None] = mapped_column(String(64))
+
+    __table_args__ = (UniqueConstraint("kind", "key", "variant", name="uq_script_kind_key_variant"),)

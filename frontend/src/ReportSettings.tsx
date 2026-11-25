@@ -11,6 +11,7 @@ interface Настройки {
   targets: { extra_services_norm: number; sales_ratio_norm_pct: number };
   extra_service_ids: number[];
   admins: Админ[];
+  hidden_admins: number[];
   attribution_window_days: number;
   record_created_field: string;
   record_creator_field: string;
@@ -31,6 +32,7 @@ export default function ReportSettings() {
   const [н, setН] = useState<Настройки | null>(null);
   const [справ, setСправ] = useState<Справочники | null>(null);
   const [найденныеАдмины, setНайденныеАдмины] = useState<{ staff_id: number; name: string }[] | null>(null);
+  const [новыйАдмин, setНовыйАдмин] = useState("");
   const [поиск, setПоиск] = useState("");
   const [сообщение, setСообщение] = useState<string | null>(null);
   const [ошибка, setОшибка] = useState<string | null>(null);
@@ -39,8 +41,8 @@ export default function ReportSettings() {
   useEffect(() => {
     (async () => {
       try {
-        const a = await fetch("/api/client-base/admins");
-        if (a.ok) setНайденныеАдмины(await a.json());
+        const a = await fetch("/api/monthly-report/admins");
+        if (a.ok) setНайденныеАдмины((await a.json()).admins);
       } catch {
         /* список справочный */
       }
@@ -65,6 +67,43 @@ export default function ReportSettings() {
       setОшибка("Не удалось прочитать сотрудников и услуги из YCLIENTS");
     }
     setЗанят(false);
+  };
+
+  /** Кто звонит: скрыть уволенного, вернуть, добавить нового — сохраняется сразу. */
+  const сохранитьАдминов = async (admins: Админ[], hidden: number[]) => {
+    if (!н) return;
+    setЗанят(true);
+    setОшибка(null);
+    try {
+      const r = await fetch("/api/monthly-report/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ admins, hidden_admins: hidden }),
+      });
+      if (!r.ok) throw new Error((await r.json()).detail ?? "не сохранено");
+      const тело: Настройки = await r.json();
+      setН({ ...н, admins: тело.admins, hidden_admins: тело.hidden_admins });
+      const a = await fetch("/api/monthly-report/admins");
+      if (a.ok) setНайденныеАдмины((await a.json()).admins);
+    } catch (e) {
+      setОшибка(e instanceof Error ? e.message : "Не сохранено");
+    }
+    setЗанят(false);
+  };
+  const скрытьАдмина = (id: number, скрыть: boolean) => {
+    if (!н) return;
+    const h = new Set(н.hidden_admins ?? []);
+    if (скрыть) h.add(id); else h.delete(id);
+    сохранитьАдминов(н.admins, [...h]);
+  };
+  const добавитьАдмина = () => {
+    const имя = новыйАдмин.trim();
+    if (!н || !имя) return;
+    // Номер свой, отрицательный: пока у нового нет записей в YCLIENTS. Когда
+    // появятся, Пульт найдёт его по имени и склеит (имя — как в YCLIENTS).
+    const id = -(Date.now() % 1_000_000_000);
+    сохранитьАдминов([...н.admins, { staff_id: id, name: имя, creator_values: [] }], н.hidden_admins ?? []);
+    setНовыйАдмин("");
   };
 
   const сохранить = async () => {
@@ -172,16 +211,55 @@ export default function ReportSettings() {
 
       <div>
         <h3 className="mb-2 text-sm font-semibold text-ink-soft dark:text-cream">
-          Администраторы ({найденныеАдмины?.length ?? "…"})
+          Администраторы — кто звонит ({найденныеАдмины?.length ?? "…"})
         </h3>
-        <p className="text-sm text-muted-light dark:text-muted">
-          {найденныеАдмины && найденныеАдмины.length > 0
-            ? найденныеАдмины.map((а) => а.name).join(", ")
-            : "Пока никого не нашлось среди авторов записей за последний месяц."}
-        </p>
+        {найденныеАдмины && найденныеАдмины.length > 0 ? (
+          <ul className="divide-y divide-milk-line dark:divide-line rounded-xl border border-milk-line dark:border-line">
+            {найденныеАдмины.map((а) => {
+              const скрыт = (н.hidden_admins ?? []).includes(а.staff_id);
+              return (
+                <li key={а.staff_id} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
+                  <span className={скрыт ? "text-muted-light dark:text-muted line-through" : "text-ink-soft dark:text-cream"}>
+                    {а.name}
+                    {скрыт && <span className="ml-2 no-underline text-xs">не звонит</span>}
+                  </span>
+                  <button
+                    disabled={занят}
+                    onClick={() => скрытьАдмина(а.staff_id, !скрыт)}
+                    className="rounded-lg border border-milk-line dark:border-line px-2.5 py-1 text-xs hover:border-bronze dark:hover:border-gold disabled:opacity-50"
+                  >
+                    {скрыт ? "Вернуть в список" : "Убрать из списка"}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        ) : (
+          <p className="text-sm text-muted-light dark:text-muted">
+            {найденныеАдмины ? "Пока никого не нашлось среди авторов записей за последний месяц." : "…"}
+          </p>
+        )}
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <input
+            value={новыйАдмин}
+            onChange={(e) => setНовыйАдмин(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") добавитьАдмина(); }}
+            placeholder="Имя нового администратора, как в YCLIENTS"
+            className={ПОЛЕ + " min-w-[260px] flex-1"}
+          />
+          <button
+            disabled={занят || !новыйАдмин.trim()}
+            onClick={добавитьАдмина}
+            className="rounded-xl border border-milk-line dark:border-line px-3 py-2 text-sm hover:border-bronze dark:hover:border-gold disabled:opacity-50"
+          >
+            Добавить
+          </button>
+        </div>
         <p className="mt-2 text-xs text-muted-light dark:text-muted">
-          Определяются сами: это те, кто создаёт записи вручную в YCLIENTS (без онлайн-записи и
-          без мастеров). Вводить номера не нужно. Этот список виден на странице обзвона.
+          Список виден на странице обзвона, в выборе «Кто звонит». Тех, кто создаёт записи вручную
+          в YCLIENTS, Пульт находит сам. Нового можно добавить сразу, не дожидаясь его первой записи;
+          уволенного — убрать: в месячном отчёте за прошлые месяцы его работа остаётся.
+          Изменения сохраняются сразу.
         </p>
       </div>
 
