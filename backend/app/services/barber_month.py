@@ -322,5 +322,22 @@ async def report():
     admin_staff = [s for s in (staff or []) if int(s.get('id') or 0) not in barber_ids]
     result['admin_sales'] = calculate_admin_sales(records, products, now, admin_staff)
 
+    # Привязка барбера к id сотрудника YCLIENTS (решение владельца 22.11.2026,
+    # найдено по жалобе на пустую статистику конкретного мастера): если
+    # сотрудника уволили/скрыли или его профиль пересоздали с новым id,
+    # сохранённая в настройках привязка «висит в воздухе» — ни одна запись в
+    # YCLIENTS ей больше не соответствует, и строка мастера тихо обнуляется.
+    # Staff здесь — только активные (get_active_staff), поэтому сверка имеет
+    # смысл только когда список вообще получен.
+    if staff is not None:
+        активные = {int(s.get('id') or 0) for s in staff}
+        for rule in settings.barber_payroll_rules:
+            if int(rule['staff_id']) not in активные:
+                warnings.append(
+                    f"«{rule['name']}»: сотрудник с id {rule['staff_id']} не найден среди "
+                    "активных в YCLIENTS — скорее всего, уволен/скрыт или id изменился. "
+                    "Цифры по нему будут пустыми, пока привязка в настройках не обновлена."
+                )
+
     result.update(warnings=warnings, updated_at=updated)
     return result
