@@ -11,7 +11,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.services.salon import служебный
-from app.models.models import CostModel, Employee, PlanTarget, Sale, SaleItem, Visit
+from app.models.models import (
+    CostModel,
+    Employee,
+    PlanTarget,
+    Sale,
+    SaleItem,
+    Shift,
+    ShiftEmployee,
+    Visit,
+)
 
 WORKING_HOURS = range(10, 22)
 DB_HOUR_SHIFT = 1
@@ -690,19 +699,61 @@ async def _today_by_master(session: AsyncSession, day: date) -> list[dict]:
         }
         for row in service_rows
     ]
+    состав = await _на_смене(session, day)
     # Продавший косметику, но никого не постригший, тоже вышел на смену.
     known = {m["employee_id"] for m in masters}
     for employee_id, amount in products.items():
         if employee_id not in known:
             masters.append({
                 "employee_id": employee_id,
-                "name": "—",
+                "name": состав.get(employee_id, "—"),
                 "services": Decimal("0"),
                 "products": amount,
             })
 
+    # Кто на смене, но ещё ничего не закрыл, — тоже в составе: его гарант
+    # платится всё равно. Раньше такой мастер в «Сегодня» не попадал, и день
+    # считался как будто мастеров меньше (жалоба владельца 25.11.2026).
+    known = {m["employee_id"] for m in masters}
+    for employee_id, name in состав.items():
+        if employee_id not in known:
+            masters.append({
+                "employee_id": employee_id,
+                "name": name,
+                "services": Decimal("0"),
+                "products": Decimal("0"),
+            })
+
     masters.sort(key=lambda m: m["services"] + m["products"], reverse=True)
     return masters
+
+
+async def _на_смене(session: AsyncSession, day: date) -> dict[int, str]:
+    """Кто вышел на смену в этот день: {id сотрудника: имя}.
+
+    Источник тот же, что у раздела «Смена»: состав, сохранённый при открытии
+    смены (мастера по графику YCLIENTS и записям на день). Пока смена не
+    открыта — мастера, у которых на этот день есть записи, кроме отменённых
+    и неявок. Служебные «сотрудники» (лист ожидания) не считаются.
+    """
+    skip = set(await _service_ids(session))
+    штат = (await session.execute(
+        select(ShiftEmployee.staff_id)
+        .join(Shift, Shift.id == ShiftEmployee.shift_id)
+        .where(Shift.shift_date == day)
+    )).scalars().all()
+    if штат:
+        rows = await session.execute(
+            select(Employee.id, Employee.name).where(Employee.yclients_id.in_(штат))
+        )
+    else:
+        rows = await session.execute(
+            select(Employee.id, Employee.name)
+            .join(Visit, Visit.employee_id == Employee.id)
+            .where(func.date(Visit.datetime) == day, Visit.status.in_(COUNTED_STATUSES))
+            .distinct()
+        )
+    return {int(i): n for i, n in rows if int(i) not in skip}
 
 
 def _break_even_for_split(
@@ -1220,14 +1271,12 @@ async def get_hourly_finance(
 
 
 async def _get_masters_count(session: AsyncSession, target_date: date) -> int:
-    row = await session.scalar(
-        select(func.count(func.distinct(Visit.employee_id)))
-        .where(
-            func.date(Visit.datetime) == target_date,
-            Visit.employee_id.notin_(await _service_ids(session)),
-        )
-    )
-    return int(row or 0)
+    """Сколько мастеров на смене — тот же состав, что в блоке «Сегодня».
+
+    Раньше считались все, у кого в этот день была хоть какая-то запись, даже
+    отменённая, а в «Сегодня» — только закрывшие запись. Числа расходились.
+    """
+    return len(await _today_by_master(session, target_date))
 
 
 def _ensure_utc(dt: datetime) -> datetime:

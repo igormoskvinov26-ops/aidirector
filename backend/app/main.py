@@ -11,7 +11,7 @@ import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-APP_VERSION = "9.25.6"
+APP_VERSION = "9.25.7"
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
