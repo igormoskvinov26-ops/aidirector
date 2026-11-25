@@ -15,7 +15,7 @@
 #  поедут только надписи, а не работа.
 # ==========================================================================
 param(
-    [ValidateSet('install', 'autostart', 'open')]
+    [ValidateSet('install', 'autostart', 'open', 'backup-only')]
     [string]$Mode = 'autostart'
 )
 
@@ -154,6 +154,38 @@ function Test-Settings {
     # оно упадёт на разборе настроек, а человек увидит невнятную ошибку.
     $blanks = Select-String -Path $EnvFile -Pattern '^[A-Z_]+=<' -ErrorAction SilentlyContinue
     return -not $blanks
+}
+
+# ── Резервная копия app/ перед перезаписью ────────────────────────────────
+
+function Backup-AppFolder {
+    # Снимается ДО того, как обновление перезапишет app/ и bootstrap.ps1
+    # (решение владельца 22.11.2026). Вызывается из .bat отдельным, обычным
+    # вызовом `powershell -File` — ТОЛЬКО так, не через `for /f ('команда')`
+    # с захватом вывода: такой захват в cmd.exe ломает дескриптор консоли
+    # для всех последующих команд в том же .bat, включая docker compose —
+    # воспроизведено на реальной машине 25.11.2026 ("failed to get console:
+    # The handle is invalid", docker compose up падал мгновенно с кодом 1).
+    $backupDir = Join-Path $Base 'backups'
+    if (-not (Test-Path $backupDir)) { New-Item -ItemType Directory -Path $backupDir -Force | Out-Null }
+    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+
+    if (Test-Path $App) {
+        $dest = Join-Path $backupDir "app-$stamp"
+        robocopy $App $dest /E /XD node_modules .venv __pycache__ output .git /XF .env /NFL /NDL /NJH /NJS /NP |
+            Out-Null
+    }
+    if (Test-Path $PSCommandPath) {
+        Copy-Item $PSCommandPath (Join-Path $backupDir "bootstrap-$stamp.ps1") -Force -ErrorAction SilentlyContinue
+    }
+
+    # Храним только последние 3 — иначе папка растёт бесконечно.
+    Get-ChildItem $backupDir -Directory -Filter 'app-*' -ErrorAction SilentlyContinue |
+        Sort-Object Name -Descending | Select-Object -Skip 3 |
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    Get-ChildItem $backupDir -Filter 'bootstrap-*.ps1' -ErrorAction SilentlyContinue |
+        Sort-Object Name -Descending | Select-Object -Skip 3 |
+        Remove-Item -Force -ErrorAction SilentlyContinue
 }
 
 # ── Резервная копия базы ──────────────────────────────────────────────────
@@ -310,6 +342,13 @@ try {
             # Первый раз образ надо собрать: без --build контейнер поднимать
             # не из чего.
             if (Invoke-Bringup -Build) { Open-Director }
+        }
+
+        'backup-only' {
+            # Вызывается из обновлялки отдельным шагом, ДО того как .bat
+            # перезапишет app/ и bootstrap.ps1 поверх текущей версии.
+            Backup-AppFolder
+            $script:Outcome = 0
         }
 
         'autostart' {

@@ -80,19 +80,14 @@ if not exist "%TARGET%\bootstrap.ps1" (
 rem Резервная копия текущей версии — если обновление упадёт, старая версия
 rem не теряется бесследно (решение владельца 22.11.2026: обновление дважды
 rem роняло работающую установку за неделю).
-set "BACKUPS=%TARGET%\backups"
-if not exist "%BACKUPS%" mkdir "%BACKUPS%" >nul 2>&1
-set "STAMP="
-for /f %%i in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd-HHmmss"') do set "STAMP=%%i"
-if defined STAMP (
-  echo Делаю резервную копию текущей версии ...
-  robocopy "%TARGET%\app" "%BACKUPS%\app-%STAMP%" /E /XD node_modules .venv __pycache__ output .git /XF .env /NFL /NDL /NJH /NJS /NP >nul
-  copy /y "%TARGET%\bootstrap.ps1" "%BACKUPS%\bootstrap-%STAMP%.ps1" >nul 2>&1
-  rem Храним только последние 3 копии — иначе папка растёт бесконечно.
-  powershell -NoProfile -Command "Get-ChildItem '%BACKUPS%' -Directory -Filter 'app-*' | Sort-Object Name -Descending | Select-Object -Skip 3 | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue; Get-ChildItem '%BACKUPS%' -Filter 'bootstrap-*.ps1' | Sort-Object Name -Descending | Select-Object -Skip 3 | Remove-Item -Force -ErrorAction SilentlyContinue"
-) else (
-  echo Резервную копию снять не удалось — продолжаю без неё.
-)
+rem
+rem Важно: обычный вызов powershell -File, НЕ for /f с захватом вывода.
+rem for /f ('команда') ломает дескриптор консоли cmd.exe для всех
+rem последующих команд в этом же .bat, включая docker compose up —
+rem воспроизведено на реальной машине 25.11.2026 ("failed to get console:
+rem The handle is invalid", docker compose up падал мгновенно с кодом 1).
+echo Делаю резервную копию текущей версии ...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%TARGET%\bootstrap.ps1" -Mode backup-only
 
 echo Копирую файлы в %TARGET%\app ...
 robocopy "%~dp0app" "%TARGET%\app" /E /XD node_modules .venv __pycache__ output .git /XF .env /NFL /NDL /NJH /NJS /NP >nul
