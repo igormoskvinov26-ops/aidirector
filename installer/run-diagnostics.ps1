@@ -55,7 +55,8 @@ $OurMigrations = @(
     '0004_sync_runs.py', '0005_client_admin_note.py', '0006_shifts.py',
     '0007_cash_balances.py', '0008_telegram_settings.py', '0009_app_settings.py',
     '0010_monthly_report.py', '0011_acquiring_rows.py', '0012_client_do_not_call.py',
-    '0013_yclients_id_bigint.py', '0014_merge_foreign_heads.py'
+    '0013_acquiring_source.py', '0014_call_tracking.py', '0015_tags_scripts_callback.py',
+    '0016_status_loyalty_variants.py', '0017_yclients_id_bigint.py'
 )
 Add-Section 'миграции: ревизия базы и головы' {
     'alembic current:'
