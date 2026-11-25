@@ -53,7 +53,7 @@ def файлы_из_git() -> list[str]:
 
 def проверки(версия: str, файлы: list[str]) -> None:
     main_py = (REPO / "backend/app/main.py").read_text(encoding="utf-8")
-    m = re.search(r'^APP_VERSION = "([^"]+)"', main_py, re.M)
+    m = re.search(r'^APP_VERSION = "([^"]+)"', main_py, re.MULTILINE)
     if not m or m.group(1) != версия:
         стоп(f"APP_VERSION в main.py = {m.group(1) if m else '?'}, а собираем {версия}")
     for нужно in ("frontend/dist/index.html", "local/Dockerfile", "local/docker-compose.yml",
@@ -76,10 +76,10 @@ def проверки(версия: str, файлы: list[str]) -> None:
             стоп(f"в репозитории лежит миграция 9.17.x {имя}")
     головы = subprocess.run(
         [sys.executable, "-c",
-         "from alembic.config import Config; from alembic.script import ScriptDirectory;"
-         "c=Config(); c.set_main_option('script_location','alembic');"
-         "print(' '.join(ScriptDirectory.from_config(c).get_heads()))"],
-        cwd=REPO / "backend", capture_output=True, text=True,
+         ("from alembic.config import Config; from alembic.script import ScriptDirectory;"
+          "c=Config(); c.set_main_option('script_location','alembic');"
+          "print(' '.join(ScriptDirectory.from_config(c).get_heads()))")],
+        cwd=REPO / "backend", capture_output=True, text=True, check=False,
     )
     if головы.returncode != 0 or len(головы.stdout.split()) != 1:
         стоп(f"у истории миграций не одна голова: {головы.stdout.strip()} {головы.stderr[-300:]}")
