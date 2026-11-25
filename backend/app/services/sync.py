@@ -149,15 +149,23 @@ async def sync_all(
     stats: dict[str, Any] = {}
     ошибки: list[str] = []
 
-    def сбой(шаг: str, беда: Exception) -> None:
+    async def сбой(session, шаг: str, беда: Exception) -> None:
         """Записать отказ шага так, чтобы по тексту было видно место.
 
         Без названия шага на экране оставалось голое «'NoneType' object is not
         iterable» — по нему нельзя понять, сотрудники это, визиты или продажи.
+
+        Транзакция откатывается: иначе после ошибки в базе (например, число не
+        влезло в колонку) все следующие шаги падали с «current transaction is
+        aborted» — один сбой визитов ронял ещё и продажи (журнал 25.11.2026).
         """
         имя = STAGES.get(шаг, шаг)
         logger.error(f"шаг «{имя}» не прошёл: {беда}")
         ошибки.append(f"«{имя}»: {беда}")
+        try:
+            await session.rollback()
+        except Exception as откат:  # noqa: BLE001
+            logger.warning(f"откат после шага «{имя}» не удался: {откат}")
 
     try:
         async with YClientsClient() as api_client:
@@ -171,7 +179,7 @@ async def sync_all(
                     employee_ids = await EmployeeRepository.upsert_many(session, staff_data)
                     stats["staff"] = len(employee_ids)
                 except Exception as беда:
-                    сбой("staff", беда)
+                    await сбой(session, "staff", беда)
 
                 # 2. Services
                 _sync_stage = "services"
@@ -182,7 +190,7 @@ async def sync_all(
                     svc_count = await ServiceRepository.upsert_many(session, services_data)
                     stats["services"] = svc_count
                 except Exception as беда:
-                    сбой("services", беда)
+                    await сбой(session, "services", беда)
 
                 # 3. Clients
                 _sync_stage = "clients"
@@ -192,7 +200,7 @@ async def sync_all(
                     client_count = await ClientRepository.upsert_many(session, clients_data)
                     stats["clients"] = client_count
                 except Exception as беда:
-                    сбой("clients", беда)
+                    await сбой(session, "clients", беда)
 
                 # Справочники берём из базы, а не из свежего ответа: если шаг
                 # выше не прошёл, соответствия всё равно нужны — из того, что
@@ -206,6 +214,12 @@ async def sync_all(
                 services = await ServiceRepository.get_all(session)
                 service_map = {s.yclients_id: s.id for s in services}
 
+                # Закрыть читающую транзакцию до долгой выгрузки визитов из
+                # YCLIENTS (десятки секунд): иначе она всё это время держит
+                # таблицы, и обновление структуры базы ждёт её или упирается
+                # во взаимную блокировку.
+                await session.commit()
+
                 # 4. Records/Visits
                 _sync_stage = "visits"
                 try:
@@ -218,7 +232,7 @@ async def sync_all(
                     )
                     stats["visits"] = visit_count
                 except Exception as беда:
-                    сбой("visits", беда)
+                    await сбой(session, "visits", беда)
 
                 # 5. Products & Sales
                 _sync_stage = "sales"
@@ -245,7 +259,7 @@ async def sync_all(
                     )
                     stats["sales"] = sale_count
                 except Exception as беда:
-                    сбой("sales", беда)
+                    await сбой(session, "sales", беда)
 
         _last_sync = datetime.now()
         cache.invalidate()

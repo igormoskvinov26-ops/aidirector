@@ -14,6 +14,7 @@ from datetime import date, datetime, timedelta
 from statistics import median
 from zoneinfo import ZoneInfo
 
+from loguru import logger
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1025,22 +1026,11 @@ async def refresh_tasks(session: AsyncSession) -> dict:
     )).scalars())
     сегодня_закрыты |= из_поиска
 
-    # Remove all still-open tasks (idempotent daily refresh — old days' tasks are stale).
-    from sqlalchemy import and_, delete, not_
-    await session.execute(
-        delete(ContactTask).where(
-            ContactTask.status == "open",
-            not_(and_(ContactTask.script_version == ИЗ_ПОИСКА, ContactTask.due_date == today)),
-        )
-    )
-
-    created = 0
+    # Какой должна быть очередь на сегодня: клиент → группа.
+    нужно: dict[int, str] = {}
     for cid in sorted(перезвон - не_звонить - сегодня_закрыты - set(profiles)):
         # Клиент не в рабочем сегменте, но обещание перезвонить важнее.
-        session.add(ContactTask(client_id=cid, group_code="callback",
-                                priority=TASK_PRIORITY["callback"], due_date=today,
-                                status="open", script_version="v1"))
-        created += 1
+        нужно[cid] = "callback"
     for cid, p in profiles.items():
         if cid in не_звонить or cid in сегодня_закрыты:
             continue
@@ -1049,19 +1039,49 @@ async def refresh_tasks(session: AsyncSession) -> dict:
             if cid not in теряем:
                 continue
             группа = ГРУППА_ТЕРЯЕМ
-        task = ContactTask(
+        нужно[cid] = группа
+
+    # Сверяем с тем, что уже стоит, а не стираем всё подряд. Раньше каждая
+    # выгрузка удаляла все открытые задачи и создавала их заново — у клиента
+    # на экране администратора номер задачи успевал смениться, и результат
+    # звонка уходил в никуда или не тому (жалоба владельца 22.11.2026).
+    # Теперь задача клиента, которому по-прежнему пора звонить, живёт весь
+    # день под одним номером; удаляются только лишние и вчерашние.
+    открытые = (await session.execute(
+        select(ContactTask).where(ContactTask.status == "open").order_by(ContactTask.id)
+    )).scalars().all()
+    оставлены: set[int] = set()
+    removed = 0
+    for задача in открытые:
+        if задача.script_version == ИЗ_ПОИСКА and задача.due_date == today:
+            continue  # открыт из поиска — живёт до конца дня
+        if (
+            задача.due_date == today
+            and нужно.get(задача.client_id) == задача.group_code
+            and задача.client_id not in оставлены
+        ):
+            оставлены.add(задача.client_id)
+            задача.priority = TASK_PRIORITY.get(задача.group_code, 1)
+            continue
+        await session.delete(задача)
+        removed += 1
+
+    created = 0
+    for cid, группа in нужно.items():
+        if cid in оставлены:
+            continue
+        session.add(ContactTask(
             client_id=cid,
             group_code=группа,
             priority=TASK_PRIORITY.get(группа, 1),
             due_date=today,
             status="open",
             script_version="v1",
-        )
-        session.add(task)
+        ))
         created += 1
 
     await session.commit()
-    return {"tasks_created": created, "date": today.isoformat()}
+    return {"tasks_created": created, "tasks_removed": removed, "date": today.isoformat()}
 
 
 # --------------------------------------------------------------------------- #
@@ -2160,17 +2180,34 @@ async def record_outcome(
     actor_id: str | None,
     admin_staff_id: int | None = None,
     next_contact: date | None = None,
+    client_id: int | None = None,
 ) -> dict:
     """Отметить исход звонка.
 
     Правила владельца (16.10.2026): «Перезвонить» без даты не принимается, а
     «Не дозвонились» само ставит завтрашний день — иначе клиент потеряется.
+
+    ``client_id`` — клиент, которого администратор видит на экране. Главнее
+    номера задачи: если задача за это время пересоздана или относится к
+    другому клиенту, результат пишется в сегодняшнюю задачу именно этого
+    клиента, а не теряется и не достаётся чужому (жалоба 22.11.2026).
     """
     if outcome not in СТАТУСЫ:
         return {"ok": False, "error": f"неизвестный статус: {outcome}"}
     if outcome == "callback" and next_contact is None:
         return {"ok": False, "error": "Для статуса «Перезвонить» нужна дата следующего звонка"}
     task = await session.get(ContactTask, task_id)
+    if client_id is not None and (task is None or task.client_id != client_id):
+        logger.warning(
+            f"результат звонка: задача {task_id} "
+            f"{'не найдена' if task is None else f'принадлежит клиенту {task.client_id}'}, "
+            f"на экране клиент {client_id} — пишу в его задачу"
+        )
+        своя = await open_from_search(session, client_id)
+        if not своя.get("ok"):
+            return {"ok": False, "error": своя.get("error", "клиент не найден")}
+        task_id = своя["task_id"]
+        task = await session.get(ContactTask, task_id)
     if task is None:
         return {"ok": False, "error": "task not found"}
     task.status = "done"

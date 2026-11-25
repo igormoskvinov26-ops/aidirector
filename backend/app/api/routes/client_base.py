@@ -193,8 +193,15 @@ async def task_outcome(
         дата = date.fromisoformat(значение) if значение else None
     except ValueError:
         raise HTTPException(status_code=400, detail="Дата в формате ГГГГ-ММ-ДД")
+    # Клиент, которого администратор видит на экране, — см. record_outcome.
+    client_id = body.get("client_id")
+    try:
+        client_id = int(client_id) if client_id not in (None, "") else None
+    except (TypeError, ValueError):
+        client_id = None
     итог = await client_base.record_outcome(
-        db, task_id, outcome, channel, comment, actor_id, admin_staff_id, дата
+        db, task_id, outcome, channel, comment, actor_id, admin_staff_id, дата,
+        client_id=client_id,
     )
     if not итог.get("ok"):
         raise HTTPException(status_code=400, detail=итог.get("error", "не сохранено"))

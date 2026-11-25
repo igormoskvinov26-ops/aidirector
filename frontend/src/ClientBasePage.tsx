@@ -920,6 +920,9 @@ function AdminView({
       return;
     }
     const ок = await послать(`/api/client-base/tasks/${id}/outcome`, {
+      // Клиент на экране главнее номера задачи: если задачу за это время
+      // пересоздали, сервер запишет результат именно этому клиенту.
+      client_id: cid,
       outcome,
       channel,
       next_contact: next_contact ?? null,
